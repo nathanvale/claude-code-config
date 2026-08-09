@@ -167,6 +167,38 @@ describe("shared session corpus", () => {
 		}
 	})
 
+	test("sorts malformed fragment timestamps after valid timestamps", async () => {
+		const root = await mkdtemp(resolve(tmpdir(), "session-corpus-test-"))
+		try {
+			const malformed = resolve(root, "a-malformed.jsonl")
+			const valid = resolve(root, "z-valid.jsonl")
+			const line = (text: string) => `${JSON.stringify({
+				type: "response_item",
+				payload: { type: "message", role: "user", content: text },
+			})}\n`
+			await Bun.write(malformed, line("malformed timestamp"))
+			await Bun.write(valid, line("valid timestamp"))
+			const base = {
+				source: "codex" as const,
+				opaqueId: "codex:one",
+				sessionId: "one",
+				kind: "primary" as const,
+			}
+
+			const result = await extractSessionFragmentsPage([
+				{ ...base, path: malformed, startedAt: "not-a-timestamp" },
+				{ ...base, path: valid, startedAt: "2026-08-01T00:00:00Z" },
+			], { offset: 0, limit: 2, maxMessageChars: 2000 })
+
+			expect(result.messages.map((message) => message.text)).toEqual([
+				"valid timestamp",
+				"malformed timestamp",
+			])
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	})
+
 	test("lets matching Git common-directory evidence override stale recorded remotes", async () => {
 		const root = await mkdtemp(resolve(tmpdir(), "session-corpus-test-"))
 		const repo = resolve(root, "repo")

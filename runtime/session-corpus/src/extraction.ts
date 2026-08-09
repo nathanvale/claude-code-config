@@ -2,6 +2,12 @@ import type { SessionMetadata } from "./model.ts"
 import { parseNormalizedMessage, readJsonLines } from "./parser.ts"
 import { redactSessionText } from "./redaction.ts"
 
+function startedAtSortValue(value: string | undefined): number {
+	if (!value) return Number.POSITIVE_INFINITY
+	const timestamp = Date.parse(value)
+	return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp
+}
+
 /** One bounded redacted message returned from private history. */
 export interface ExtractedSessionMessage {
 	/** Zero-based normalized message index. */
@@ -89,8 +95,8 @@ async function extractSessionFragmentsPageUnsafe(
 	let redactions = 0
 	const messages: ExtractedSessionMessage[] = []
 	const ordered = [...fragments].sort((left, right) => {
-		const leftStarted = left.startedAt ? Date.parse(left.startedAt) : Number.POSITIVE_INFINITY
-		const rightStarted = right.startedAt ? Date.parse(right.startedAt) : Number.POSITIVE_INFINITY
+		const leftStarted = startedAtSortValue(left.startedAt)
+		const rightStarted = startedAtSortValue(right.startedAt)
 		return leftStarted - rightStarted || left.path.localeCompare(right.path)
 	})
 	for (const metadata of ordered) {

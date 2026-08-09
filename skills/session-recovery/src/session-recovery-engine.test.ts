@@ -183,12 +183,11 @@ describe("session recovery engine", () => {
 			const after = `${before}${appendedMessage}`
 			await Bun.write(path, before)
 			const digest = (text: string) => createHash("sha256").update(text).digest("hex")
-			let finishAppend: (() => void) | undefined
-			const appended = new Promise<void>((resolveAppend) => { finishAppend = resolveAppend })
-			setTimeout(async () => {
-				await appendFile(path, appendedMessage)
-				finishAppend?.()
-			}, 0)
+			const appended = new Promise<void>((resolveAppend, rejectAppend) => {
+				setTimeout(() => {
+					void appendFile(path, appendedMessage).then(resolveAppend, rejectAppend)
+				}, 0)
+			})
 
 			const result = await scanRecoverySessions({
 				from: "2026-08-01",
