@@ -5190,9 +5190,13 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 	// of session-identity-proof or human-identity-attestation, never neither, so
 	// this refusal enforces the invariant before any credential leaves the vault.
 	// Checked after terminal-truth and handoff-evidence validation so those
-	// stronger refusals still take precedence; no proof owner is ever wired in
-	// production today, so this is the freeform production path until a native
-	// Session Identity Proof owner exists.
+	// stronger refusals still take precedence. Defense in depth: the production
+	// runtime always wires the in-process structural owner
+	// (createProductionBrowserUseRuntime, browser-use-runtime.ts), so on that
+	// path this guard is unreached and the real freeform fail-close is the access
+	// lease. It fires only for a runtime built without a proof owner (the sync
+	// factory or a partial override), never leaving a proof-less run to submit
+	// credentials it cannot prove authenticated.
 	if (
 		input.runtime.authenticatedStateProof === undefined &&
 		input.runtime.runbookAuthenticatedStateProof === undefined
