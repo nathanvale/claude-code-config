@@ -177,7 +177,8 @@ describe("remote lease ledger", () => {
 		expect(active).toMatchObject({
 			status: "refused",
 			blocker: "lease_active",
-			nextAction: { id: "request_operator_takeover" },
+			retrySafety: "same_input_safe",
+			nextAction: { id: "retry_remote" },
 		});
 
 		const stale = await acquireRemoteLease(

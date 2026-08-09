@@ -128,6 +128,8 @@ export interface VaultGitReceipt {
 	readonly actor: string;
 	/** Immutable non-secret host identity. */
 	readonly host: string;
+	/** Immutable named remote bound at admission. */
+	readonly remote: string;
 	/** Frozen admitted owned leaf paths and their pre-state. */
 	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
 	/** Local main baseline. */
@@ -249,6 +251,25 @@ export const VAULT_GIT_NEXT_ACTION_IDS = [
 
 /** One safe continuation selected for the current result. */
 export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];
+
+/** Stable next-action ids emitted by the U3 transaction engine. */
+export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
+	...VAULT_GIT_RECEIPT_NEXT_ACTIONS,
+	"begin_transaction",
+	"capture_private_draft",
+	"change_owned_paths",
+	"continue_transaction",
+	"inspect_configured_vault",
+	"inspect_private_receipt",
+	"inspect_remote_lease",
+	"reload_capability",
+	"use_join_capability",
+	"use_owner_capability",
+] as const;
+
+/** One engine-emitted safe continuation id. */
+export type VaultGitEngineNextActionId =
+	(typeof VAULT_GIT_ENGINE_NEXT_ACTION_IDS)[number];
 
 /** Exact remote branch used as the append-only lease sequencer. */
 export const VAULT_GIT_LEDGER_REF =

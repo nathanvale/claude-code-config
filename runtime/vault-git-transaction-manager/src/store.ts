@@ -2,12 +2,14 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { spawn } from "node:child_process";
 import {
 	chmod,
+	link,
 	lstat,
 	mkdir,
 	open,
 	readdir,
 	readFile,
 	rename,
+	unlink,
 } from "node:fs/promises";
 import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
@@ -20,15 +22,119 @@ import {
 	type VaultGitReceipt,
 } from "./model.ts";
 
-/** Capability roles issued for one transaction. */
+/**
+ * Capability roles issued for one transaction.
+ *
+ * - `owner` -- may complete, record phases, and close the transaction
+ * - `join` -- may only extend owned paths inside the writing phase
+ */
 export type VaultGitCapabilityRole = "owner" | "join";
+
+/**
+ * Structured conflict raised when another writer published the current
+ * receipt first. Callers match on the stable `code` instead of message text.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await store.initialize(receipt)
+ * } catch (error) {
+ *   if (error instanceof VaultGitReceiptExistsError) inspectExisting()
+ *   else throw error
+ * }
+ * ```
+ */
+export class VaultGitReceiptExistsError extends Error {
+	/** Stable machine-readable conflict code. */
+	readonly code = "receipt_exists";
+	constructor() {
+		super("current receipt already exists");
+		this.name = "VaultGitReceiptExistsError";
+	}
+}
+
+/** Stable durable-file category; never emitted by command output. */
+export type VaultGitDurabilityTarget = "history" | "current" | "capability";
 
 /** One observable load-bearing filesystem operation. */
 export interface VaultGitDurabilityOperation {
 	/** Operation completed before the observer runs. */
 	readonly kind: "temp_write" | "file_sync" | "rename" | "directory_sync";
 	/** Stable file category; never emitted by command output. */
-	readonly target: "history" | "current" | "capability";
+	readonly target: VaultGitDurabilityTarget;
+}
+
+/**
+ * Load-bearing filesystem durability boundary owned by the receipt store.
+ *
+ * The store performs every durability-critical operation only through this
+ * port, in the fixed order temp write, file sync, atomic publish, parent
+ * directory sync. Tests inject a recording or throwing implementation to
+ * prove the sequence and fail-closed behavior; production uses
+ * {@link createNodeVaultGitDurabilityPort}.
+ */
+export interface VaultGitDurabilityPort {
+	/** Write every byte into an open exclusive temp file. */
+	writeTemp(
+		handle: FileHandle,
+		bytes: Uint8Array,
+		target: VaultGitDurabilityTarget,
+	): Promise<void>;
+	/** Flush written file contents to stable storage before publication. */
+	syncFile(handle: FileHandle, target: VaultGitDurabilityTarget): Promise<void>;
+	/** Atomically replace the destination with an already-synced temp file. */
+	rename(
+		from: string,
+		to: string,
+		target: VaultGitDurabilityTarget,
+	): Promise<void>;
+	/** Publish an already-synced temp file only when the destination is absent. */
+	linkExclusive(
+		from: string,
+		to: string,
+		target: VaultGitDurabilityTarget,
+	): Promise<void>;
+	/** Flush the directory entry so a publish survives power loss. */
+	syncDirectory(path: string, target: VaultGitDurabilityTarget): Promise<void>;
+}
+
+/**
+ * Create the production durability port backed by real syscalls.
+ *
+ * @returns Durability port over fsync, rename, link(2), and directory fsync
+ *
+ * @example
+ * ```typescript
+ * const store = createReceiptStore({
+ *   stateRoot: "/home/agent/.local/state",
+ *   repositoryIdentity: "vault@example",
+ *   durability: createNodeVaultGitDurabilityPort(),
+ * })
+ * ```
+ */
+export function createNodeVaultGitDurabilityPort(): VaultGitDurabilityPort {
+	return {
+		async writeTemp(handle, bytes) {
+			await handle.writeFile(bytes);
+		},
+		async syncFile(handle) {
+			await handle.sync();
+		},
+		async rename(from, to) {
+			await rename(from, to);
+		},
+		async linkExclusive(from, to) {
+			await link(from, to);
+		},
+		async syncDirectory(path) {
+			const directory = await open(path, "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		},
+	};
 }
 
 /** Receipt store construction options. */
@@ -37,6 +143,8 @@ export interface VaultGitReceiptStoreOptions {
 	readonly stateRoot: string;
 	/** Stable, non-secret canonical repository identity. */
 	readonly repositoryIdentity: string;
+	/** Load-bearing durability operations. @defaultValue node syscall port */
+	readonly durability?: VaultGitDurabilityPort;
 	/** Test interruption and operation-order observer. */
 	readonly onDurabilityOperation?: (
 		operation: VaultGitDurabilityOperation,
@@ -121,6 +229,17 @@ export interface VaultGitCapabilityLaunchResult {
  *
  * @param options - Injected XDG root and stable repository identity
  * @returns Crash-safe receipt and capability operations
+ * @throws {Error} When the state root or repository identity is empty
+ *
+ * @example
+ * ```typescript
+ * const store = createReceiptStore({
+ *   stateRoot: "/home/agent/.local/state",
+ *   repositoryIdentity: "vault@example",
+ * })
+ * const loaded = await store.load()
+ * if (loaded.status === "absent") await store.initialize(firstReceipt)
+ * ```
  */
 export function createReceiptStore(
 	options: VaultGitReceiptStoreOptions,
@@ -128,6 +247,10 @@ export function createReceiptStore(
 	if (options.stateRoot.length === 0 || options.repositoryIdentity.length === 0) {
 		throw new Error("state root and repository identity must not be empty");
 	}
+	const durability = observedDurabilityPort(
+		options.durability ?? createNodeVaultGitDurabilityPort(),
+		options.onDurabilityOperation,
+	);
 	const repositoryId = createHash("sha256")
 		.update(options.repositoryIdentity)
 		.digest("hex");
@@ -179,16 +302,23 @@ export function createReceiptStore(
 			if (receipt.revision !== 1) throw new Error("initial receipt revision must be 1");
 			await prepare();
 			const existing = await loadReceiptState(paths);
-			if (
-				existing.status !== "absent" &&
-				(existing.status !== "loaded" || existing.receipt.phase !== "closed")
-			) {
-				throw new Error("current receipt already exists");
+			if (existing.status !== "absent") {
+				if (existing.status !== "loaded" || existing.receipt.phase !== "closed") {
+					throw new VaultGitReceiptExistsError();
+				}
+				// A closed pointer may be superseded; losing it mid-crash is safe
+				// because the closed chain stays in immutable history.
+				await unlink(paths.current).catch((error) => {
+					if (!isMissing(error)) throw error;
+				});
 			}
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", options);
-			await durableWrite(paths.current, receipt, "current", options);
-			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, options);
-			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, options);
+			// Capabilities land before the pointer publish: an orphan capability
+			// file with no pointer is harmless, while a pointer without its
+			// capabilities strands the transaction.
+			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, durability);
+			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, durability);
+			await durablePublishExclusive(paths.current, receipt, durability);
 			return copyCapabilities(capabilities);
 		},
 		async append(receipt) {
@@ -197,8 +327,8 @@ export function createReceiptStore(
 			const loaded = await loadReceiptState(paths);
 			if (loaded.status !== "loaded") throw new Error(`cannot append receipt: ${loaded.status}`);
 			assertAppend(loaded.receipt, receipt);
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", options);
-			await durableWrite(paths.current, receipt, "current", options);
+			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			await durableWrite(paths.current, receipt, "current", durability);
 		},
 		async load() {
 			return loadReceiptState(paths);
@@ -218,7 +348,19 @@ export function createReceiptStore(
 	};
 }
 
-/** Create independent 256-bit owner and join capability values. */
+/**
+ * Create independent 256-bit owner and join capability values.
+ *
+ * Both roles are freshly random so leaking one never derives the other.
+ *
+ * @returns Private capability bytes for one new receipt
+ *
+ * @example
+ * ```typescript
+ * const capabilities = createCapabilities()
+ * await store.initialize(receipt, capabilities)
+ * ```
+ */
 export function createCapabilities(): VaultGitCapabilities {
 	return {
 		ownerCapability: new Uint8Array(randomBytes(32)),
@@ -234,6 +376,21 @@ export function createCapabilities(): VaultGitCapabilities {
  * @param store - Private receipt store
  * @param request - Role and bounded subprocess request
  * @returns Captured ordinary output and exit state
+ * @throws {Error} When the descriptor is outside 3-64 or the timeout is not positive
+ * @throws {Error} When the capability file is missing, non-private, or delivery fails
+ *
+ * @example
+ * ```typescript
+ * const launched = await launchCapabilityProcess(store, {
+ *   receiptId: receipt.receiptId,
+ *   role: "owner",
+ *   command: process.execPath,
+ *   args: ["worker.ts"],
+ *   cwd: repositoryRoot,
+ *   timeoutMs: 5_000,
+ * })
+ * if (launched.exitCode !== 0) inspectFailure(launched.stderr)
+ * ```
  */
 export async function launchCapabilityProcess(
 	store: VaultGitReceiptStore,
@@ -257,29 +414,47 @@ export async function launchCapabilityProcess(
 		);
 		let stdout = "";
 		let stderr = "";
+		let settled = false;
+		let timedOut = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (result: VaultGitCapabilityLaunchResult): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(result);
+		};
+		const fail = (error: Error): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			child.kill("SIGKILL");
+			reject(error);
+		};
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => { stdout += chunk; });
 		child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
 		const capabilityPipe = child.stdio[descriptor];
 		if (!capabilityPipe || !("write" in capabilityPipe)) {
-			child.kill("SIGKILL");
-			reject(new Error("capability descriptor unavailable"));
+			fail(new Error("capability descriptor unavailable"));
 			return;
 		}
+		// The error listener must exist before end(): a child that exits without
+		// reading the descriptor raises EPIPE, which would otherwise crash the
+		// process as an unhandled stream error.
+		capabilityPipe.on("error", (error) => {
+			fail(new Error("capability delivery failed", { cause: error }));
+		});
 		capabilityPipe.end(capability);
-		let timedOut = false;
-		const timer = setTimeout(() => {
+		timer = setTimeout(() => {
 			timedOut = true;
 			child.kill("SIGKILL");
 		}, request.timeoutMs);
 		child.once("error", (error) => {
-			clearTimeout(timer);
-			reject(error);
+			fail(error instanceof Error ? error : new Error(String(error)));
 		});
 		child.once("close", (exitCode) => {
-			clearTimeout(timer);
-			resolve({ exitCode, stdout, stderr, timedOut });
+			finish({ exitCode, stdout, stderr, timedOut });
 		});
 	});
 }
@@ -287,50 +462,102 @@ export async function launchCapabilityProcess(
 async function durableWrite(
 	path: string,
 	receipt: VaultGitReceipt,
-	target: VaultGitDurabilityOperation["target"],
-	options: VaultGitReceiptStoreOptions,
+	target: VaultGitDurabilityTarget,
+	durability: VaultGitDurabilityPort,
 ): Promise<void> {
-	await durableBytes(path, new TextEncoder().encode(`${JSON.stringify(receipt)}\n`), options, target);
+	await durableBytes(path, new TextEncoder().encode(`${JSON.stringify(receipt)}\n`), durability, target);
+}
+
+/**
+ * Publish one file only when no file exists at the destination.
+ *
+ * Preserves the temp-write, file-sync, atomic-publish, parent-sync durability
+ * order: link(2) publishes the already-synced inode and fails with EEXIST
+ * when a concurrent writer won, so a racing loser can never overwrite.
+ */
+async function durablePublishExclusive(
+	path: string,
+	receipt: VaultGitReceipt,
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	const bytes = new TextEncoder().encode(`${JSON.stringify(receipt)}\n`);
+	const temporary = `${path}.tmp-${randomUUID()}`;
+	let handle: FileHandle | undefined;
+	try {
+		handle = await open(temporary, "wx", 0o600);
+		await durability.writeTemp(handle, bytes, "current");
+		await durability.syncFile(handle, "current");
+		await handle.close();
+		handle = undefined;
+		try {
+			await durability.linkExclusive(temporary, path, "current");
+		} catch (error) {
+			if (isExists(error)) throw new VaultGitReceiptExistsError();
+			throw error;
+		}
+		await durability.syncDirectory(join(path, ".."), "current");
+	} catch (error) {
+		if (handle) await handle.close().catch(() => undefined);
+		await unlink(temporary).catch(() => undefined);
+		if (error instanceof VaultGitReceiptExistsError) throw error;
+		throw new Error("receipt durability unavailable", { cause: error });
+	}
+	await unlink(temporary).catch(() => undefined);
 }
 
 async function durableBytes(
 	path: string,
 	bytes: Uint8Array,
-	options: VaultGitReceiptStoreOptions,
-	target: VaultGitDurabilityOperation["target"] = "capability",
+	durability: VaultGitDurabilityPort,
+	target: VaultGitDurabilityTarget = "capability",
 ): Promise<void> {
 	if (bytes.byteLength === 0) throw new Error("private file must not be empty");
 	const temporary = `${path}.tmp-${randomUUID()}`;
 	let handle: FileHandle | undefined;
 	try {
 		handle = await open(temporary, "wx", 0o600);
-		await handle.writeFile(bytes);
-		observe(options, { kind: "temp_write", target });
-		await handle.sync();
-		observe(options, { kind: "file_sync", target });
+		await durability.writeTemp(handle, bytes, target);
+		await durability.syncFile(handle, target);
 		await handle.close();
 		handle = undefined;
-		await rename(temporary, path);
+		await durability.rename(temporary, path, target);
 		await chmod(path, 0o600);
-		observe(options, { kind: "rename", target });
-		const directory = await open(join(path, ".."), "r");
-		try {
-			await directory.sync();
-		} finally {
-			await directory.close();
-		}
-		observe(options, { kind: "directory_sync", target });
+		await durability.syncDirectory(join(path, ".."), target);
 	} catch (error) {
 		if (handle) await handle.close().catch(() => undefined);
+		await unlink(temporary).catch(() => undefined);
 		throw new Error("receipt durability unavailable", { cause: error });
 	}
 }
 
-function observe(
-	options: VaultGitReceiptStoreOptions,
-	operation: VaultGitDurabilityOperation,
-): void {
-	options.onDurabilityOperation?.(operation);
+/** Wrap a durability port so each completed operation notifies the observer. */
+function observedDurabilityPort(
+	port: VaultGitDurabilityPort,
+	observer?: (operation: VaultGitDurabilityOperation) => void,
+): VaultGitDurabilityPort {
+	if (!observer) return port;
+	return {
+		async writeTemp(handle, bytes, target) {
+			await port.writeTemp(handle, bytes, target);
+			observer({ kind: "temp_write", target });
+		},
+		async syncFile(handle, target) {
+			await port.syncFile(handle, target);
+			observer({ kind: "file_sync", target });
+		},
+		async rename(from, to, target) {
+			await port.rename(from, to, target);
+			observer({ kind: "rename", target });
+		},
+		async linkExclusive(from, to, target) {
+			await port.linkExclusive(from, to, target);
+			observer({ kind: "rename", target });
+		},
+		async syncDirectory(path, target) {
+			await port.syncDirectory(path, target);
+			observer({ kind: "directory_sync", target });
+		},
+	};
 }
 
 async function loadReceiptState(paths: VaultGitReceiptStore["paths"]): Promise<VaultGitReceiptLoadResult> {
@@ -430,10 +657,11 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 	if (
 		!hasExactKeys(value, [
 			"schemaVersion", "receiptId", "transactionId", "revision", "phase",
-			"transition", "recordedAt", "event", "actor", "host", "ownedPaths",
-			"localMainHead", "remoteMainHead", "expectedLeaseGeneration",
-			"leaseGeneration", "leaseAcquiredAt", "leaseDurationMs", "commitId",
-			"nextSafeAction", "diagnosticsReference",
+			"transition", "recordedAt", "event", "actor", "host", "remote",
+			"ownedPaths", "localMainHead", "remoteMainHead",
+			"expectedLeaseGeneration", "leaseGeneration", "leaseAcquiredAt",
+			"leaseDurationMs", "commitId", "nextSafeAction",
+			"diagnosticsReference",
 		]) ||
 		value.schemaVersion !== 1 ||
 		!isReceiptId(value.receiptId) ||
@@ -445,6 +673,7 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 		!isIso(value.recordedAt) ||
 		!VAULT_GIT_EVENT_TYPES.includes(value.event as never) ||
 		!isOneLine(value.actor) || !isOneLine(value.host) ||
+		!isOneLine(value.remote) ||
 		!Array.isArray(value.ownedPaths) || value.ownedPaths.length === 0 ||
 		!value.ownedPaths.every(isOwnedPathReceipt) ||
 		!isObjectId(value.localMainHead) || !isObjectId(value.remoteMainHead) ||
@@ -459,7 +688,7 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 
 function assertAppend(previous: VaultGitReceipt, next: VaultGitReceipt): void {
 	if (next.revision !== previous.revision + 1 || next.receiptId !== previous.receiptId) throw new Error("receipt revision conflict");
-	for (const field of ["event", "actor", "host", "localMainHead", "remoteMainHead", "expectedLeaseGeneration", "leaseDurationMs"] as const) {
+	for (const field of ["event", "actor", "host", "remote", "localMainHead", "remoteMainHead", "expectedLeaseGeneration", "leaseDurationMs"] as const) {
 		if (next[field] !== previous[field]) throw new Error(`immutable receipt field changed: ${field}`);
 	}
 	if (previous.transactionId !== null && next.transactionId !== previous.transactionId) throw new Error("transaction id changed");
@@ -475,7 +704,10 @@ function isOwnedPathReceipt(value: unknown): boolean {
 }
 
 function isOwnedPath(value: unknown): value is string {
-	return typeof value === "string" && !value.startsWith("/") && value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+	if (typeof value !== "string" || value.startsWith("/")) return false;
+	const segments = value.split("/");
+	if (segments[0] === ".git") return false;
+	return segments.every((part) => part.length > 0 && part !== "." && part !== "..");
 }
 
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
@@ -488,4 +720,5 @@ function isOneLine(value: unknown): value is string { return typeof value === "s
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean { return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key)); }
 function isMissing(error: unknown): boolean { return isRecord(error) && error.code === "ENOENT"; }
+function isExists(error: unknown): boolean { return isRecord(error) && error.code === "EEXIST"; }
 function copyCapabilities(value: VaultGitCapabilities): VaultGitCapabilities { return { ownerCapability: new Uint8Array(value.ownerCapability), joinCapability: new Uint8Array(value.joinCapability) }; }

@@ -1,14 +1,19 @@
+import { execFileSync } from "node:child_process";
+import { closeSync, constants, openSync } from "node:fs";
 import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { readInheritedCapability } from "../src/clock.ts";
 import type { VaultGitReceipt } from "../src/model.ts";
 import {
+	createNodeVaultGitDurabilityPort,
 	createReceiptStore,
 	launchCapabilityProcess,
 	type VaultGitDurabilityOperation,
+	type VaultGitDurabilityPort,
 } from "../src/store.ts";
 
 const roots: string[] = [];
@@ -56,6 +61,54 @@ describe("private receipt store", () => {
 			expect(operations.slice(index, index + 4).map((entry) => entry.kind)).toEqual([
 				"temp_write", "file_sync", "rename", "directory_sync",
 			]);
+		}
+	});
+
+	test("drives every load-bearing operation through the durability port in publish order", async () => {
+		const root = await fixtureRoot();
+		const calls: PortCall[] = [];
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+			durability: recordingPort(calls),
+		});
+		const first = receipt();
+		await store.initialize(first, { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) });
+		expect(calls).toEqual([
+			...renamedFile("history"),
+			...renamedFile("capability"),
+			...renamedFile("capability"),
+			{ method: "writeTemp", target: "current" },
+			{ method: "syncFile", target: "current" },
+			{ method: "linkExclusive", target: "current" },
+			{ method: "syncDirectory", target: "current" },
+		]);
+		calls.length = 0;
+		await store.append({ ...first, revision: 2, phase: "writing", leaseGeneration: "a".repeat(40) });
+		expect(calls).toEqual([...renamedFile("history"), ...renamedFile("current")]);
+	});
+
+	test("initialize interrupted before any durability phase leaves absent or readable state", async () => {
+		const complete: PortCall[] = [];
+		const baselineRoot = await fixtureRoot();
+		await createReceiptStore({
+			stateRoot: baselineRoot,
+			repositoryIdentity: "vault@example",
+			durability: recordingPort(complete),
+		}).initialize(receipt(), { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) });
+		expect(complete.length).toBeGreaterThan(0);
+		for (let crashAt = 0; crashAt < complete.length; crashAt++) {
+			const root = await fixtureRoot();
+			const store = createReceiptStore({
+				stateRoot: root,
+				repositoryIdentity: "vault@example",
+				durability: recordingPort([], crashAt),
+			});
+			await expect(store.initialize(receipt(), {
+				ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]),
+			})).rejects.toThrow("receipt durability unavailable");
+			const probe = await createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" }).load();
+			expect(["absent", "loaded"]).toContain(probe.status);
 		}
 	});
 
@@ -111,6 +164,54 @@ describe("private receipt store", () => {
 		expect((await store.load()).status).toBe("conflict");
 	});
 
+	test("validateCapability accepts only exact same-length role bytes", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		await store.initialize(first, {
+			ownerCapability: new Uint8Array([7, 8, 9]),
+			joinCapability: new Uint8Array([1, 2, 3]),
+		});
+		expect(await store.validateCapability(first.receiptId, "owner", new Uint8Array([7, 8, 9]))).toBe(true);
+		expect(await store.validateCapability(first.receiptId, "owner", new Uint8Array([7, 8, 0]))).toBe(false);
+		expect(await store.validateCapability(first.receiptId, "owner", new Uint8Array([7, 8]))).toBe(false);
+		expect(await store.validateCapability(first.receiptId, "join", new Uint8Array([1, 2, 3]))).toBe(true);
+	});
+
+	test("rejects duplicate history revisions instead of silently proceeding", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		await store.initialize(first, { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) });
+		const second = { ...first, revision: 2, phase: "writing", leaseGeneration: "a".repeat(40) } as const;
+		await store.append(second);
+		await writeFile(
+			join(store.paths.history, `${first.receiptId}-00000002-duplicate.json`),
+			`${JSON.stringify(second)}\n`,
+			{ mode: 0o600 },
+		);
+		expect(await store.load()).toMatchObject({ status: "conflict" });
+	});
+
+	test("rejects a history chain whose entry carries a foreign receipt id", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		await store.initialize(first, { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) });
+		await store.append({ ...first, revision: 2, phase: "writing", leaseGeneration: "a".repeat(40) });
+		const foreign = {
+			...first,
+			receiptId: "receipt_33333333333333333333333333333333",
+			diagnosticsReference: "receipt:receipt_33333333333333333333333333333333",
+		};
+		await writeFile(
+			join(store.paths.history, `${first.receiptId}-00000001.json`),
+			`${JSON.stringify(foreign)}\n`,
+			{ mode: 0o600 },
+		);
+		expect(await store.load()).toMatchObject({ status: "conflict" });
+	});
+
 	test("fails closed when a receipt loses owner-only permissions", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
@@ -152,6 +253,94 @@ describe("private receipt store", () => {
 		expect(JSON.stringify(launched)).not.toContain("secret-owner");
 	});
 
+	test("exactly one of two racing initializers wins the current pointer", async () => {
+		const root = await fixtureRoot();
+		const storeA = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const storeB = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		const second = receipt({
+			receiptId: "receipt_22222222222222222222222222222222",
+			diagnosticsReference: "receipt:receipt_22222222222222222222222222222222",
+		});
+		const outcomes = await Promise.allSettled([
+			storeA.initialize(first, { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) }),
+			storeB.initialize(second, { ownerCapability: new Uint8Array([3]), joinCapability: new Uint8Array([4]) }),
+		]);
+		const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
+		expect(rejected.length).toBe(1);
+		expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "receipt_exists" });
+		const loaded = await storeA.load();
+		expect(loaded).toMatchObject({ status: "loaded", receipt: { revision: 1 } });
+		if (loaded.status !== "loaded") throw new Error("winner receipt missing");
+		expect([first.receiptId, second.receiptId]).toContain(loaded.receipt.receiptId);
+	});
+
+	test("capability write failure before pointer publish leaves state absent", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+			onDurabilityOperation(operation) {
+				if (operation.target === "capability" && operation.kind === "temp_write") {
+					throw new Error("capability write failed");
+				}
+			},
+		});
+		await expect(store.initialize(receipt(), {
+			ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]),
+		})).rejects.toThrow("receipt durability unavailable");
+		expect(await createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" }).load()).toEqual({ status: "absent" });
+	});
+
+	test("refuses owned paths whose first segment is .git", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		await expect(store.initialize(receipt({
+			ownedPaths: [{ path: ".git/hooks/pre-push", baselineHash: null, admittedNewFile: true }],
+		}), {
+			ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]),
+		})).rejects.toThrow("receipt schema invalid");
+	});
+
+	test("settles without crashing when the child exits without reading the descriptor", async () => {
+		const root = await fixtureRoot();
+		const script = join(root, "exit-early.ts");
+		await writeFile(script, "process.exit(0);\n");
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		await store.initialize(first, {
+			ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]),
+		});
+		const outcome = await launchCapabilityProcess(store, {
+			receiptId: first.receiptId,
+			role: "owner",
+			command: process.execPath,
+			args: [script],
+			cwd: root,
+			timeoutMs: 5_000,
+		}).then(
+			(result) => ({ ok: true as const, result }),
+			(error: unknown) => ({ ok: false as const, error }),
+		);
+		if (outcome.ok) {
+			expect(outcome.result.timedOut).toBe(false);
+		} else {
+			expect(String(outcome.error)).toContain("capability delivery failed");
+		}
+	});
+
+	test("readInheritedCapability times out on a descriptor that never delivers", async () => {
+		const root = await fixtureRoot();
+		const fifo = join(root, "capability.fifo");
+		execFileSync("mkfifo", [fifo]);
+		const descriptor = openSync(fifo, constants.O_RDWR);
+		try {
+			await expect(readInheritedCapability(descriptor, 100)).rejects.toThrow("capability descriptor read timed out");
+		} finally {
+			closeSync(descriptor);
+		}
+	});
+
 	test("retains closed history when a new current transaction starts", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
@@ -170,6 +359,61 @@ describe("private receipt store", () => {
 		expect((await readdir(store.paths.history)).length).toBe(3);
 	});
 });
+
+interface PortCall {
+	readonly method: keyof VaultGitDurabilityPort;
+	readonly target: string;
+}
+
+/** Expected port sequence for one rename-published durable file. */
+function renamedFile(target: string): PortCall[] {
+	return [
+		{ method: "writeTemp", target },
+		{ method: "syncFile", target },
+		{ method: "rename", target },
+		{ method: "syncDirectory", target },
+	];
+}
+
+/**
+ * Durability port that performs real operations while recording the call
+ * sequence; `crashAt` aborts BEFORE the numbered operation runs, so the
+ * simulated crash leaves that operation genuinely unperformed.
+ */
+function recordingPort(calls: PortCall[], crashAt = -1): VaultGitDurabilityPort {
+	const real = createNodeVaultGitDurabilityPort();
+	let index = 0;
+	const admit = (method: keyof VaultGitDurabilityPort, target: string): void => {
+		if (index === crashAt) {
+			index += 1;
+			throw new Error(`crash before ${method}`);
+		}
+		index += 1;
+		calls.push({ method, target });
+	};
+	return {
+		async writeTemp(handle, bytes, target) {
+			admit("writeTemp", target);
+			await real.writeTemp(handle, bytes, target);
+		},
+		async syncFile(handle, target) {
+			admit("syncFile", target);
+			await real.syncFile(handle, target);
+		},
+		async rename(from, to, target) {
+			admit("rename", target);
+			await real.rename(from, to, target);
+		},
+		async linkExclusive(from, to, target) {
+			admit("linkExclusive", target);
+			await real.linkExclusive(from, to, target);
+		},
+		async syncDirectory(path, target) {
+			admit("syncDirectory", target);
+			await real.syncDirectory(path, target);
+		},
+	};
+}
 
 async function fixtureRoot(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-store-"));
@@ -190,6 +434,7 @@ function receipt(overrides: Partial<VaultGitReceipt> = {}): VaultGitReceipt {
 		event: "note_created",
 		actor: "agent-a",
 		host: "laptop",
+		remote: "origin",
 		ownedPaths: [{ path: "notes/example.md", baselineHash: null, admittedNewFile: true }],
 		localMainHead: "b".repeat(40),
 		remoteMainHead: "b".repeat(40),
