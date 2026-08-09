@@ -13,7 +13,9 @@ import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
+import type { VaultGitRuntimePort } from "../src/ports.ts";
 import type { VaultGitRepairInput } from "../src/repair.ts";
+import type { VaultGitReceiptStore } from "../src/store.ts";
 
 const roots: string[] = [];
 
@@ -193,7 +195,14 @@ describe("vault-git CLI composition", () => {
 		});
 		const composition = fakeComposition(engine, {
 			async readDoctorProof() {
-				return { ledgerGeneration: "generation-a" };
+				return {
+					transactionId: "txn_00000000000000000000000000000001",
+					ledgerGeneration: "generation-a",
+					receiptId: "receipt-fixture",
+					receiptRevision: 1,
+					proofFingerprint: "fingerprint-fixture",
+					issuedAt: "2026-01-01T00:00:00.000Z",
+				};
 			},
 		});
 		const run = await runVaultGitForTest(
@@ -232,17 +241,28 @@ async function temp(prefix: string): Promise<string> {
 
 function fakeComposition(
 	engine: VaultGitTransactionEngine,
-	storeOverrides: Record<string, unknown> = {},
+	storeOverrides: Partial<VaultGitReceiptStore> = {},
 ): VaultGitCliComposition {
+	// Partial-typed fake: any drift in the VaultGitReceiptStore interface
+	// fails typecheck here; the single cast happens at the final assignment.
+	const store: Partial<VaultGitReceiptStore> &
+		Pick<VaultGitReceiptStore, "load"> = {
+		async load() {
+			return { status: "absent" as const };
+		},
+		...storeOverrides,
+	};
+	const runtime: VaultGitRuntimePort = {
+		now: () => new Date(0),
+		actor: () => "agent-a",
+		host: () => "host-a",
+		newReceiptId: () => "receipt-fixture",
+		interrupt: () => {},
+	};
 	return {
 		engine,
-		store: {
-			async load() {
-				return { status: "absent" as const };
-			},
-			...storeOverrides,
-		} as never,
-		runtime: {} as never,
+		store: store as VaultGitReceiptStore,
+		runtime,
 		repositoryPath: "/fixture-vault",
 		remote: "origin",
 		leaseDurationMs: 60_000,

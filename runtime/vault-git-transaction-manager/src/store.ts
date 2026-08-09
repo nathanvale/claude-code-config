@@ -686,10 +686,13 @@ async function launchPrivateBytesProcess(
 			}
 			rmSync(privateDir, { recursive: true, force: true });
 		};
+		// The child runs as its own process-group leader so a timeout kill
+		// reaches spawned grandchildren (git subprocesses) instead of orphaning
+		// them mid-transaction.
 		const child = spawn(
 			request.command,
 			[...request.args, "--capability-fd", String(descriptor)],
-			{ cwd: request.cwd, env: request.env ?? process.env, stdio },
+			{ cwd: request.cwd, env: request.env ?? process.env, stdio, detached: true },
 		);
 		// The child inherited its own duplicate at spawn; the parent copy and
 		// the on-disk bytes are released immediately.
@@ -699,6 +702,21 @@ async function launchPrivateBytesProcess(
 		let settled = false;
 		let timedOut = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		const killProcessGroup = (): void => {
+			const pid = child.pid;
+			if (pid !== undefined) {
+				try {
+					process.kill(-pid, "SIGKILL");
+				} catch {
+					// ESRCH: the process group already exited.
+				}
+			}
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// Already exited; the direct kill is idempotent here.
+			}
+		};
 		const finish = (result: VaultGitCapabilityLaunchResult): void => {
 			if (settled) return;
 			settled = true;
@@ -709,7 +727,7 @@ async function launchPrivateBytesProcess(
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			child.kill("SIGKILL");
+			killProcessGroup();
 			reject(error);
 		};
 		child.stdout?.setEncoding("utf8");
@@ -718,7 +736,7 @@ async function launchPrivateBytesProcess(
 		child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
 		timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			killProcessGroup();
 		}, request.timeoutMs);
 		child.once("error", (error) => {
 			fail(error instanceof Error ? error : new Error(String(error)));

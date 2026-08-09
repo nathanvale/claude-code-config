@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 
 import {
 	type CliWriter,
-	type CommandFacadeResultContract,
 	type RuntimeActionGuidance,
 	CliUsageError,
 	createCliRepairStateRuntimeError,
@@ -45,9 +44,12 @@ import {
 	createVaultOwnedCheckPort,
 } from "./git-adapter.ts";
 import {
+	VAULT_GIT_REPAIR_ACTIONS,
 	createVaultGitLifecycleResult,
 	type VaultGitLifecycleResultPayload,
 	type VaultGitNextActionId,
+	type VaultGitRepairAction,
+	type VaultGitTransactionPhase,
 } from "./model.ts";
 import type { VaultGitProcessPort, VaultGitRuntimePort } from "./ports.ts";
 import type {
@@ -113,6 +115,17 @@ export interface VaultGitCliOptions {
 	readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 	/** Disable the public-to-internal FD launcher in in-process tests. */
 	readonly launchPrivate?: boolean;
+}
+
+/** Invocation shape after the discovery early return removed `commands`. */
+type VaultGitRuntimeInvocation = ParsedVaultGitInvocation & {
+	readonly command: Exclude<VaultGitCommand, "commands">;
+};
+
+function isRuntimeInvocation(
+	invocation: ParsedVaultGitInvocation,
+): invocation is VaultGitRuntimeInvocation {
+	return invocation.command !== "commands";
 }
 
 /** Captured in-process CLI result. */
@@ -266,9 +279,8 @@ export async function main(
 		});
 	}
 
-	if (invocation.command === "commands") {
+	if (!isRuntimeInvocation(invocation)) {
 		return emitDiscovery({
-			invocation,
 			stdout,
 			runId: diagnostics.options.runId,
 			startedAt: diagnostics.options.startedAtMs,
@@ -308,9 +320,25 @@ export async function main(
 				diagnostics.options.runId,
 			);
 			if (launched) {
-				stdout.write(launched.stdout);
-				stderr.write(launched.stderr);
-				return launched.timedOut ? 1 : (launched.exitCode ?? 1);
+				const parseable =
+					!invocation.json || isSingleJsonEnvelope(launched.launch.stdout);
+				if (launched.launch.timedOut || !parseable) {
+					// A killed or garbled private child proves nothing about the
+					// remote outcome; synthesize one structured refusal instead of
+					// forwarding truncated child bytes.
+					return emitIndeterminateLaunch({
+						invocation,
+						phase: launched.phase,
+						stdout,
+						stderr,
+						runId: diagnostics.options.runId,
+						startedAt: diagnostics.options.startedAtMs,
+						now,
+					});
+				}
+				stdout.write(launched.launch.stdout);
+				stderr.write(launched.launch.stderr);
+				return launched.launch.exitCode ?? 1;
 			}
 		}
 
@@ -431,16 +459,20 @@ function validateInvocation(invocation: ParsedVaultGitInvocation): void {
 		if (!invocation.summary) throw usageError("complete requires --summary");
 	}
 	if (invocation.command === "repair") {
-		if (!invocation.transactionId) {
-			throw usageError("repair requires --transaction-id");
-		}
-		if (
-			invocation.repairAction === "stale-lease-takeover" &&
-			!invocation.priorWriterStopped
-		) {
-			throw usageError(
-				"repair stale-lease-takeover requires --prior-writer-stopped",
-			);
+		// Only the generation-bound takeover requires the transaction selector;
+		// other repairs may resume a pre-acknowledgement receipt that never
+		// received a transaction id to echo.
+		if (invocation.repairAction === "stale-lease-takeover") {
+			if (!invocation.transactionId) {
+				throw usageError(
+					"repair stale-lease-takeover requires --transaction-id",
+				);
+			}
+			if (!invocation.priorWriterStopped) {
+				throw usageError(
+					"repair stale-lease-takeover requires --prior-writer-stopped",
+				);
+			}
 		}
 	}
 }
@@ -449,14 +481,21 @@ function needsPrivateLaunch(invocation: ParsedVaultGitInvocation): boolean {
 	return ["join", "complete", "repair"].includes(invocation.command);
 }
 
+/** Private-launch outcome plus the last durable phase known before the child ran. */
+interface VaultGitPrivateLaunchOutcome {
+	readonly launch: VaultGitCapabilityLaunchResult;
+	readonly phase: VaultGitTransactionPhase;
+}
+
 async function launchPrivateInvocation(
 	composition: VaultGitCliComposition,
 	invocation: ParsedVaultGitInvocation,
 	args: readonly string[],
 	runId: string,
-): Promise<VaultGitCapabilityLaunchResult | null> {
+): Promise<VaultGitPrivateLaunchOutcome | null> {
 	const loaded = await composition.store.load();
 	if (loaded.status !== "loaded") return null;
+	const phase = loaded.receipt.phase;
 	const childArgs = [CLI_PATH, "--run-id", runId, ...args];
 	if (invocation.repairAction === "stale-lease-takeover") {
 		const doctor = await composition.engine.doctor({
@@ -471,25 +510,43 @@ async function launchPrivateInvocation(
 		) {
 			return null;
 		}
-		return launchDoctorTokenProcess(composition.store, {
-			transactionId: doctor.transactionId,
-			ledgerGeneration: doctor.ledgerGeneration,
+		return {
+			phase,
+			launch: await launchDoctorTokenProcess(composition.store, {
+				transactionId: doctor.transactionId,
+				ledgerGeneration: doctor.ledgerGeneration,
+				command: process.execPath,
+				args: childArgs,
+				cwd: composition.repositoryPath,
+				timeoutMs: DEFAULT_TIMEOUTS.pushMs,
+			}),
+		};
+	}
+	const role: VaultGitCapabilityRole =
+		invocation.command === "join" ? "join" : "owner";
+	return {
+		phase,
+		launch: await launchCapabilityProcess(composition.store, {
+			receiptId: loaded.receipt.receiptId,
+			role,
 			command: process.execPath,
 			args: childArgs,
 			cwd: composition.repositoryPath,
 			timeoutMs: DEFAULT_TIMEOUTS.pushMs,
-		});
+		}),
+	};
+}
+
+/** True when stdout carries exactly one parseable JSON envelope object. */
+function isSingleJsonEnvelope(output: string): boolean {
+	const trimmed = output.trim();
+	if (trimmed.length === 0) return false;
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+	} catch {
+		return false;
 	}
-	const role: VaultGitCapabilityRole =
-		invocation.command === "join" ? "join" : "owner";
-	return launchCapabilityProcess(composition.store, {
-		receiptId: loaded.receipt.receiptId,
-		role,
-		command: process.execPath,
-		args: childArgs,
-		cwd: composition.repositoryPath,
-		timeoutMs: DEFAULT_TIMEOUTS.pushMs,
-	});
 }
 
 type RuntimeResult =
@@ -499,7 +556,7 @@ type RuntimeResult =
 	| { readonly kind: "unavailable"; readonly blocker: "runtime_unavailable" };
 
 async function executeInvocation(
-	invocation: ParsedVaultGitInvocation,
+	invocation: VaultGitRuntimeInvocation,
 	composition: VaultGitCliComposition,
 	readCapability: (descriptor: number) => Promise<Uint8Array>,
 ): Promise<RuntimeResult> {
@@ -547,8 +604,19 @@ async function executeInvocation(
 				}),
 			};
 		case "status":
-		case "preview":
 			return { kind: "engine", value: await composition.engine.inspect() };
+		case "preview":
+			// Preview honors its transaction selector: naming another
+			// transaction refuses with transaction_mismatch instead of echoing
+			// the current transaction's state.
+			return {
+				kind: "engine",
+				value: await composition.engine.inspect(
+					invocation.transactionId === undefined
+						? {}
+						: { transactionId: invocation.transactionId },
+				),
+			};
 		case "doctor":
 			return {
 				kind: "doctor",
@@ -599,8 +667,6 @@ async function executeInvocation(
 		case "tidy":
 		case "janitor":
 			return { kind: "unavailable", blocker: "runtime_unavailable" };
-		case "commands":
-			throw new Error("commands is handled before runtime composition");
 	}
 }
 
@@ -618,13 +684,13 @@ async function readInvocationCapability(
 		: readCapability(descriptor);
 }
 
-function emitDiscovery(input: EmitContext & {
-	readonly invocation: ParsedVaultGitInvocation;
-}): number {
+function emitDiscovery(input: EmitContext): number {
 	const payload = createVaultGitLifecycleResult({
 		command: "commands",
 		outcome: "discovered",
-		phase: "unavailable",
+		// Successful non-transactional reads share the phase status emits when
+		// no transaction exists; "unavailable" stays refusal vocabulary.
+		phase: "blocked",
 		write_permission: "denied",
 		changed_state: "none",
 		retry_safety: "same_input_safe",
@@ -649,7 +715,7 @@ function emitDiscovery(input: EmitContext & {
 }
 
 function emitUnconfigured(input: EmitContext & {
-	readonly invocation: ParsedVaultGitInvocation;
+	readonly invocation: VaultGitRuntimeInvocation;
 	readonly stderr: CliWriter;
 }): number {
 	const readOnly = ["status", "preview", "doctor"].includes(
@@ -674,7 +740,7 @@ function emitUnconfigured(input: EmitContext & {
 }
 
 function emitRuntimeResult(input: EmitContext & {
-	readonly invocation: ParsedVaultGitInvocation;
+	readonly invocation: VaultGitRuntimeInvocation;
 	readonly result: RuntimeResult;
 	readonly stderr: CliWriter;
 }): number {
@@ -768,16 +834,14 @@ interface EmitContext {
 }
 
 function emitPayload(input: EmitContext & {
-	readonly invocation: ParsedVaultGitInvocation;
+	readonly invocation: VaultGitRuntimeInvocation;
 	readonly stderr: CliWriter;
 	readonly payload: VaultGitLifecycleResultPayload;
 	readonly success: boolean;
 	readonly errorCode: string;
 }): number {
 	const data = createCommandResultData(
-		vaultGitContracts[input.invocation.command] as {
-			readonly resultContract: CommandFacadeResultContract;
-		},
+		vaultGitContracts[input.invocation.command],
 		input.payload,
 	);
 	const runtime = runtimeAction(input.payload.next_action);
@@ -836,11 +900,14 @@ function runtimeError(
 
 function action(id: VaultGitNextActionId, summary?: string) {
 	const declared = vaultGitActions.find((candidate) => candidate.id === id);
-	return {
-		id,
-		summary:
-			summary ?? declared?.summary ?? `Continue with the ${id.replaceAll("_", " ")} action.`,
-	};
+	if (!declared) {
+		// Every next-action id exists in the declared affordances by
+		// construction; a miss means the model-to-cli coupling broke.
+		throw new Error(
+			`vault-git next action ${id} is missing from the declared affordances`,
+		);
+	}
+	return { id, summary: summary ?? declared.summary };
 }
 
 function runtimeAction(input: {
@@ -899,7 +966,7 @@ function emitUsageFailure(input: {
 		blockers: [],
 		next_action: {
 			id: "change_input",
-			summary: repairUsageSummary(input.argv),
+			summary: usageFailureSummary(input.argv, message),
 		},
 	});
 	const data = createCommandResultData(vaultGitContracts.status, payload);
@@ -927,14 +994,58 @@ function emitUsageFailure(input: {
 	return 2;
 }
 
-function repairUsageSummary(argv: readonly string[]): string {
-	return argv[0] === "repair"
-		? "Choose one engine-owned repair action from the command help."
-		: "Correct the command arguments and retry parsing.";
+function usageFailureSummary(argv: readonly string[], message: string): string {
+	if (argv[0] !== "repair") {
+		return "Correct the command arguments and retry parsing.";
+	}
+	const namedAction = argv[1];
+	if (
+		namedAction !== undefined &&
+		VAULT_GIT_REPAIR_ACTIONS.includes(namedAction as VaultGitRepairAction)
+	) {
+		// The action is already named; point at the exact missing or invalid
+		// flag instead of re-suggesting an action choice.
+		const sanitized = toStructuredUsageMessage(message);
+		return sanitized.trim().length > 0
+			? sanitized
+			: "Correct the repair flags shown in the command help.";
+	}
+	return "Choose one engine-owned repair action from the command help.";
+}
+
+/**
+ * Refuse deterministically when a private child was killed or emitted
+ * unparseable output. The remote outcome is unknown, so the envelope reports
+ * an indeterminate partial change and routes through doctor.
+ */
+function emitIndeterminateLaunch(input: EmitContext & {
+	readonly invocation: VaultGitRuntimeInvocation;
+	readonly stderr: CliWriter;
+	readonly phase: VaultGitTransactionPhase;
+}): number {
+	const payload = createVaultGitLifecycleResult({
+		command: input.invocation.command,
+		outcome: "refused",
+		phase: input.phase,
+		write_permission: "denied",
+		changed_state: "partial",
+		retry_safety: "operator_required",
+		blockers: ["remote_unavailable"],
+		next_action: action(
+			"run_doctor",
+			"Run doctor to reconcile the interrupted private launch outcome.",
+		),
+	});
+	return emitPayload({
+		...input,
+		payload,
+		success: false,
+		errorCode: "remote_unavailable",
+	});
 }
 
 function emitUnexpectedFailure(input: EmitContext & {
-	readonly invocation: ParsedVaultGitInvocation;
+	readonly invocation: VaultGitRuntimeInvocation;
 	readonly stderr: CliWriter;
 }): number {
 	input.stderr.write(

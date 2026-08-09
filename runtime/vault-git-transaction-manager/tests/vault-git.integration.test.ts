@@ -29,6 +29,7 @@ import {
 	vaultGitBranchStationCatalog,
 } from "../src/branch-station-catalog.ts";
 import type { VAULT_GIT_STATION_IDS } from "../src/branch-station-catalog.ts";
+import { vaultGitActions } from "../src/command-contract.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -188,6 +189,57 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(projected[2]).toEqual(projected[0]);
 	});
 
+	test("emits identical refusal policy across caller labels when begin lacks a configured vault", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-unconfigured-"));
+		roots.push(root);
+		const env: NodeJS.ProcessEnv = { ...process.env };
+		for (const key of Object.keys(env)) {
+			if (key.startsWith("VAULT_GIT_")) delete env[key];
+		}
+		env.VAULT_GIT_CONFIG_PATH = join(root, "missing-vault.md");
+		const outputs = await Promise.all(
+			["shell", "claude-code", "codex"].map((caller) =>
+				runCliProcess({
+					label: `vault-git begin unconfigured ${caller}`,
+					argv: [
+						"bun",
+						"run",
+						cliPath,
+						"begin",
+						"--event",
+						"note_created",
+						"--path",
+						"notes/a.md",
+						"--json",
+						"--run-id",
+						`caller-${caller}`,
+					],
+					cwd: packageRoot,
+					env,
+					timeoutMs: 30_000,
+				}),
+			),
+		);
+		const projected = outputs.map((result) => {
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toBe("");
+			const envelope = parseCliProcessJson<Record<string, unknown>>(result);
+			expect(envelope).toMatchObject({
+				status: "error",
+				error: { code: "vault_unconfigured" },
+			});
+			const { run_id: _runId, duration_ms: _duration, error, ...policy } =
+				envelope;
+			const { run_id: _errorRunId, ...errorPolicy } = (error ?? {}) as Record<
+				string,
+				unknown
+			>;
+			return { ...policy, error: errorPolicy };
+		});
+		expect(projected[1]).toEqual(projected[0]);
+		expect(projected[2]).toEqual(projected[0]);
+	});
+
 	test("keeps foreign flags and malformed transaction ids at stable usage exits", async () => {
 		const fixture = await createFixture();
 		for (const args of [
@@ -252,6 +304,10 @@ function scenario(
 			const result = await run(fixture);
 			const envelope = assertStationEnvelope(station, result);
 			assertProcessChannels(station, result, envelope);
+			assertRuntimeActionAffordance(envelope);
+			// Capability material must stay off every process surface on success
+			// stations too; this is a no-op when the fixture holds no receipt.
+			await fixture.assertCapabilityAbsent(result);
 			if (station.expectedActionId) {
 				expect(
 					(envelope as {
@@ -274,6 +330,54 @@ function assertProcessChannels(
 	expect(envelope.status).toBe(station.expectedEnvelopeStatus);
 	expect(result.stdout.trim().startsWith("{")).toBe(true);
 	expect(result.stdout).not.toMatch(/\/private\/|\/Users\//);
+}
+
+/**
+ * Runtime-action drift gate: every envelope carrying a continuation must
+ * advertise exactly one runtime action whose id matches the continuation, whose
+ * side effects match the declared affordance in command-contract.ts, and whose
+ * summary matches the envelope's own next_action affordance (falling back to
+ * the declared affordance summary when the payload carries none).
+ */
+function assertRuntimeActionAffordance(envelope: StationRuntimeEnvelope): void {
+	const carrier = envelope as StationRuntimeEnvelope & {
+		readonly continuation?: { readonly next_action_id?: string };
+		readonly runtime_actions?: readonly {
+			readonly id?: string;
+			readonly summary?: string;
+			readonly side_effects?: readonly string[];
+		}[];
+	};
+	const nextActionId = carrier.continuation?.next_action_id;
+	if (nextActionId === undefined) return;
+	const actions = carrier.runtime_actions ?? [];
+	expect(actions).toHaveLength(1);
+	const runtimeAction = actions[0];
+	expect(runtimeAction?.id).toBe(nextActionId);
+	const declared = vaultGitActions.find(
+		(candidate) => candidate.id === nextActionId,
+	);
+	if (!declared) {
+		throw new Error(
+			`runtime action ${nextActionId} is missing from the declared vault-git affordances`,
+		);
+	}
+	expect(runtimeAction?.side_effects).toEqual([...declared.sideEffects]);
+	const payloadAction = (
+		carrier.data as
+			| {
+					readonly next_action?: {
+						readonly id?: string;
+						readonly summary?: string;
+					};
+			  }
+			| undefined
+	)?.next_action;
+	expect(payloadAction?.id).toBe(nextActionId);
+	expect(runtimeAction?.summary).toBe(
+		payloadAction?.summary ?? declared.summary,
+	);
+	expect((runtimeAction?.summary ?? "").trim().length).toBeGreaterThan(0);
 }
 
 interface Fixture {
@@ -401,23 +505,39 @@ async function createFixture(
 		result: CliProcessResult,
 	): Promise<void> => {
 		const loaded = await store.load();
-		if (loaded.status !== "loaded") throw new Error("receipt unavailable");
-		const secret = await store.readCapability(
-			loaded.receipt.receiptId,
-			"join",
-		);
-		const encodedSecrets = [
-			Buffer.from(secret).toString("base64"),
-			Buffer.from(secret).toString("hex"),
-		];
+		// No receipt means no capability material exists to leak; the runner
+		// calls this unconditionally, so absence is a deliberate no-op.
+		if (loaded.status !== "loaded") return;
+		const encodedSecrets: string[] = [];
+		for (const role of ["owner", "join"] as const) {
+			const secret = await store
+				.readCapability(loaded.receipt.receiptId, role)
+				.catch((error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return null;
+					throw error;
+				});
+			if (!secret) continue;
+			encodedSecrets.push(
+				Buffer.from(secret).toString("base64"),
+				Buffer.from(secret).toString("hex"),
+			);
+		}
+		// A loaded receipt always keeps its role capability files; a vacuous
+		// sweep would silently disarm the leak grep.
+		expect(encodedSecrets.length).toBeGreaterThan(0);
 		const receiptMaterial = JSON.stringify({
 			receipt: loaded.receipt,
 			history: loaded.history,
 		});
-		const ledgerMaterial = gitBare([
-			"show",
-			"refs/heads/vault-system/transaction-ledger:ledger.json",
-		]);
+		let ledgerMaterial = "";
+		try {
+			ledgerMaterial = gitBare([
+				"show",
+				"refs/heads/vault-system/transaction-ledger:ledger.json",
+			]);
+		} catch {
+			// The fixture has no remote ledger yet; sweep the other surfaces.
+		}
 		for (const encoded of encodedSecrets) {
 			expect(JSON.stringify(result.argv)).not.toContain(encoded);
 			expect(JSON.stringify(env)).not.toContain(encoded);
