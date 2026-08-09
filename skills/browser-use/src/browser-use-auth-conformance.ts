@@ -288,6 +288,7 @@ function bindingFor(
 		run_id: `conformance-${laneId}`,
 		handoff_evidence_id: `handoff-${laneId}`,
 		lane_id: laneId,
+		entry_mode: "reviewed-runbook",
 		environment: "conformance",
 		profile: "conformance",
 		service_id: "conformance-service",

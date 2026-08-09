@@ -24,7 +24,11 @@ import type { BrowserUseTokenRetrievalPort } from "./browser-use-op";
 import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import { fixedClock, makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
-import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
+import {
+	type BrowserUseRunbookAuthDeps,
+	runBrowserUseFreeformAuth,
+	runBrowserUseRunbookAuth,
+} from "./browser-use-runbook-auth";
 import { writeAuthAttestationRecord } from "./browser-use-runs";
 
 const disposables: Array<{ dispose(): void }> = [];
@@ -104,6 +108,7 @@ function persistedFragmentAt(
 			run_id: "shared-run-fixture",
 			handoff_evidence_id: "handoff-fixture",
 			lane_id: "agent-browser",
+			entry_mode: "reviewed-runbook",
 			environment: "agent-chrome",
 			profile: "default",
 			service_id: "fixture",
@@ -157,6 +162,8 @@ function persistedFragmentAt(
 }
 
 type FixtureOptions = {
+	entryMode?: "reviewed-runbook" | "freeform";
+	laneId?: "agent-browser" | "playwright-cdp";
 	proof: boolean;
 	proofOrigin?: string;
 	expectedUrl?: string;
@@ -197,14 +204,19 @@ async function fixture(options: FixtureOptions) {
 			options.initialFragment?.terminal_outcome === "authenticated"
 				? "ready"
 				: "running",
-		task_intent: "runbook-execution",
+		task_intent:
+			options.entryMode === "freeform" ? "routine-automation" : "runbook-execution",
 		environment_profile: { environment: "agent-chrome", profile: "default" },
-		adapter_id: "agent-browser",
+		adapter_id: options.laneId ?? "agent-browser",
 		...(options.handoffEvidenceId === null
 			? {}
 			: { handoff_evidence_id: options.handoffEvidenceId ?? "handoff-fixture" }),
-		runbook_target_binding: { schema_version: "1", mode: "exact", binding_id: "target-fixture" },
-		runbook_progress: { schema_version: "1", service_id: "fixture", flow_id: "business", runbook_version: "1", next_step: 0, total_steps: 1 },
+		...(options.entryMode === "freeform"
+			? {}
+			: {
+					runbook_target_binding: { schema_version: "1" as const, mode: "exact" as const, binding_id: "target-fixture" },
+					runbook_progress: { schema_version: "1" as const, service_id: "fixture", flow_id: "business", runbook_version: "1", next_step: 0, total_steps: 1 },
+				}),
 		mutation_dispatched: false,
 		artifacts: [],
 		...(options.initialFragment === undefined
@@ -277,14 +289,19 @@ async function fixture(options: FixtureOptions) {
 	const proofTransitions: string[] = [];
 	let proofCalls = 0;
 	let snapshotCalls = 0;
-	const result = await runBrowserUseRunbookAuth(
-		{
+	let humanIdentityCalls = 0;
+	const authDeps: BrowserUseRunbookAuthDeps = {
 			store,
 			provider,
 			implementation_integrity_key: "fixture-integrity",
 			...(options.humanIdentityAttestation === undefined
 				? {}
-				: { humanIdentityAttestation: options.humanIdentityAttestation }),
+				: {
+						humanIdentityAttestation: async (...args: Parameters<BrowserUseHumanIdentityAttestationDriver>) => {
+							humanIdentityCalls += 1;
+							return await options.humanIdentityAttestation?.(...args) as Awaited<ReturnType<BrowserUseHumanIdentityAttestationDriver>>;
+						},
+					}),
 			login: {
 				observer: {
 					snapshot: async () => {
@@ -325,17 +342,12 @@ async function fixture(options: FixtureOptions) {
 				screen = form(options.passwordFirst);
 				return { ok: true };
 			},
-		},
-		{
+		};
+	const commonInput = {
 			run,
 			dispatch_claim: { fencing_token: 1, activation_epoch: 1, holderId: "dispatch" },
 			service_id: "fixture",
-			flow_id: "business",
-			action_policy_hash:
-				options.actionPolicyHash === undefined
-					? "a".repeat(64)
-					: options.actionPolicyHash,
-			auth_context_ref: "interactive-login",
+			auth_context_ref: "interactive-login" as const,
 			allowed_origins: ["https://fixture.test"],
 			expected_url: expectedUrl,
 			...(options.observedUrl !== undefined
@@ -348,8 +360,20 @@ async function fixture(options: FixtureOptions) {
 							options.declaredNavigationRequired,
 					}),
 			target_id: "target-fixture",
-		},
-	);
+		};
+	const result = options.entryMode === "freeform"
+		? await runBrowserUseFreeformAuth(authDeps, {
+				...commonInput,
+				lane_id: options.laneId ?? "agent-browser",
+			})
+		: await runBrowserUseRunbookAuth(authDeps, {
+				...commonInput,
+				flow_id: "business",
+				action_policy_hash:
+					options.actionPolicyHash === undefined
+						? "a".repeat(64)
+						: options.actionPolicyHash,
+			});
 	return {
 		result,
 		delivered,
@@ -357,10 +381,48 @@ async function fixture(options: FixtureOptions) {
 		proofTransitions,
 		proofCalls,
 		snapshotCalls,
+		humanIdentityCalls,
 	};
 }
 
 describe("runbook auth route", () => {
+	test("freeform mode reuses the shared transaction on the handoff-selected lane", async () => {
+		const { result, delivered } = await fixture({
+			entryMode: "freeform",
+			laneId: "playwright-cdp",
+			proof: true,
+		});
+		expect(result).toMatchObject({
+			ok: true,
+			run: {
+				state: "ready",
+				task_intent: "routine-automation",
+				adapter_id: "playwright-cdp",
+			},
+		});
+		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("freeform strips runtime-only runbook attestation while preserving its metadata", async () => {
+		const { result, humanIdentityCalls } = await fixture({
+			entryMode: "freeform",
+			laneId: "playwright-cdp",
+			proof: false,
+			humanIdentityAttestation: async () => {
+				throw new Error("freeform must not invoke runbook human attestation");
+			},
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			run: {
+				task_intent: "routine-automation",
+				adapter_id: "playwright-cdp",
+			},
+			blocked: { blocked_cause: "unknown-post-submit-state" },
+		});
+		expect(humanIdentityCalls).toBe(0);
+	});
+
 	test("bootstraps one neutral target to the declared login URL before authentication", async () => {
 		const { result, navigations } = await fixture({
 			proof: true,
