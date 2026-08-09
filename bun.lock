@@ -110,6 +110,21 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/vault-git-transaction-manager": {
+      "name": "@side-quest/vault-git-transaction-manager",
+      "version": "0.1.0",
+      "bin": {
+        "vault-git": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/warm-chrome": {
       "name": "@side-quest/warm-chrome",
       "version": "0.1.0",
@@ -314,6 +329,8 @@
     "@side-quest/session-corpus": ["@side-quest/session-corpus@workspace:runtime/session-corpus"],
 
     "@side-quest/setup": ["@side-quest/setup@workspace:runtime/setup"],
+
+    "@side-quest/vault-git-transaction-manager": ["@side-quest/vault-git-transaction-manager@workspace:runtime/vault-git-transaction-manager"],
 
     "@side-quest/warm-chrome": ["@side-quest/warm-chrome@workspace:runtime/warm-chrome"],
 
