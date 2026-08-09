@@ -52,7 +52,8 @@ Refuse live mutation when:
 - remote freshness cannot be proved;
 - the lease owner is active or cannot be proved inactive;
 - local `main` is behind or diverged;
-- a `push_pending` transaction exists;
+- a `push_pending` transaction blocks new admission and non-owner mutation;
+  deterministic owner recovery follows R17a-R17b;
 - declared paths changed outside the transaction;
 - a repair would require semantic judgment, conflict resolution, data loss, or
   secret-bearing output.
@@ -149,10 +150,11 @@ turning every note into a branch or every save into a commit.
   prove unrelated staged, unstaged, and untracked state is unchanged, run the
   vault-owned check, and freeze only declared path content in a private
   temporary index. It must build and verify the exact candidate tree before
-  advancing local `main` with an expected-old-OID ref update, recheck canonical
-  owned-path hashes, and update only owned entries in the real index. Every Git
+  advancing local `main` with an expected-old-OID ref update. The frozen owned
+  blobs must equal the content hashes recorded immediately before the vault
+  check. Only owned entries in the real index may then change. Every Git
   pathspec must use top-level literal encoding; no working-tree reread may occur
-  while creating the commit candidate.
+  after candidate freeze.
 - R12. The manager must accept a meaningful agent-written summary, validate a
   Conventional Commit subject, and append stable `Vault-Event`,
   `Vault-Transaction`, and `Vault-Actor` trailers.
@@ -350,9 +352,15 @@ turning every note into a branch or every save into a commit.
   returns human-required and publishes nothing. Covers R2.
 - AE10. A declared existing path is staged or modified before `begin`.
   Admission fails without altering its bytes or index entry. Covers R1 and R11.
-- AE11. An owned file changes after validation but before local ref update. The
-  frozen candidate contains only validated bytes; the later edit remains
-  uncommitted and completion stops for reconciliation. Covers R11.
+- AE11a. An owned file changes after its checked-content hash is recorded but
+  before private-index freeze. Completion refuses as repairable: no local
+  commit, unchanged `HEAD` and remote refs, a repairable receipt, and unchanged
+  real index and worktree bytes. Covers R11.
+- AE11b. An owned file changes after private-index `write-tree` but before
+  `update-ref`. Completion commits and pushes only the frozen checked bytes;
+  the later edit remains as an unstaged worktree change after the owned index
+  entry updates. The receipt becomes closed after verified atomic close or
+  `push_pending` after an unknown or failed push. Covers R11 and R17.
 - AE12. An atomic push reports failure after exactly one remote ref moves. The
   manager classifies `host_contract_breach`, performs no retry, and routes to
   A3. Covers R17b.
@@ -505,11 +513,11 @@ Human-only:
 - KTD7. Preserve the real Git index and unrelated working-tree state. Freeze
   owned content in a private temporary index seeded from the exact baseline
   HEAD; use top-level literal pathspecs; create the candidate with `write-tree`
-  and `commit-tree`; verify its exact tree delta; re-hash canonical owned paths;
-  then advance local `main` with expected-old-OID `update-ref`. Update only the
-  owned entries in the real index afterward. Never use `git commit --only` as a
-  snapshot boundary, stage the whole tree, or reread the working tree while
-  creating the candidate. Governs R1 and R11.
+  and `commit-tree`; verify its exact tree delta and bind the frozen blobs to
+  the pre-check content hashes; then advance local `main` with expected-old-OID
+  `update-ref`. Update only the owned entries in the real index afterward.
+  Never use `git commit --only` as a snapshot boundary, stage the whole tree,
+  or reread the working tree after candidate freeze. Governs R1 and R11.
 - KTD8. Let the caller supply a concise semantic summary. The manager owns
   Conventional Commit validation, event-to-scope policy, stable trailers,
   redaction, and commit-tree proof. This keeps messages agentic without adding
@@ -918,10 +926,11 @@ Approach:
 - Invoke the vault-owned check from the resolved vault root.
 - Freeze admitted owned blobs and deletions in a private temporary index seeded
   from the exact baseline HEAD. Use `:(top,literal)` pathspecs, then
-  `write-tree` and `commit-tree`; inspect the exact tree delta; re-hash canonical
-  owned paths; advance local `main` with exact-old-OID `update-ref`; then update
-  only owned entries in the real index. Never use `git commit --only` as the
-  snapshot boundary.
+  `write-tree` and `commit-tree`; inspect the exact tree delta; bind frozen
+  owned blobs to the pre-check content hashes; advance local `main` with
+  exact-old-OID `update-ref`; then update only owned entries in the real index.
+  Never use `git commit --only` as the snapshot boundary or reread the working
+  tree after candidate freeze.
 - Atomically push explicit full refspecs for `main` and the ledger release with
   `--atomic --porcelain --no-verify` through the sole main-mutation adapter.
 - Preserve the local commit and authority on failed or unknown push.
@@ -936,8 +945,10 @@ Test scenarios:
   tree delta. A directory request freezes its expanded leaf set before lease.
 - Environment pathspec toggles are scrubbed and names containing `:`, `*`,
   brackets, newlines, or leading dashes remain literal.
-- An editor changes an owned path after candidate freeze; the commit keeps the
-  frozen validated blob and the later working-tree edit remains uncommitted.
+- An editor change before candidate freeze refuses repairably without a commit,
+  ref movement, or worktree/index rewrite.
+- An editor change after private-index `write-tree` commits the frozen validated
+  blob; the later worktree edit remains unstaged after close or `push_pending`.
 - Owned path changes outside the receipt block completion.
 - A check failure creates no commit and returns a repair action.
 - Remote movement before close creates no merge or rebase.

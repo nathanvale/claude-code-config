@@ -34,6 +34,10 @@ import {
 	VAULT_GIT_WRITE_PERMISSIONS,
 	createVaultGitLifecycleResult,
 } from "../src/model.ts";
+import type {
+	VaultGitMutationRequest,
+	VaultGitReadRequest,
+} from "../src/ports.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contractOptions = {
@@ -259,6 +263,14 @@ describe("vault-git U1 read-only runtime", () => {
 		expect(() =>
 			parseVaultGitInvocation(["join", "--capability-fd", "owner-secret"]),
 		).toThrow("numeric inherited file descriptor");
+		for (const reserved of ["0", "1", "2"]) {
+			expect(() =>
+				parseVaultGitInvocation(["join", "--capability-fd", reserved]),
+			).toThrow("numeric inherited file descriptor");
+		}
+		expect(() =>
+			parseVaultGitInvocation(["join", "--capability-fd", "99999999999999999999"]),
+		).toThrow("numeric inherited file descriptor");
 		expect(() => parseVaultGitInvocation(["join", "--capability", "secret"])).toThrow(
 			"Unsupported flag",
 		);
@@ -405,6 +417,22 @@ describe("vault-git Branch Station runtime coverage", () => {
 });
 
 describe("vault-git KTD16 boundaries", () => {
+	const portReadCommands = ["status", "preview", "doctor"] as const;
+	const portMutationCommands = [
+		"begin",
+		"join",
+		"complete",
+		"repair",
+		"tidy",
+		"janitor",
+	] as const;
+	const portCommandTypeAlignment: readonly [
+		ExactUnion<VaultGitReadRequest["command"], (typeof portReadCommands)[number]>,
+		ExactUnion<
+			VaultGitMutationRequest["command"],
+			(typeof portMutationCommands)[number]
+		>,
+	] = [true, true];
 	const srcModules = enumerateSourceModules();
 	const graph = buildModuleGraph(srcModules);
 	const pureLayerLocalImports = new Map<string, ReadonlySet<string>>([
@@ -426,6 +454,13 @@ describe("vault-git KTD16 boundaries", () => {
 			];
 		});
 		expect(findings).toEqual([]);
+	});
+
+	test("keeps pure port command unions aligned with the facade command partition", () => {
+		expect(portCommandTypeAlignment).toEqual([true, true]);
+		expect([...portReadCommands, ...portMutationCommands].sort()).toEqual(
+			VAULT_GIT_COMMANDS.filter((command) => command !== "commands").sort(),
+		);
 	});
 
 	test("keeps the enumerated source import graph fully resolved and acyclic", () => {
@@ -455,6 +490,12 @@ function argvForFlag(command: (typeof VAULT_GIT_COMMANDS)[number], flag: string)
 			return [...argv, flag];
 	}
 }
+
+type ExactUnion<Left, Right> = [Left] extends [Right]
+	? [Right] extends [Left]
+		? true
+		: false
+	: false;
 
 function stationById(id: (typeof VAULT_GIT_STATION_IDS)[number]) {
 	const station = vaultGitBranchStationCatalog.find((entry) => entry.id === id);

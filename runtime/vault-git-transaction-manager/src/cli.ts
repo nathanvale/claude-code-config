@@ -258,6 +258,7 @@ function emitUsageFailure(input: {
 			summary: "Correct the command arguments and retry parsing.",
 		},
 	});
+	// Invalid `commands` usage emits lifecycle data, not discovery metadata.
 	const resultContract =
 		command === "commands" ? vaultGitContracts.status : vaultGitContracts[command];
 	const data = createCommandResultData(resultContract, payload);
