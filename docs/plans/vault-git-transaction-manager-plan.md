@@ -10,10 +10,6 @@ artifact_readiness: implementation-ready
 product_contract_source: vault-decision-log
 execution: code
 deepened: 2026-08-08
-related:
-  - ../GOAL.md
-  - ../README.md
-  - ../decisions/vault-git-transaction-manager-decision-log.md
 ---
 
 # Vault Git Transaction Manager - Plan
@@ -181,10 +177,11 @@ turning every note into a branch or every save into a commit.
   are ancestors of the current append-only tips, even after later transactions
   land.
 - R17b. After every unsuccessful or unknown atomic push, the manager must fetch
-  exact `main` and ledger refs. Both expected objects means closed; neither may
-  be retryable only while the same lease generation remains owned; exactly one
-  expected object or any unexpected object is `host_contract_breach`, requires
-  A3, and has no automated retry.
+  exact `main` and ledger refs. Any unexpected object takes precedence and is
+  `host_contract_breach`. With no unexpected objects, both expected objects
+  means closed; neither is retryable only while the same lease generation
+  remains owned; exactly one expected object is `host_contract_breach`. A
+  breach requires A3 and has no automated retry.
 - R18. Remote movement during a transaction must stop completion and preserve
   evidence. Recovery must deliberately replay in a new transaction and must
   never auto-rebase or auto-merge.
@@ -612,8 +609,9 @@ stateDiagram-v2
     Checking --> HumanRequired: semantic or hash ambiguity
     Committing --> PushPending: push failed or outcome unknown
     Committing --> Closed: atomic main + ledger release verified
-    PushPending --> Closed: doctor proves and repair completes push
-    PushPending --> HumanRequired: remote moved or evidence conflicts
+    PushPending --> Closed: both expected objects, no unexpected objects
+    PushPending --> Repairable: neither expected, same lease still owned
+    PushPending --> HumanRequired: exactly one expected / any unexpected / lease lost
     Repairable --> Writing: deterministic resume
     Repairable --> Closed: deterministic restore + release
     Blocked --> [*]

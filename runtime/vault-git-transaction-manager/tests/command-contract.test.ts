@@ -146,6 +146,7 @@ describe("vault-git U1 read-only runtime", () => {
 		]);
 		expect(run.stdout).toContain("write_permission: denied");
 		expect(run.stdout).toContain("changed_state: none");
+		expect(run.stdout).toContain("blockers: runtime_unavailable");
 	});
 
 	test("status JSON exposes the complete safe lifecycle result", () => {
@@ -227,6 +228,19 @@ describe("vault-git U1 read-only runtime", () => {
 		});
 		expect(run.exitCode).toBe(2);
 		expect(JSON.parse(run.stdout).data.command).toBe("status");
+	});
+
+	test("invalid inline JSON syntax still returns a JSON usage envelope", () => {
+		const run = runVaultGitForTest(["status", "--json=true"], {
+			runId: "run-invalid-inline-json",
+		});
+		expect(run.exitCode).toBe(2);
+		expect(run.stderr).toBe("");
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "invalid_usage" },
+			data: { command: "status", outcome: "invalid_usage" },
+		});
 	});
 
 	test("capability input accepts only a numeric inherited descriptor", () => {
