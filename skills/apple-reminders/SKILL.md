@@ -5,9 +5,11 @@ description: "Read, search, create, edit, complete, move, or delete items in App
 
 # Apple Reminders
 
-Use `remindctl`, which writes through Apple's public EventKit API and therefore
-uses the same reminders and iCloud sync as Reminders.app. Never write directly
-to the Reminders SQLite store.
+Use `remindctl`, which reads and writes through Apple's public EventKit API.
+Never read or write the Reminders SQLite store directly.
+
+If the user names Apple Reminders without an operation, ask whether they want
+to inspect reminders or change them.
 
 ## Dependency
 
@@ -15,7 +17,7 @@ to the Reminders SQLite store.
   `steipete/tap/remindctl` to the dotfiles Brewfile and install it with
   `brew bundle`, then rerun `remindctl doctor --for-agent --json`.
 - macOS 14 or later and Reminders permission for the process running the CLI.
-- Upstream contract checked 2026-08-09:
+- Command contract: `remindctl <command> --help` and
   `https://github.com/openclaw/remindctl`.
 
 ## Workflow
@@ -26,50 +28,24 @@ to the Reminders SQLite store.
    Reminders access, then run `remindctl authorize` only with the user's
    approval. If denied, direct the user to **System Settings > Privacy &
    Security > Reminders**.
-3. Read current state with JSON before changing it. Use stable reminder or list
-   IDs when available; do not rely on a numeric display index from an old read.
-4. For a requested mutation, resolve the exact title, list, due value, and
-   target ID. Preserve date-only input as an all-day date; never invent a time.
-5. Preview completion or deletion with `--dry-run`. State the exact effect and
-   obtain confirmation before destructive deletion or deleting a list.
-6. Execute with `--json --no-input`, then read the affected item again and
-   report the verified result. Never retry a mutation when the result is
-   unknown until current state has been inspected.
-
-## Read Operations
-
-```bash
-remindctl status --json
-remindctl list --json
-remindctl open --json
-remindctl today --json
-remindctl overdue --json
-remindctl search "query" --json
-remindctl info <stable-id> --json
-```
-
-Use `open --json` for all incomplete reminders, including items without due
-dates. Add `--list-id <stable-list-id>` when a list name is ambiguous.
-
-## Mutations
-
-```bash
-remindctl add "Title" --list-id <list-id> --due <date> --json --no-input
-remindctl edit <stable-id> --title "Title" --json --no-input
-remindctl edit <stable-id> --list-id <list-id> --json --no-input
-remindctl complete <stable-id> --dry-run --json
-remindctl complete <stable-id> --json --no-input
-remindctl delete <stable-id> --dry-run --json
-remindctl delete <stable-id> --force --json --no-input
-```
-
-Create or rename a list only when explicitly requested. Do not assume the
-default list has a particular name. Reject conflicting changes such as setting
-and clearing the same field in one operation.
+3. Use `remindctl <command> --help` for current flags. Run commands with JSON
+   output and non-interactive mode when available.
+4. Read only the scope the user requested. Never run a broad `all`, `open`, or
+   `export` read merely to resolve a narrow list or reminder operation.
+5. Before changing existing state, read the exact target and use a stable
+   reminder or list ID. Never reuse a numeric index from an old read.
+6. Resolve the exact title, list, due value, and target ID. Preserve date-only
+   input as an all-day date; never invent a time or default list name.
+7. Preview completion or deletion with `--dry-run`. State the exact effect and
+   obtain confirmation before deleting a reminder or list.
+8. Execute the requested change, then read the affected item again and report
+   the verified result. On an unknown result, inspect current state before any
+   retry.
 
 ## Boundaries
 
 - This skill does not own recurring Codex automations or chat follow-ups.
+- Create or rename a list only when explicitly requested.
 - EventKit does not expose native Reminders sections, tags and smart lists,
   attachments, or Apple's private **Urgent** toggle. Say so plainly instead of
   approximating those features.
