@@ -9,9 +9,13 @@ import type {
 	SourceScanState,
 } from "./model.ts"
 
-async function listJsonl(root: string): Promise<string[]> {
-	if (!existsSync(root)) return []
+async function listJsonl(root: string): Promise<{
+	paths: string[]
+	unreadableDirectories: number
+}> {
+	if (!existsSync(root)) return { paths: [], unreadableDirectories: 0 }
 	const results: string[] = []
+	let unreadableDirectories = 0
 	const pending = [root]
 	while (pending.length > 0) {
 		const current = pending.pop()
@@ -21,7 +25,10 @@ async function listJsonl(root: string): Promise<string[]> {
 			entries = await readdir(current, { withFileTypes: true })
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code
-			if (code === "EACCES" || code === "EPERM") continue
+			if (code === "EACCES" || code === "EPERM") {
+				unreadableDirectories += 1
+				continue
+			}
 			throw error
 		}
 		for (const entry of entries) {
@@ -30,7 +37,7 @@ async function listJsonl(root: string): Promise<string[]> {
 			else if (entry.isFile() && entry.name.endsWith(".jsonl")) results.push(path)
 		}
 	}
-	return results.sort()
+	return { paths: results.sort(), unreadableDirectories }
 }
 
 /**
@@ -84,9 +91,10 @@ export async function listSessionFiles(roots: SessionRoots): Promise<{
 			source: group.source,
 			location: group.location,
 			state: existsSync(group.root) ? "available" : "missing",
-			files: found.length,
+			files: found.paths.length,
+			unreadable_directories: found.unreadableDirectories,
 		})
-		for (const path of found) files.push({ source: group.source, path })
+		for (const path of found.paths) files.push({ source: group.source, path })
 	}
 	return { files, states }
 }

@@ -2,6 +2,20 @@ import { existsSync } from "node:fs"
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import type { RepositoryMatchKind, SessionMetadata } from "./model.ts"
 
+/**
+ * Path-free result that preserves uncertainty for fail-closed repository filters.
+ *
+ * @example
+ * ```ts
+ * const assessment = matcher.assess(metadata)
+ * if (assessment.status === "unresolved") blockApproval()
+ * ```
+ */
+export type RepositoryMatchAssessment =
+	| { status: "matched"; kind: RepositoryMatchKind }
+	| { status: "mismatch" }
+	| { status: "unresolved" }
+
 function git(path: string, args: string[]): string | undefined {
 	const result = Bun.spawnSync(["git", "-C", path, ...args], {
 		stdout: "pipe",
@@ -36,7 +50,7 @@ function canonicalRepositoryIdentity(url: string | undefined): string | undefine
 	const normalizedPath = pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "")
 	const parts = normalizedPath.split("/").filter(Boolean)
 	return parts.length >= 2
-		? `${authority}/${parts.slice(-2).join("/")}`.toLowerCase()
+		? `${authority}/${parts.join("/")}`.toLowerCase()
 		: undefined
 }
 
@@ -51,6 +65,13 @@ export interface RepositoryMatcher {
 	root: string
 	/** Path-free repository name safe for result metadata. */
 	name: string
+	/**
+	 * Preserve the distinction between a proven mismatch and unavailable evidence.
+	 *
+	 * @param metadata - Private session locator to compare
+	 * @returns Matched evidence, proven mismatch, or unresolved ownership
+	 */
+	assess: (metadata: SessionMetadata) => RepositoryMatchAssessment
 	/**
 	 * Return the evidence kind linking session metadata to this repository.
 	 *
@@ -88,15 +109,19 @@ export function createRepositoryMatcher(repoPath: string): RepositoryMatcher {
 	const remoteIdentity = canonicalRepositoryIdentity(git(root, ["remote", "get-url", "origin"]))
 	const name = basename(root).toLowerCase()
 	const cache = new Map<string, { commonDir?: string; remoteIdentity?: string }>()
-	const match = (metadata: SessionMetadata): RepositoryMatchKind | undefined => {
-		if (metadata.cwd && pathInside(resolve(metadata.cwd), root)) return "path"
+	const assess = (metadata: SessionMetadata): RepositoryMatchAssessment => {
+		if (metadata.cwd && pathInside(resolve(metadata.cwd), root)) {
+			return { status: "matched", kind: "path" }
+		}
 		const metadataRemote = canonicalRepositoryIdentity(metadata.repositoryUrl)
-		if (metadataRemote && metadataRemote === remoteIdentity) return "repository_url"
-		if (!metadata.cwd) return undefined
+		if (metadataRemote && metadataRemote === remoteIdentity) {
+			return { status: "matched", kind: "repository_url" }
+		}
+		if (!metadata.cwd) return metadataRemote ? { status: "mismatch" } : { status: "unresolved" }
 		const remoteMismatch = metadataRemote !== undefined && metadataRemote !== remoteIdentity
-		const nameMatches = basename(resolve(metadata.cwd)).toLowerCase() === name
 		if (!existsSync(metadata.cwd)) {
-			return !remoteMismatch && nameMatches ? "repository_name" : undefined
+			if (remoteMismatch) return { status: "mismatch" }
+			return { status: "unresolved" }
 		}
 		let identity = cache.get(metadata.cwd)
 		if (!identity) {
@@ -113,17 +138,26 @@ export function createRepositoryMatcher(repoPath: string): RepositoryMatcher {
 			cache.set(metadata.cwd, identity)
 		}
 		if (identity.commonDir && commonDir) {
-			return identity.commonDir === commonDir ? "git_common_dir" : undefined
+			return identity.commonDir === commonDir
+				? { status: "matched", kind: "git_common_dir" }
+				: { status: "mismatch" }
 		}
 		if (identity.remoteIdentity && remoteIdentity) {
-			return identity.remoteIdentity === remoteIdentity ? "repository_url" : undefined
+			return identity.remoteIdentity === remoteIdentity
+				? { status: "matched", kind: "repository_url" }
+				: { status: "mismatch" }
 		}
-		return !remoteMismatch && nameMatches ? "repository_name" : undefined
+		return { status: "mismatch" }
+	}
+	const match = (metadata: SessionMetadata): RepositoryMatchKind | undefined => {
+		const assessment = assess(metadata)
+		return assessment.status === "matched" ? assessment.kind : undefined
 	}
 
 	return {
 		root,
 		name,
+		assess,
 		match,
 		matches: (metadata) => match(metadata) !== undefined,
 	}

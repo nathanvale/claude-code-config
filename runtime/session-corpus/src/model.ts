@@ -73,4 +73,6 @@ export interface SourceScanState {
 	state: "available" | "missing"
 	/** JSONL files found below the root. */
 	files: number
+	/** Directories skipped because the process could not read them. */
+	unreadable_directories: number
 }

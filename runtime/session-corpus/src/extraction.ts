@@ -48,6 +48,34 @@ export async function extractSessionPage(
 	metadata: SessionMetadata,
 	options: { offset: number; limit: number; maxMessageChars: number },
 ): Promise<ExtractedSessionPage> {
+	return extractSessionFragmentsPageUnsafe([metadata], options, false)
+}
+
+/**
+ * Read one logical session across all native fragments in deterministic order.
+ *
+ * @param fragments - Every runtime-native locator for one source-qualified session
+ * @param options - Pagination and per-message text budget
+ * @returns One combined source-neutral page without private filesystem paths
+ * @throws {Error} When pagination is invalid or any selected fragment is malformed or unreadable
+ *
+ * @example
+ * ```ts
+ * const page = await extractSessionFragmentsPage(fragments, { offset: 0, limit: 20, maxMessageChars: 2000 })
+ * ```
+ */
+export async function extractSessionFragmentsPage(
+	fragments: SessionMetadata[],
+	options: { offset: number; limit: number; maxMessageChars: number },
+): Promise<ExtractedSessionPage> {
+	return extractSessionFragmentsPageUnsafe(fragments, options, true)
+}
+
+async function extractSessionFragmentsPageUnsafe(
+	fragments: SessionMetadata[],
+	options: { offset: number; limit: number; maxMessageChars: number },
+	strict: boolean,
+): Promise<ExtractedSessionPage> {
 	if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
 		throw new Error("offset must be a non-negative integer")
 	}
@@ -60,24 +88,31 @@ export async function extractSessionPage(
 	let totalMessages = 0
 	let redactions = 0
 	const messages: ExtractedSessionMessage[] = []
-	for await (const value of readJsonLines(metadata.path)) {
-		const message = parseNormalizedMessage(value, metadata.source)
-		if (!message) continue
-		const index = totalMessages
-		totalMessages += 1
-		if (index < options.offset || messages.length >= options.limit) continue
-		const redacted = redactSessionText(message.text)
-		redactions += redacted.redactions
-		const truncated = redacted.text.length > options.maxMessageChars
-		messages.push({
-			index,
-			role: message.role,
-			timestamp: message.timestamp,
-			text: truncated
-				? `${redacted.text.slice(0, options.maxMessageChars)}…`
-				: redacted.text,
-			truncated,
-		})
+	const ordered = [...fragments].sort((left, right) => {
+		const leftStarted = left.startedAt ? Date.parse(left.startedAt) : Number.POSITIVE_INFINITY
+		const rightStarted = right.startedAt ? Date.parse(right.startedAt) : Number.POSITIVE_INFINITY
+		return leftStarted - rightStarted || left.path.localeCompare(right.path)
+	})
+	for (const metadata of ordered) {
+		for await (const value of readJsonLines(metadata.path, { strict })) {
+			const message = parseNormalizedMessage(value, metadata.source)
+			if (!message) continue
+			const index = totalMessages
+			totalMessages += 1
+			if (index < options.offset || messages.length >= options.limit) continue
+			const redacted = redactSessionText(message.text)
+			redactions += redacted.redactions
+			const truncated = redacted.text.length > options.maxMessageChars
+			messages.push({
+				index,
+				role: message.role,
+				timestamp: message.timestamp,
+				text: truncated
+					? `${redacted.text.slice(0, options.maxMessageChars)}…`
+					: redacted.text,
+				truncated,
+			})
+		}
 	}
 	return {
 		offset: options.offset,

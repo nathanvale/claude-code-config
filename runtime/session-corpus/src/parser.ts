@@ -6,6 +6,14 @@ import type {
 	SessionSource,
 } from "./model.ts"
 
+/** Controls whether JSONL corruption is skipped or surfaced to a fail-closed caller. */
+export interface ReadJsonLinesOptions {
+	/** Throw a path-free parse error instead of skipping a malformed non-empty line. */
+	strict?: boolean
+	/** Observe exact source bytes, for example to bind a digest to the parsed stream. */
+	onChunk?: (chunk: Uint8Array) => void
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object"
 		? (value as Record<string, unknown>)
@@ -136,24 +144,35 @@ export function parseNormalizedMessage(
 }
 
 /**
- * Stream valid JSON values while tolerating malformed or partial lines.
+ * Stream JSON values with caller-selected corruption handling.
  *
  * @param path - Private session JSONL path
+ * @param options - Strictness and optional raw-byte observer
  * @returns Async sequence of successfully parsed values
+ * @throws {Error} When strict mode encounters malformed JSON or the file cannot be read
  *
  * @example
  * ```ts
  * for await (const record of readJsonLines(sessionPath)) inspect(record)
  * ```
  */
-export async function* readJsonLines(path: string): AsyncGenerator<unknown> {
-	const input = createReadStream(path, { encoding: "utf8" })
+export async function* readJsonLines(
+	path: string,
+	options: ReadJsonLinesOptions = {},
+): AsyncGenerator<unknown> {
+	const input = createReadStream(path)
+	if (options.onChunk) input.on("data", options.onChunk)
 	const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY })
 	for await (const line of lines) {
 		if (!line.trim()) continue
+		let parsed: unknown
 		try {
-			yield JSON.parse(line)
-		} catch {}
+			parsed = JSON.parse(line)
+		} catch {
+			if (options.strict) throw new Error("Malformed JSONL record")
+			continue
+		}
+		yield parsed
 	}
 }
 

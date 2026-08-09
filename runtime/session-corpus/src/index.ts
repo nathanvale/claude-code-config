@@ -1,5 +1,5 @@
 export { defaultSessionRoots, listSessionFiles } from "./files.ts"
-export { extractSessionPage } from "./extraction.ts"
+export { extractSessionFragmentsPage, extractSessionPage } from "./extraction.ts"
 export type {
 	ExtractedSessionMessage,
 	ExtractedSessionPage,
@@ -20,6 +20,7 @@ export {
 	readJsonLines,
 	readMetadata,
 } from "./parser.ts"
+export type { ReadJsonLinesOptions } from "./parser.ts"
 export { redactSessionText } from "./redaction.ts"
 export { createRepositoryMatcher } from "./repository.ts"
-export type { RepositoryMatcher } from "./repository.ts"
+export type { RepositoryMatchAssessment, RepositoryMatcher } from "./repository.ts"
