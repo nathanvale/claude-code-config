@@ -46,7 +46,7 @@ Execution profile:
 - Activate live vault writes only after remote access and reconciliation pass.
 - Install no nightly schedule until Nathan selects its Melbourne-time window.
 
-Stop implementation when:
+Refuse live mutation when:
 
 - the configured vault cannot be resolved;
 - remote freshness cannot be proved;
@@ -103,18 +103,22 @@ turning every note into a branch or every save into a commit.
 
 #### Transaction admission and single-writer safety
 
-- R1. A caller must invoke `begin` with one event type and an explicit frozen
-  set of owned leaf-file paths before the first canonical vault filesystem
-  mutation. Each owned path must be clean in both index and worktree, or absent
-  for an admitted new file. A move owns both source and destination; a directory
-  request expands to a frozen leaf set before lease grant.
+- R1. A caller must invoke `begin` with one event type and an explicit initial
+  set of owned leaf-file paths. Every owned path must be admitted and baselined
+  before its first canonical vault filesystem mutation. At admission, each path
+  must be clean in both index and worktree, or absent for an admitted new file.
+  A move owns both source and destination; a directory request expands to leaf
+  paths before write permission is granted for them.
 - R2. `begin` must resolve the configured vault, fetch remote state, and require
   local `main` to equal fetched upstream `main` exactly. Behind, ahead,
   diverged, unreachable, or `push_pending` states refuse admission; an ahead
   state without a matching recoverable receipt requires A3.
 - R3. `begin` must acquire one remote lease before allowing writes and bind the
-  lease generation, local HEAD, remote HEAD, event, actor, and owned paths to an
-  opaque transaction ID.
+  lease generation, local HEAD, remote HEAD, event, actor, and initial owned
+  paths to an opaque transaction ID. During the writing phase, `join` may add a
+  fresh path only after the manager validates and baselines it and durably
+  appends it to the receipt. Only then may the nested workflow mutate that path.
+  An admitted path cannot be removed or rebaselined.
 - R4. Only one conforming writer may hold authority. A second writer must make
   no canonical vault filesystem change.
 - R5. Lease expiry alone must never authorize takeover. V1 has no automatic
@@ -132,14 +136,16 @@ turning every note into a branch or every save into a commit.
 - R7. The owning workflow must invoke `complete` explicitly. Idle time, file
   watches, save events, and the Janitor must not infer completion.
 - R8. One meaningful event creates one commit, including its related files and
-  mechanical spelling, link, or formatting corrections.
+  mechanical spelling, link, or formatting corrections. Each such path must be
+  admitted through `begin` or `join` before that path is mutated.
 - R9. Event types include project creation; material goal, scope, or owner
   change; accepted or superseded decision; admitted note creation; durable
   document completion, move, rename, archive, or deletion; and meaningful
   handoff, completion, or reopening.
 - R10. Questions, drafts, candidate wording, conversational progress, and
   private offline captures must not create canonical commits.
-- R11. `complete` must verify declared paths against their recorded baseline,
+- R11. `complete` must commit only paths admitted in the current durable
+  receipt and verify each against its recorded baseline,
   prove unrelated staged, unstaged, and untracked state is unchanged, run the
   vault-owned check, and freeze only declared path content in a private
   temporary index. It must build and verify the exact candidate tree before
@@ -214,13 +220,13 @@ turning every note into a branch or every save into a commit.
   contracts, exit behavior, and runtime semantics must be mechanically aligned.
 - R26. Claude Code, Codex, human shell, and scheduled callers must receive the
   same policy. Caller labels grant no extra authority.
-- R26a. Nested vault workflows must join the outer transaction ID and add owned
-  paths through the manager. `begin` issues separate transaction-scoped owner
-  and join capabilities; only the owner capability may complete, repair, or
-  release. Capabilities must never appear in argv, logs, diagnostics, receipts,
-  or remote records. V1 capabilities prevent accidental role misuse inside one
-  trusted Unix account; they are not a security boundary against a hostile
-  process running as that same account.
+- R26a. Nested vault workflows must join the outer transaction ID and add fresh
+  owned paths through the manager before mutating them. `begin` issues separate
+  transaction-scoped owner and join capabilities; only the owner capability may
+  complete, repair, or release. Capabilities must never appear in argv, logs,
+  diagnostics, receipts, or remote records. V1 capabilities prevent accidental
+  role misuse inside one trusted Unix account; they are not a security boundary
+  against a hostile process running as that same account.
 
 #### Janitor and bounded delegation
 
@@ -858,7 +864,8 @@ Approach:
 - Separate the current transaction pointer from append-only receipt history.
 - Persist an acquisition-intent receipt before remote CAS, then append the won
   lease generation before returning write authority.
-- Expose `join` to add validated owned paths to the active outer transaction.
+- Expose `join` to admit and durably baseline owned paths before the nested
+  workflow mutates them in the active outer transaction.
 - Exercise the short-lived internal capability launcher across separate CLI
   processes. Keep the same-UID cooperative trust boundary explicit.
 - Resolve and re-prove one canonical configured-vault identity at every

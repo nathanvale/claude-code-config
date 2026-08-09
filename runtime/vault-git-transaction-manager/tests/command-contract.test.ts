@@ -99,6 +99,14 @@ describe("vault-git command contract", () => {
 		);
 	});
 
+	test("contract construction rejects a drifted command set", () => {
+		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		delete drifted.janitor;
+		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
+			CliRuntimeContractError,
+		);
+	});
+
 	test("contract construction rejects unsafe text", () => {
 		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
 		(drifted.status as { summary: string }).summary =

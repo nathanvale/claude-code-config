@@ -244,8 +244,9 @@ function emitUsageFailure(input: {
 		input.error instanceof CliUsageError || input.error instanceof Error
 			? input.error.message
 			: String(input.error);
+	const command = commandFromArgv(input.argv);
 	const payload = createVaultGitLifecycleResult({
-		command: commandFromArgv(input.argv),
+		command,
 		outcome: "invalid_usage",
 		phase: "unavailable",
 		write_permission: "denied",
@@ -257,7 +258,9 @@ function emitUsageFailure(input: {
 			summary: "Correct the command arguments and retry parsing.",
 		},
 	});
-	const data = createCommandResultData(vaultGitContracts[payload.command], payload);
+	const resultContract =
+		command === "commands" ? vaultGitContracts.status : vaultGitContracts[command];
+	const data = createCommandResultData(resultContract, payload);
 	if (input.argv.some((arg) => arg === "--json" || arg.startsWith("--json="))) {
 		const action = runtimeActions.find(({ id }) => id === "change_input");
 		if (!action) throw new Error("Missing change_input action");
