@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import {
 	mkdir,
 	mkdtemp,
+	readFile,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -30,7 +31,10 @@ import {
 } from "../src/branch-station-catalog.ts";
 import type { VAULT_GIT_STATION_IDS } from "../src/branch-station-catalog.ts";
 import { vaultGitActions } from "../src/command-contract.ts";
-import { createVaultCheckerPort } from "../src/cli.ts";
+import {
+	createVaultCheckerPort,
+	createVaultGitCliComposition,
+} from "../src/cli.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
 
@@ -326,7 +330,211 @@ describe("vault-git catalog-driven process boundary", () => {
 			"baseline",
 		);
 	});
+
+	test("keeps an on-disk checker entrypoint change zero-commit as a checker_changed preview", async () => {
+		const fixture = await createFixture({ checkerRepair: true });
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "fixture-vault",
+		});
+		const checker = createVaultCheckerPort(
+			fixture.clone,
+			createNodeProcessPort(),
+		);
+		const fingerprint = await checker.fingerprint();
+		await store.admitChecker({
+			schemaVersion: 1,
+			...fingerprint,
+			admittedAt: "2026-08-09T00:00:00.000Z",
+		});
+		// Change the admitted entrypoint ON DISK after admission — committed and
+		// pushed so the tree stays clean and main stays aligned; only the
+		// fingerprint disagrees with the admitted record.
+		const entrypoint = join(fixture.clone, "scripts", "vault-check.ts");
+		await writeFile(
+			entrypoint,
+			`${await readFile(entrypoint, "utf8")}\n// drifted checker\n`,
+		);
+		git(fixture.clone, ["add", "scripts/vault-check.ts"]);
+		git(fixture.clone, ["commit", "-m", "chore: drift the checker entrypoint"]);
+		git(fixture.clone, ["push", "origin", "main"]);
+		await assertJanitorZeroCommitPreview(fixture, "checker_changed");
+	});
+
+	test("keeps an unknown checker repair id zero-commit as a preview", async () => {
+		const fixture = await createFixture({ checkerRepair: true });
+		// The checker names a repair id the registry never declared; admission is
+		// current (fingerprint taken AFTER the change), so only the registry
+		// lookup refuses.
+		await writeFile(
+			join(fixture.clone, "scripts", "vault-check.ts"),
+			[
+				'import { readFile } from "node:fs/promises";',
+				'import { join } from "node:path";',
+				'const source = await readFile(join(process.cwd(), "notes/a.md"), "utf8");',
+				'const findings = source.includes("owner:\\n") ? [{ id: "optional-field-empty", file: "notes/a.md", message: "empty optional field", repair_id: "unknown-repair", detail: { field: "owner" } }] : [];',
+				'process.stdout.write(JSON.stringify({ schema_version: 1, findings }) + "\\n");',
+				"process.exit(findings.length === 0 ? 0 : 1);",
+			].join("\n"),
+		);
+		git(fixture.clone, ["add", "scripts/vault-check.ts"]);
+		git(fixture.clone, ["commit", "-m", "chore: emit an unregistered repair id"]);
+		git(fixture.clone, ["push", "origin", "main"]);
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "fixture-vault",
+		});
+		const checker = createVaultCheckerPort(
+			fixture.clone,
+			createNodeProcessPort(),
+		);
+		const fingerprint = await checker.fingerprint();
+		await store.admitChecker({
+			schemaVersion: 1,
+			...fingerprint,
+			admittedAt: "2026-08-09T00:00:00.000Z",
+		});
+		await assertJanitorZeroCommitPreview(fixture, "unknown_repair");
+	});
+
+	test(
+		"admits exactly one writer when a janitor hygiene transaction races a foreground begin",
+		async () => {
+			const fixture = await createFixture();
+			const cloneB = join(fixture.root, "vault-b");
+			git(fixture.root, ["clone", join(fixture.root, "remote.git"), cloneB]);
+			git(cloneB, ["config", "user.name", "Vault Janitor Test"]);
+			git(cloneB, ["config", "user.email", "vault-janitor@example.invalid"]);
+			const foreground = await createVaultGitCliComposition({
+				repositoryPath: fixture.clone,
+				checkRepositoryPath: fixture.clone,
+				stateRoot: join(fixture.root, "state-foreground"),
+				repositoryIdentity: "fixture-vault",
+				actor: "agent-foreground",
+				host: "host-foreground",
+			});
+			const hygiene = await createVaultGitCliComposition({
+				repositoryPath: cloneB,
+				checkRepositoryPath: cloneB,
+				stateRoot: join(fixture.root, "state-hygiene"),
+				repositoryIdentity: "fixture-vault",
+				actor: "agent-hygiene",
+				host: "host-hygiene",
+			});
+			const countBefore = Number(
+				fixture.gitBare(["rev-list", "--count", "refs/heads/main"]),
+			);
+			let leaseAcquisitions = 0;
+			const [beginResult, hygieneResult] = await Promise.all([
+				foreground.engine.begin({
+					event: "note_created",
+					requestedPaths: ["notes/a.md"],
+					remote: "origin",
+					leaseDurationMs: 60_000,
+				}),
+				hygiene.engine.runHygieneTransaction({
+					paths: ["notes/a.md"],
+					remote: "origin",
+					leaseDurationMs: 60_000,
+					summary: "chore(vault): apply deterministic hygiene",
+					onLeaseAcquired() {
+						leaseAcquisitions += 1;
+					},
+					async apply() {
+						await writeFile(
+							join(cloneB, "notes", "a.md"),
+							"hygiene rewrite\n",
+						);
+						return true;
+					},
+				}),
+			]);
+			// Exactly one writer wins the remote lease; the other refuses without
+			// mutating canonical state.
+			const statuses = [beginResult.status, hygieneResult.status].sort();
+			expect([
+				["admitted", "refused"],
+				["completed", "refused"],
+			]).toContainEqual(statuses);
+			expect(leaseAcquisitions).toBe(
+				hygieneResult.status === "completed" ? 1 : 0,
+			);
+			const expectedCommits =
+				countBefore + (hygieneResult.status === "completed" ? 1 : 0);
+			expect(
+				Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
+			).toBe(expectedCommits);
+			expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
+				hygieneResult.status === "completed" ? "hygiene rewrite" : "baseline",
+			);
+		},
+		60_000,
+	);
 });
+
+/** Ledger tip for the fixture bare remote; "absent" before any transaction. */
+function ledgerTip(fixture: Fixture): string {
+	try {
+		return fixture.gitBare([
+			"rev-parse",
+			"--verify",
+			"refs/heads/vault-system/transaction-ledger",
+		]);
+	} catch {
+		return "absent";
+	}
+}
+
+/**
+ * Run `janitor --json` against a real fixture and prove it changed nothing:
+ * exit 0, preview status carrying the expected skip reason, unchanged bare
+ * main head and commit count, unchanged ledger ref, unchanged vault tree.
+ */
+async function assertJanitorZeroCommitPreview(
+	fixture: Fixture,
+	reason: string,
+): Promise<void> {
+	const mainBefore = fixture.gitBare(["rev-parse", "refs/heads/main"]);
+	const countBefore = Number(
+		fixture.gitBare(["rev-list", "--count", "refs/heads/main"]),
+	);
+	const ledgerBefore = ledgerTip(fixture);
+	const treeBefore = fixture.gitBare(["show", "refs/heads/main:notes/a.md"]);
+	const result = await fixture.run(["janitor", "--json"]);
+	expect(result.exitCode).toBe(0);
+	const envelope = parseCliProcessJson<{
+		data?: {
+			janitor_report?: {
+				skipped_repairs?: readonly { reason?: string }[];
+			};
+		};
+	}>(result);
+	expect(envelope).toMatchObject({
+		status: "ok",
+		data: {
+			outcome: "read_only",
+			changed_state: "none",
+			janitor_report: {
+				status: "preview",
+				proposed_transaction_groups: [],
+			},
+		},
+	});
+	expect(
+		envelope.data?.janitor_report?.skipped_repairs?.map(
+			(repair) => repair.reason,
+		),
+	).toContain(reason);
+	expect(fixture.gitBare(["rev-parse", "refs/heads/main"])).toBe(mainBefore);
+	expect(
+		Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
+	).toBe(countBefore);
+	expect(ledgerTip(fixture)).toBe(ledgerBefore);
+	expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
+		treeBefore,
+	);
+	expect(git(fixture.clone, ["status", "--porcelain"])).toBe("");
+}
 
 function scenario(
 	run: (fixture: Fixture) => Promise<CliProcessResult>,
@@ -506,9 +714,13 @@ async function createFixture(
 			2,
 		)}\n`,
 	);
+	// The checker admission fingerprint requires a real bun.lock; a missing
+	// lock file refuses admission by design.
+	await writeFile(join(clone, "bun.lock"), "{}\n");
 	git(clone, [
 		"add",
 		"package.json",
+		"bun.lock",
 		"notes/a.md",
 		...(options.checkerRepair
 			? ["scripts/vault-check.ts", "scripts/vault-repair-registry.ts"]

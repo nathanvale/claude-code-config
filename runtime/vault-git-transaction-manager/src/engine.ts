@@ -191,6 +191,8 @@ export interface VaultGitTransactionEngine {
 		readonly remote: string;
 		readonly leaseDurationMs: number;
 		readonly summary: string;
+		/** Observer invoked once the fresh hygiene lease is held. */
+		readonly onLeaseAcquired?: () => void;
 		readonly apply: () => Promise<boolean>;
 	}): Promise<VaultGitEngineResult>;
 }
@@ -371,6 +373,7 @@ export function createVaultGitTransactionEngine(
 			if (admitted.status !== "admitted" || !admitted.transactionId) {
 				return admitted;
 			}
+			request.onLeaseAcquired?.();
 			const loaded = await options.store.load();
 			if (loaded.status !== "loaded") {
 				return refusal(
@@ -387,7 +390,14 @@ export function createVaultGitTransactionEngine(
 			);
 			let applied = false;
 			try {
-				applied = await request.apply();
+				// The clean-tree proof from preflight predates lease acquisition; a
+				// foreground writer may have landed in between. Re-prove the whole
+				// tree is clean under the held lease before any checker mutation.
+				const wholeTree = options.repository.captureUnrelatedState
+					? await options.repository.captureUnrelatedState([])
+					: null;
+				const stillClean = wholeTree !== null && wholeTree.statusHex.length === 0;
+				applied = stillClean && (await request.apply());
 			} catch {
 				applied = false;
 			}

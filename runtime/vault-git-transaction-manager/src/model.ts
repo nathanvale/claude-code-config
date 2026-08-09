@@ -408,6 +408,8 @@ export interface VaultGitPrivateHygieneResult {
 	readonly capabilityFiles: number;
 	/** Consumed or expired doctor-token record groups removed. */
 	readonly doctorTokenRecords: number;
+	/** Oldest Janitor report files removed beyond the newest fifty retained. */
+	readonly janitorReports: number;
 }
 
 /** One safe continuation selected for the current result. */

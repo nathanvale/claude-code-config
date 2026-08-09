@@ -1,5 +1,4 @@
 import type {
-	VaultGitCheckerAdmissionRecord,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
@@ -48,14 +47,6 @@ export interface VaultGitCheckerPort {
 	applyRepair(
 		request: VaultGitCheckerRepairRequest,
 	): Promise<VaultGitCheckerProcessResult>;
-}
-
-/** Private checker-admission custody boundary. */
-export interface VaultGitCheckerAdmissionPort {
-	/** Persist an operator-approved checker fingerprint. */
-	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
-	/** Read the current admitted checker fingerprint. */
-	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
 }
 
 /** Read-side request accepted by a future transaction engine. */

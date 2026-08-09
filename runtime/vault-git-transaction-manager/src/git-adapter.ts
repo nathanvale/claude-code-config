@@ -1533,9 +1533,12 @@ async function isSafeOwnedPath(
 	}
 	const segments = path.split("/");
 	if (
-		segments[0] === ".git" ||
 		segments.some(
-			(segment) => segment.length === 0 || segment === "." || segment === "..",
+			(segment) =>
+				segment.length === 0 ||
+				segment === "." ||
+				segment === ".." ||
+				segment.toLowerCase() === ".git",
 		)
 	) {
 		return false;

@@ -3,6 +3,8 @@ import type { VaultGitEngineResult } from "./engine.ts";
 import type {
 	VaultGitBlockerId,
 	VaultGitCheckerAdmissionRecord,
+	VaultGitDoctorFinding,
+	VaultGitHygieneVaultPosture,
 	VaultGitHygieneWorkerTrigger,
 	VaultGitNextAction,
 	VaultGitPrivateHygieneResult,
@@ -36,6 +38,8 @@ export interface VaultGitHygieneTransactionRequest {
 	readonly leaseDurationMs: number;
 	/** Deterministic manager-owned commit subject. */
 	readonly summary: string;
+	/** Observer invoked once the fresh hygiene lease is held. */
+	readonly onLeaseAcquired?: () => void;
 	/** Checker mutation invoked only after the new lease is held. */
 	readonly apply: () => Promise<boolean>;
 }
@@ -121,8 +125,12 @@ export interface VaultGitJanitorReport {
 	readonly skippedRepairs: readonly VaultGitJanitorSkippedRepair[];
 	/** Private manager-owned material pruned without touching the vault. */
 	readonly privateHygiene: VaultGitPrivateHygieneResult;
-	/** Cooperative posture while this returned report holds no lease. */
-	readonly vaultPosture: "normal";
+	/** Stable blocker naming the refusal cause, when one applies. */
+	readonly blocker?: VaultGitBlockerId;
+	/** Mutation extent reported by the hygiene transaction engine, when one ran. */
+	readonly changedState?: VaultGitEngineResult["changedState"];
+	/** Cooperative posture; read_only while a hygiene lease stays held. */
+	readonly vaultPosture: VaultGitHygieneVaultPosture;
 	/** Foreground work outside the vault remains eligible. */
 	readonly foregroundNonVaultWorkAllowed: true;
 	/** Exactly one safe continuation. */
@@ -147,10 +155,22 @@ interface CheckerRepair {
 	readonly findingId: string;
 }
 
+/** One finding admitted for a registered deterministic repair. */
+interface AdmittedRepair {
+	readonly findingId: string;
+	readonly file: string;
+	readonly repairId: string;
+	readonly field: string;
+}
+
 const emptyPrivateHygiene = {
 	capabilityFiles: 0,
 	doctorTokenRecords: 0,
+	janitorReports: 0,
 } as const;
+
+/** Conservative checker-derived token shape; a leading '-' never reaches argv. */
+const SAFE_CHECKER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 /**
  * Create one conservative Janitor over the existing transaction engine.
@@ -214,6 +234,7 @@ export function createVaultGitJanitor(
 					status: "refused",
 					trigger: policy.trigger,
 					...anomalies,
+					blocker: preflight.blocker,
 					nextAction: actionForBlocker(preflight.blocker),
 				}));
 			}
@@ -230,12 +251,8 @@ export function createVaultGitJanitor(
 			}
 
 			let admission: VaultGitCheckerAdmissionRecord | null;
-			let fingerprint: Awaited<ReturnType<VaultGitCheckerPort["fingerprint"]>>;
 			try {
-				[admission, fingerprint] = await Promise.all([
-					options.engine.readCheckerAdmission(),
-					options.checker.fingerprint(),
-				]);
+				admission = await options.engine.readCheckerAdmission();
 			} catch {
 				skippedRepairs.push({ owner: "checker", reason: "checker_output_invalid" });
 				return finalize(previewReport(policy.trigger, anomalies, privateHygiene, skippedRepairs));
@@ -244,21 +261,40 @@ export function createVaultGitJanitor(
 				skippedRepairs.push({ owner: "checker", reason: "checker_unadmitted" });
 				return finalize(previewReport(policy.trigger, anomalies, privateHygiene, skippedRepairs));
 			}
-			if (
-				admission.entrypointHash !== fingerprint.entrypointHash ||
-				admission.dependencyBundleHash !== fingerprint.dependencyBundleHash
-			) {
-				skippedRepairs.push({ owner: "checker", reason: "checker_changed" });
-				return finalize(previewReport(policy.trigger, anomalies, privateHygiene, skippedRepairs));
-			}
+			const admitted = admission;
+			// KTD10 TOCTOU guard: every checker execution boundary re-proves the
+			// on-disk checker still matches the admitted fingerprint immediately
+			// before that boundary runs.
+			const verifyAdmission = async (): Promise<
+				"admitted" | "checker_changed" | "checker_output_invalid"
+			> => {
+				let current: Awaited<ReturnType<VaultGitCheckerPort["fingerprint"]>>;
+				try {
+					current = await options.checker.fingerprint();
+				} catch {
+					return "checker_output_invalid";
+				}
+				return current.entrypointHash === admitted.entrypointHash &&
+					current.dependencyBundleHash === admitted.dependencyBundleHash
+					? "admitted"
+					: "checker_changed";
+			};
 
 			let findings: readonly CheckerFinding[];
 			let registry: readonly CheckerRepair[];
 			try {
-				const [checkResult, registryResult] = await Promise.all([
-					options.checker.runCheck(),
-					options.checker.readRepairRegistry(),
-				]);
+				const beforeCheck = await verifyAdmission();
+				if (beforeCheck !== "admitted") {
+					skippedRepairs.push({ owner: "checker", reason: beforeCheck });
+					return finalize(previewReport(policy.trigger, anomalies, privateHygiene, skippedRepairs));
+				}
+				const checkResult = await options.checker.runCheck();
+				const beforeRegistry = await verifyAdmission();
+				if (beforeRegistry !== "admitted") {
+					skippedRepairs.push({ owner: "checker", reason: beforeRegistry });
+					return finalize(previewReport(policy.trigger, anomalies, privateHygiene, skippedRepairs));
+				}
+				const registryResult = await options.checker.readRepairRegistry();
 				findings = parseFindings(checkResult);
 				registry = parseRegistry(registryResult);
 			} catch {
@@ -267,31 +303,9 @@ export function createVaultGitJanitor(
 			}
 
 			const registryById = new Map(registry.map((repair) => [repair.id, repair]));
-			const requests: VaultGitCheckerRepairRequest[] = [];
-			for (const finding of findings) {
-				if (!isSafeRelativeFile(finding.file)) {
-					skippedRepairs.push(skip(finding, "unsafe_file"));
-					continue;
-				}
-				if (finding.id === "body-secret-shaped-value") {
-					skippedRepairs.push(skip(finding, "secret_like"));
-					continue;
-				}
-				if (!finding.repairId || !finding.field) {
-					skippedRepairs.push(skip(finding, "preview_only"));
-					continue;
-				}
-				const repair = registryById.get(finding.repairId);
-				if (!repair || repair.findingId !== finding.id) {
-					skippedRepairs.push(skip(finding, "unknown_repair"));
-					continue;
-				}
-				requests.push({
-					repairId: repair.id,
-					file: finding.file,
-					field: finding.field,
-				});
-			}
+			const classified = classifyFindings(findings, registryById);
+			skippedRepairs.push(...classified.skipped);
+			const requests = classified.admitted;
 			const groups = requests.length === 0 ? [] : [groupFor(requests)];
 			if (requests.length === 0) {
 				return finalize(previewReport(
@@ -303,6 +317,7 @@ export function createVaultGitJanitor(
 				));
 			}
 
+			let leaseHeld = false;
 			let transaction: VaultGitEngineResult;
 			try {
 				transaction = await options.engine.runHygieneTransaction({
@@ -310,10 +325,29 @@ export function createVaultGitJanitor(
 					remote: options.remote,
 					leaseDurationMs: options.leaseDurationMs,
 					summary: "chore(vault): apply deterministic hygiene",
+					onLeaseAcquired() {
+						leaseHeld = true;
+					},
 					async apply() {
+						// Fresh-lease staleness gate: the admitted fingerprint and the
+						// admitted finding set must both survive lease acquisition, or
+						// this transaction refuses without mutating anything.
+						if ((await verifyAdmission()) !== "admitted") return false;
+						let rescanned: readonly CheckerFinding[];
+						try {
+							rescanned = parseFindings(await options.checker.runCheck());
+						} catch {
+							return false;
+						}
+						const recheck = classifyFindings(rescanned, registryById);
+						if (!sameAdmittedSet(requests, recheck.admitted)) return false;
 						for (const request of requests) {
 							const applied = parseApplied(
-								await options.checker.applyRepair(request),
+								await options.checker.applyRepair({
+									repairId: request.repairId,
+									file: request.file,
+									field: request.field,
+								}),
 							);
 							if (!applied) return false;
 						}
@@ -321,12 +355,21 @@ export function createVaultGitJanitor(
 					},
 				});
 			} catch {
-				transaction = refusedEngineResult("checker_repair_refused");
+				transaction = refusedEngineResult(
+					"checker_repair_refused",
+					leaseHeld ? "partial" : "none",
+				);
 			}
+			if (transaction.status === "completed") leaseHeld = false;
+			const vaultPosture = evaluateVaultGitWorkerPolicy({
+				trigger: policy.trigger,
+				leaseHeld,
+			}).vaultPosture;
 			if (transaction.status !== "completed") {
 				for (const request of requests) {
 					skippedRepairs.push({
 						owner: "checker",
+						findingId: request.findingId,
 						repairId: request.repairId,
 						reason: "repair_refused",
 					});
@@ -338,6 +381,9 @@ export function createVaultGitJanitor(
 					proposedTransactionGroups: groups,
 					skippedRepairs,
 					privateHygiene,
+					blocker: transaction.blocker ?? "checker_repair_refused",
+					changedState: transaction.changedState,
+					vaultPosture,
 					nextAction: transaction.nextAction,
 				}));
 			}
@@ -348,10 +394,69 @@ export function createVaultGitJanitor(
 				proposedTransactionGroups: groups,
 				skippedRepairs,
 				privateHygiene,
+				changedState: transaction.changedState,
+				vaultPosture,
 				nextAction: transaction.nextAction,
 			}));
 		},
 	};
+}
+
+function classifyFindings(
+	findings: readonly CheckerFinding[],
+	registryById: ReadonlyMap<string, CheckerRepair>,
+): {
+	readonly admitted: readonly AdmittedRepair[];
+	readonly skipped: readonly VaultGitJanitorSkippedRepair[];
+} {
+	const admitted: AdmittedRepair[] = [];
+	const skipped: VaultGitJanitorSkippedRepair[] = [];
+	for (const finding of findings) {
+		if (!isSafeRelativeFile(finding.file)) {
+			skipped.push(skip(finding, "unsafe_file"));
+			continue;
+		}
+		if (finding.id === "body-secret-shaped-value") {
+			skipped.push(skip(finding, "secret_like"));
+			continue;
+		}
+		if (!finding.repairId || !finding.field) {
+			skipped.push(skip(finding, "preview_only"));
+			continue;
+		}
+		if (
+			!SAFE_CHECKER_TOKEN.test(finding.repairId) ||
+			!SAFE_CHECKER_TOKEN.test(finding.field)
+		) {
+			skipped.push(skip(finding, "preview_only"));
+			continue;
+		}
+		const repair = registryById.get(finding.repairId);
+		if (!repair || repair.findingId !== finding.id) {
+			skipped.push(skip(finding, "unknown_repair"));
+			continue;
+		}
+		admitted.push({
+			findingId: finding.id,
+			file: finding.file,
+			repairId: repair.id,
+			field: finding.field,
+		});
+	}
+	return { admitted, skipped };
+}
+
+function sameAdmittedSet(
+	expected: readonly AdmittedRepair[],
+	observed: readonly AdmittedRepair[],
+): boolean {
+	const serialize = (repairs: readonly AdmittedRepair[]): string =>
+		JSON.stringify(
+			repairs
+				.map((repair) => [repair.findingId, repair.file, repair.repairId, repair.field])
+				.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+		);
+	return serialize(expected) === serialize(observed);
 }
 
 function parseFindings(result: VaultGitCheckerProcessResult): readonly CheckerFinding[] {
@@ -361,16 +466,18 @@ function parseFindings(result: VaultGitCheckerProcessResult): readonly CheckerFi
 	}
 	const findings: CheckerFinding[] = [];
 	for (const finding of value.findings) {
+		// The checker contract declares detail optional; absence is valid and
+		// simply leaves the finding preview-only downstream.
 		if (
 			!isRecord(finding) ||
 			typeof finding.id !== "string" ||
 			typeof finding.file !== "string" ||
 			!(finding.repair_id === null || typeof finding.repair_id === "string") ||
-			!isRecord(finding.detail)
+			!(finding.detail === undefined || isRecord(finding.detail))
 		) {
 			throw new Error("checker finding malformed");
 		}
-		const field = finding.detail.field;
+		const field = isRecord(finding.detail) ? finding.detail.field : undefined;
 		findings.push({
 			id: finding.id,
 			file: finding.file,
@@ -435,11 +542,11 @@ function isSafeRelativeFile(file: string): boolean {
 	}
 	const segments = file.split("/");
 	return !segments.some(
-		(segment, index) =>
+		(segment) =>
 			segment.length === 0 ||
 			segment === "." ||
 			segment === ".." ||
-			(index === 0 && segment === ".git"),
+			segment.toLowerCase() === ".git",
 	);
 }
 
@@ -468,14 +575,14 @@ function anomaliesFor(doctor: VaultGitDoctorResult): Pick<
 	VaultGitJanitorReport,
 	"staleReceipts" | "leaseAnomalies" | "pushPending"
 > {
-	const staleFindings = new Set([
+	const staleFindings = new Set<VaultGitDoctorFinding>([
 		"acquisition_not_started",
 		"lease_acknowledgement_missing",
 		"checks_interrupted",
 		"commit_interrupted",
 		"lease_expired",
 	]);
-	const leaseFindings = new Set([
+	const leaseFindings = new Set<VaultGitDoctorFinding>([
 		"lease_acquired",
 		"lease_expired",
 		"lease_superseded",
@@ -528,7 +635,11 @@ function baseReport(
 		proposedTransactionGroups: input.proposedTransactionGroups ?? [],
 		skippedRepairs: input.skippedRepairs ?? [],
 		privateHygiene: input.privateHygiene ?? emptyPrivateHygiene,
-		vaultPosture: "normal",
+		...(input.blocker ? { blocker: input.blocker } : {}),
+		...(input.changedState !== undefined
+			? { changedState: input.changedState }
+			: {}),
+		vaultPosture: input.vaultPosture ?? "normal",
 		foregroundNonVaultWorkAllowed: true,
 		nextAction: input.nextAction,
 	};
@@ -551,13 +662,16 @@ function actionForBlocker(blocker: VaultGitBlockerId): VaultGitNextAction {
 	return operatorAction("Inspect the blocking transaction evidence before retrying Janitor.");
 }
 
-function refusedEngineResult(blocker: VaultGitBlockerId): VaultGitEngineResult {
+function refusedEngineResult(
+	blocker: VaultGitBlockerId,
+	changedState: VaultGitEngineResult["changedState"] = "none",
+): VaultGitEngineResult {
 	return {
 		status: "refused",
 		state: "human_required",
 		phase: "human_required",
 		writePermission: "denied",
-		changedState: "none",
+		changedState,
 		retrySafety: "operator_required",
 		blocker,
 		nextAction: {

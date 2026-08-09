@@ -278,7 +278,7 @@ export interface VaultGitReceiptStore {
 	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
 	/** Read the current checker admission, or null before operator admission. */
 	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
-	/** Remove only closed capability material and consumed or expired doctor tokens. */
+	/** Remove closed capability material, settled doctor tokens, and Janitor reports beyond the newest fifty. */
 	prunePrivateHygiene(now: string): Promise<VaultGitPrivateHygieneResult>;
 	/** Append one owner-only Janitor report outside the configured vault. */
 	recordJanitorReport(reportJson: string, recordedAt: string): Promise<void>;
@@ -1138,6 +1138,9 @@ function validateCheckerAdmission(
 	}
 }
 
+/** Newest Janitor report files retained by one private hygiene pass. */
+const JANITOR_REPORT_RETENTION = 50;
+
 async function prunePrivateMaterial(
 	paths: VaultGitReceiptStore["paths"],
 	now: string,
@@ -1161,10 +1164,27 @@ async function prunePrivateMaterial(
 			.filter((receipt) => receipt.phase === "closed")
 			.map((receipt) => receipt.receiptId),
 	);
+	// During append the closed history entry publishes before the current
+	// pointer updates, so history alone can claim "closed" while the pointer
+	// still names an open receipt. Material bound to the current pointer's
+	// receipt survives every prune until that pointer itself reads closed.
+	let protectedReceiptId: string | null = null;
+	let currentText: string | null = null;
+	try {
+		currentText = await readPrivateText(paths.current);
+	} catch (error) {
+		if (!isMissing(error)) throw error;
+	}
+	if (currentText !== null) {
+		const current = parseReceipt(currentText);
+		if (!current) throw new Error("current receipt malformed");
+		if (current.phase !== "closed") protectedReceiptId = current.receiptId;
+	}
 	let capabilityFiles = 0;
 	for (const name of await readdir(paths.capabilities)) {
 		const match = name.match(/^(receipt_[0-9a-f]{32})\.(owner|join)$/);
 		if (!match?.[1] || !closedReceiptIds.has(match[1])) continue;
+		if (match[1] === protectedReceiptId) continue;
 		await unlinkPrivateFile(join(paths.capabilities, name));
 		capabilityFiles += 1;
 	}
@@ -1184,6 +1204,7 @@ async function prunePrivateMaterial(
 		if (!isDoctorTokenRecord(value)) {
 			throw new Error("doctor token record invalid");
 		}
+		if (value.receiptId === protectedReceiptId) continue;
 		const consumed = doctorNameSet.has(`${value.tokenId}.consumed.json`);
 		const expired = Date.parse(now) - Date.parse(value.issuedAt) > 5 * 60_000;
 		if (!consumed && !expired) continue;
@@ -1197,7 +1218,33 @@ async function prunePrivateMaterial(
 	if (doctorTokenRecords > 0) {
 		await durability.syncDirectory(paths.doctorTokens, "doctor_token");
 	}
-	return { capabilityFiles, doctorTokenRecords };
+
+	const reportEntries: Array<{ readonly name: string; readonly recordedAt: string }> = [];
+	for (const name of (await readdir(paths.janitorReports)).filter((entry) =>
+		entry.endsWith(".json"),
+	)) {
+		const value: unknown = JSON.parse(
+			await readPrivateText(join(paths.janitorReports, name)),
+		);
+		if (!isRecord(value) || !isIso(value.recordedAt)) {
+			throw new Error("Janitor report record invalid");
+		}
+		reportEntries.push({ name, recordedAt: value.recordedAt });
+	}
+	reportEntries.sort(
+		(left, right) =>
+			Date.parse(right.recordedAt) - Date.parse(left.recordedAt) ||
+			left.name.localeCompare(right.name),
+	);
+	let janitorReports = 0;
+	for (const entry of reportEntries.slice(JANITOR_REPORT_RETENTION)) {
+		await unlinkPrivateFile(join(paths.janitorReports, entry.name));
+		janitorReports += 1;
+	}
+	if (janitorReports > 0) {
+		await durability.syncDirectory(paths.janitorReports, "janitor_report");
+	}
+	return { capabilityFiles, doctorTokenRecords, janitorReports };
 }
 
 async function unlinkPrivateFile(path: string): Promise<void> {

@@ -177,7 +177,7 @@ describe("vault-git CLI composition", () => {
 						pushPending: false,
 						proposedTransactionGroups: [],
 						skippedRepairs: [],
-						privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0 },
+						privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 },
 						vaultPosture: "normal",
 						foregroundNonVaultWorkAllowed: true,
 						nextAction: { id: "none", summary: "No repair pending." },
@@ -310,7 +310,7 @@ function fakeComposition(
 					pushPending: false,
 					proposedTransactionGroups: [],
 					skippedRepairs: [],
-					privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0 },
+					privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 },
 					vaultPosture: "normal",
 					foregroundNonVaultWorkAllowed: true,
 					nextAction: { id: "none", summary: "No repair pending." },
@@ -357,7 +357,7 @@ function fakeEngine(
 			return null;
 		},
 		async prunePrivateHygiene() {
-			return { capabilityFiles: 0, doctorTokenRecords: 0 };
+			return { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 };
 		},
 		async recordJanitorReport() {},
 		async runHygieneTransaction() {
