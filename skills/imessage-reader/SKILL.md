@@ -31,19 +31,27 @@ inside this skill.
    command contract. Do not copy stale flags from this skill.
 3. Classify the request as read, watch, or send. Resolve the narrowest chat,
    participants, dates, limit, attachment scope, and direction before reading.
+   If a name or chat is ambiguous, perform only the smallest bounded metadata
+   lookup needed to present candidates, then let the user choose. Never broaden
+   into a general chat or contact listing merely to resolve the target.
 4. Use JSON output. Keep primary data on stdout and interpret repair guidance
    from stderr or the structured RPC error.
 5. Present only the requested message facts. Do not persist, index, summarize,
    or promote raw messages unless the user separately approves the destination
    and retention boundary.
-6. For a send, show the exact recipient or stable chat, exact text, attachment,
+6. For a watch, require an exact chat plus a time or event bound before launch.
+   Keep it foreground and non-persistent. Stop when the bound is reached, the
+   user asks, or the process reports an unknown state; never leave it running in
+   the background.
+7. For a send, show the exact recipient or stable chat, exact text, attachment,
    and service. Obtain fresh confirmation immediately before running `imsg
    send`.
-7. After a send, report the returned acknowledgment honestly. A `sent` result
+8. After a send, report the returned acknowledgment honestly. A `sent` result
    proves Messages accepted the request, not that the recipient read or received
-   it. If the result is unknown, inspect the same target. If that inspection is
-   inconclusive, report the result as unknown and stop. Never retry
-   automatically. Any later `imsg send` requires fresh confirmation.
+   it. If the result is unknown, inspect the exact resolved target once using a
+   narrow time window and result limit. Never broaden the inspection. If that
+   inspection is inconclusive, report the result as unknown and stop. Never
+   retry automatically. Any later `imsg send` requires fresh confirmation.
 
 ## Privacy And Safety
 
@@ -73,6 +81,7 @@ inside this skill.
   `imsg completions llm`.
 - Read smoke tests require separate approval because even one chat row exposes
   private metadata.
+- Watch smoke tests require an exact chat plus an explicit time or event bound.
 - Send smoke tests require a named recipient, exact content, and separate
   foreground approval. Never send a synthetic test message by default.
 
