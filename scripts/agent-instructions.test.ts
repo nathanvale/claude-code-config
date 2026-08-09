@@ -16,6 +16,8 @@ import { describe, expect, test } from "bun:test";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
+const vaultGitStartupRule =
+	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; if it reports activation blocked, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time.";
 
 const registeredOwnerPaths = [
 	"skills/productivity-connectors/SKILL.md",
@@ -26,6 +28,7 @@ const registeredOwnerPaths = [
 	"context/personal.md",
 	"context/vault.md",
 	"context/comms-style.md",
+	"context/tracker-links.md",
 	"docs/git/conventions.md",
 	"docs/git/workflows.md",
 	"docs/git/worktree.md",
@@ -162,6 +165,23 @@ function findContrastingSortLocale(): string | undefined {
 }
 
 describe("agent instruction staged health", () => {
+	test("delivers the vault-git write route through both startup surfaces", () => {
+		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
+		expect(agents).toContain(vaultGitStartupRule);
+
+		withFixture((fixture) => {
+			writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
+
+			expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
+				vaultGitStartupRule,
+			);
+			expect(readFileSync(join(fixture.home, ".claude/AGENTS.md"), "utf8")).toContain(
+				vaultGitStartupRule,
+			);
+			expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+		});
+	});
+
 	test("mirrors REGISTERED_OWNER_PATHS from the bash source exactly", () => {
 		const source = readFileSync(sourceScript, "utf8");
 		const block = source.match(/declare -a REGISTERED_OWNER_PATHS=\(\n(?<entries>[\s\S]*?)\n\)/u);
