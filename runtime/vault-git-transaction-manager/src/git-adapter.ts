@@ -1,17 +1,73 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { chmod, lstat, realpath, unlink } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import { VAULT_GIT_LEDGER_REF } from "./model.ts";
+import {
+	VAULT_GIT_LEDGER_REF,
+	type VaultGitUnrelatedStateSnapshot,
+} from "./model.ts";
 import type {
 	VaultGitLedgerAppendRequest,
 	VaultGitLedgerAppendResult,
 	VaultGitLedgerReadResult,
+	VaultGitCheckPort,
 	VaultGitMainInspection,
+	VaultGitOwnedPathInspection,
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
 	VaultGitProcessResult,
+	VaultGitRepositoryPort,
 	VaultGitRemotePort,
 } from "./ports.ts";
+
+/** Options for the injected real-process vault-owned check. */
+export interface VaultGitCheckAdapterOptions {
+	/** Canonical vault root used as the checker working directory. */
+	readonly repositoryPath: string;
+	/** Injectable bounded subprocess runner. */
+	readonly process: VaultGitProcessPort;
+	/** Hard checker deadline. */
+	readonly timeoutMs: number;
+	/** Bun executable override. @defaultValue "bun" */
+	readonly bunBinary?: string;
+}
+
+/**
+ * Create the real-process default for the injected vault-owned check port.
+ *
+ * @param options - Canonical root, process boundary, and hard deadline
+ * @returns A shell-free `bun run check` invocation rooted at the vault
+ * @throws Never; command and timeout failures are represented in the result
+ *
+ * @example
+ * ```typescript
+ * const check = createVaultOwnedCheckPort({
+ *   repositoryPath: "/srv/vault",
+ *   process: createNodeProcessPort(),
+ *   timeoutMs: 60_000,
+ * })
+ * ```
+ */
+export function createVaultOwnedCheckPort(
+	options: VaultGitCheckAdapterOptions,
+): VaultGitCheckPort {
+	return {
+		async run() {
+			const checked = await options.process.run({
+				command: options.bunBinary ?? "bun",
+				args: ["run", "check"],
+				cwd: options.repositoryPath,
+				env: { LC_ALL: "C" },
+				timeoutMs: options.timeoutMs,
+			});
+			if (checked.timedOut) return { status: "failed", reason: "timed_out" };
+			return checked.exitCode === 0
+				? { status: "passed" }
+				: { status: "failed", reason: "check_failed" };
+		},
+	};
+}
 
 /** Deadlines for local Git plumbing and remote fetch/push operations. */
 export interface VaultGitGitTimeouts {
@@ -333,7 +389,578 @@ export function createGitAdapter(
 			}
 			return { status: "refused", reason: "remote_state_unknown" };
 		},
+
+		async atomicClose(request) {
+			assertSafeRemote(request.remote);
+			assertLedgerRef(request.ledgerRef);
+			assertObjectId(request.expectedMainHead);
+			assertObjectId(request.mainCommit);
+			assertObjectId(request.expectedLedgerGeneration);
+			assertSafeCommitField("author", request.author);
+			assertSafeCommitField("message", request.ledgerMessage);
+			await assertNoConfiguredPushRefspec(
+				runGit,
+				request.remote,
+				options.timeouts.localMs,
+			);
+			const mainParent = await runGit(
+				["show", "-s", "--format=%P", request.mainCommit],
+				options.timeouts.localMs,
+			);
+			if (
+				mainParent.timedOut ||
+				mainParent.exitCode !== 0 ||
+				mainParent.stdout.trim().split(/\s+/).filter(Boolean)[0] !==
+					request.expectedMainHead
+			) {
+				throw new Error("main commit does not descend from the admitted head");
+			}
+
+			const blob = requireLocalObject(
+				await runGit(
+					["hash-object", "-w", "--stdin"],
+					options.timeouts.localMs,
+					request.ledgerContent,
+				),
+				"ledger release blob",
+			);
+			const tree = requireLocalObject(
+				await runGit(
+					["mktree"],
+					options.timeouts.localMs,
+					`100644 blob ${blob}\tledger.json\n`,
+				),
+				"ledger release tree",
+			);
+			const ledgerCommit = requireLocalObject(
+				await runGit(
+					[
+						"commit-tree",
+						tree,
+						"-p",
+						request.expectedLedgerGeneration,
+						"-m",
+						request.ledgerMessage,
+					],
+					options.timeouts.localMs,
+					undefined,
+					{
+						GIT_AUTHOR_NAME: request.author,
+						GIT_AUTHOR_EMAIL: "vault-git@localhost.invalid",
+						GIT_AUTHOR_DATE: request.timestamp,
+						GIT_COMMITTER_NAME: "vault-git transaction manager",
+						GIT_COMMITTER_EMAIL: "vault-git@localhost.invalid",
+						GIT_COMMITTER_DATE: request.timestamp,
+					},
+				),
+				"ledger release commit",
+			);
+			await request.onPrepared({
+				mainCommit: request.mainCommit,
+				ledgerCommit,
+			});
+			const pushed = await runGit(
+				[
+					"push",
+					"--atomic",
+					"--porcelain",
+					"--no-verify",
+					request.remote,
+					`${request.mainCommit}:refs/heads/main`,
+					`${ledgerCommit}:${request.ledgerRef}`,
+				],
+				options.timeouts.pushMs,
+			);
+			const reconciled = await reconcileAtomicClose({
+				runGit,
+				fetchExactRef,
+				remote: request.remote,
+				expectedMainHead: request.expectedMainHead,
+				mainCommit: request.mainCommit,
+				expectedLedgerGeneration: request.expectedLedgerGeneration,
+				ledgerCommit,
+				ledgerRef: request.ledgerRef,
+				timeoutMs: options.timeouts.localMs,
+			});
+			if (reconciled === "closed") {
+				return { status: "closed", mainCommit: request.mainCommit, ledgerCommit };
+			}
+			if (reconciled === "host_contract_breach") {
+				return {
+					status: "host_contract_breach",
+					mainCommit: request.mainCommit,
+					ledgerCommit,
+				};
+			}
+			if (/does not support.*atomic|atomic push is not supported/i.test(pushed.stderr)) {
+				return {
+					status: "host_contract_breach",
+					mainCommit: request.mainCommit,
+					ledgerCommit,
+				};
+			}
+			return {
+				status: "push_pending",
+				reason: pushed.timedOut
+					? "timed_out"
+					: pushed.exitCode === 0
+						? "remote_state_unknown"
+						: "remote_unavailable",
+				mainCommit: request.mainCommit,
+				ledgerCommit,
+			};
+		},
 	};
+}
+
+/** Construction input for the production admission and exact-commit adapter. */
+export interface VaultGitRepositoryAdapterOptions extends VaultGitAdapterOptions {
+	/** Stable non-secret configured-vault identity. */
+	readonly repositoryIdentity: string;
+}
+
+/**
+ * Create the production repository admission and exact local commit boundary.
+ *
+ * @param options - Canonical repository, identity, process port, and deadlines
+ * @returns Admission snapshots and private-index commit plumbing
+ * @throws {Error} When the configured root or local Git plumbing is unavailable
+ *
+ * @example
+ * ```typescript
+ * const repository = createGitRepositoryAdapter({
+ *   repositoryPath: "/srv/vault",
+ *   repositoryIdentity: "vault@example",
+ *   process: createNodeProcessPort(),
+ *   timeouts: { fetchMs: 5000, pushMs: 5000, localMs: 5000 },
+ * })
+ * ```
+ */
+export function createGitRepositoryAdapter(
+	options: VaultGitRepositoryAdapterOptions,
+): VaultGitRepositoryPort {
+	if (options.repositoryIdentity.trim().length === 0) {
+		throw new Error("repository identity must not be empty");
+	}
+	const gitBinary = options.gitBinary ?? "git";
+	const runGit = async (
+		args: readonly string[],
+		input?: string,
+		env?: Readonly<Record<string, string>>,
+	): Promise<VaultGitProcessResult> =>
+		options.process.run({
+			command: gitBinary,
+			args,
+			cwd: options.repositoryPath,
+			stdin: input,
+			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+			timeoutMs: options.timeouts.localMs,
+		});
+
+	const captureUnrelatedState = async (
+		ownedPaths: readonly string[],
+	): Promise<VaultGitUnrelatedStateSnapshot> => {
+		const pathspecs = unrelatedPathspecs(ownedPaths);
+		const [status, index] = await Promise.all([
+			runGit([
+				"status",
+				"--porcelain=v2",
+				"-z",
+				"--untracked-files=all",
+				"--ignored=no",
+				"--",
+				...pathspecs,
+			]),
+			runGit(["ls-files", "--stage", "-z", "--", ...pathspecs]),
+		]);
+		if (
+			status.timedOut ||
+			index.timedOut ||
+			status.exitCode !== 0 ||
+			index.exitCode !== 0
+		) {
+			throw new Error("could not capture unrelated repository state");
+		}
+		return {
+			statusHex: Buffer.from(status.stdout, "utf8").toString("hex"),
+			indexHex: Buffer.from(index.stdout, "utf8").toString("hex"),
+		};
+	};
+
+	return {
+		async resolveCanonicalIdentity() {
+			const [configuredRoot, discoveredRoot, main] = await Promise.all([
+				realpath(options.repositoryPath),
+				runGit(["rev-parse", "--show-toplevel"]),
+				runGit(["rev-parse", "--verify", "refs/heads/main^{commit}"]),
+			]);
+			if (
+				discoveredRoot.timedOut ||
+				main.timedOut ||
+				discoveredRoot.exitCode !== 0 ||
+				main.exitCode !== 0 ||
+				(await realpath(discoveredRoot.stdout.trim())) !== configuredRoot
+			) {
+				throw new Error("configured repository root is not canonical");
+			}
+			return {
+				identity: options.repositoryIdentity,
+				localMainHead: requireObjectId(main.stdout, "local main"),
+			};
+		},
+
+		async inspectOwnedPaths(
+			requestedPaths: readonly string[],
+		): Promise<VaultGitOwnedPathInspection> {
+			if (requestedPaths.length === 0) {
+				return { status: "refused", reason: "invalid_path" };
+			}
+			const baseline = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (baseline.timedOut || baseline.exitCode !== 0) {
+				return { status: "refused", reason: "directory_expansion_failed" };
+			}
+			const baselineHead = requireObjectId(baseline.stdout, "local main");
+			const expanded: string[] = [];
+			for (const requestedPath of requestedPaths) {
+				if (!(await isSafeOwnedPath(options.repositoryPath, requestedPath))) {
+					return { status: "refused", reason: "invalid_path" };
+				}
+				const metadata = await lstat(resolve(options.repositoryPath, requestedPath)).catch(
+					(error: unknown) => (isMissingFilesystemEntry(error) ? null : Promise.reject(error)),
+				);
+				if (metadata?.isSymbolicLink()) {
+					return { status: "refused", reason: "symlink" };
+				}
+				if (metadata?.isDirectory()) {
+					const leaves = await runGit([
+						"ls-files",
+						"-co",
+						"--exclude-standard",
+						"-z",
+						"--",
+						literalPathspec(requestedPath),
+					]);
+					if (leaves.timedOut || leaves.exitCode !== 0) {
+						return { status: "refused", reason: "directory_expansion_failed" };
+					}
+					const paths = splitNul(leaves.stdout);
+					if (paths.length === 0) {
+						return { status: "refused", reason: "directory_expansion_failed" };
+					}
+					expanded.push(...paths);
+				} else {
+					expanded.push(requestedPath);
+				}
+			}
+			const leafPaths = [...new Set(expanded)].sort();
+			const ownedPaths = [];
+			for (const path of leafPaths) {
+				if (!(await isSafeOwnedPath(options.repositoryPath, path))) {
+					return { status: "refused", reason: "symlink" };
+				}
+				// check-ignore does not support :(literal) pathspec magic. Its NUL
+				// stdin mode consumes pathnames, not pathspecs, so magic bytes remain
+				// literal without weakening the top-root validation above.
+				const ignored = await runGit(
+					["check-ignore", "--quiet", "-z", "--stdin"],
+					`${path}\0`,
+				);
+				if (ignored.timedOut) {
+					return { status: "refused", reason: "directory_expansion_failed" };
+				}
+				if (ignored.exitCode === 0) return { status: "refused", reason: "ignored" };
+				if (ignored.exitCode !== 1) {
+					return { status: "refused", reason: "directory_expansion_failed" };
+				}
+				const entry = await readTreeEntry(runGit, baselineHead, path);
+				const metadata = await lstat(resolve(options.repositoryPath, path)).catch(
+					(error: unknown) => (isMissingFilesystemEntry(error) ? null : Promise.reject(error)),
+				);
+				if (entry?.mode === "120000" || metadata?.isSymbolicLink()) {
+					return { status: "refused", reason: "symlink" };
+				}
+				const status = await runGit([
+					"status",
+					"--porcelain=v1",
+					"-z",
+					"--untracked-files=all",
+					"--",
+					literalPathspec(path),
+				]);
+				if (status.timedOut || status.exitCode !== 0) {
+					return { status: "refused", reason: "directory_expansion_failed" };
+				}
+				if (!entry && metadata) {
+					return { status: "refused", reason: "preexisting_untracked" };
+				}
+				if (status.stdout.length > 0) {
+					const indexStatus = status.stdout[0];
+					const worktreeStatus = status.stdout[1];
+					return {
+						status: "refused",
+						reason:
+							indexStatus && indexStatus !== " " && indexStatus !== "?"
+								? "staged"
+								: worktreeStatus && worktreeStatus !== " " && worktreeStatus !== "?"
+									? "dirty_worktree"
+									: "preexisting_untracked",
+					};
+				}
+				ownedPaths.push({
+					path,
+					baselineHash: entry?.objectId ?? null,
+					admittedNewFile: !entry,
+				});
+			}
+			return {
+				status: "admitted",
+				paths: ownedPaths,
+				unrelatedState: await captureUnrelatedState(
+					ownedPaths.map((entry) => entry.path),
+				),
+			};
+		},
+
+		captureUnrelatedState,
+
+		async commitExact(request) {
+			const localHead = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (localHead.timedOut) return { status: "refused", reason: "timed_out" };
+			if (
+				localHead.exitCode !== 0 ||
+				localHead.stdout.trim() !== request.baselineHead
+			) {
+				return { status: "refused", reason: "local_main_moved" };
+			}
+			for (const ownedPath of request.ownedPaths) {
+				if (!(await isSafeOwnedPath(options.repositoryPath, ownedPath.path))) {
+					return { status: "refused", reason: "owned_path_symlink" };
+				}
+				const currentMetadata = await lstat(
+					resolve(options.repositoryPath, ownedPath.path),
+				).catch((error: unknown) =>
+					isMissingFilesystemEntry(error) ? null : Promise.reject(error),
+				);
+				if (currentMetadata?.isSymbolicLink()) {
+					return { status: "refused", reason: "owned_path_symlink" };
+				}
+				const entry = await readTreeEntry(runGit, request.baselineHead, ownedPath.path);
+				if ((entry?.objectId ?? null) !== ownedPath.baselineHash) {
+					return { status: "refused", reason: "owned_path_baseline_changed" };
+				}
+			}
+			const unrelated = await captureUnrelatedState(
+				request.ownedPaths.map((entry) => entry.path),
+			);
+			if (
+				unrelated.statusHex !== request.unrelatedState.statusHex ||
+				unrelated.indexHex !== request.unrelatedState.indexHex
+			) {
+				return { status: "refused", reason: "unrelated_state_changed" };
+			}
+
+			const indexPathResult = await runGit(["rev-parse", "--git-path", "index"]);
+			if (indexPathResult.timedOut) return { status: "refused", reason: "timed_out" };
+			if (indexPathResult.exitCode !== 0) {
+				return { status: "refused", reason: "candidate_mismatch" };
+			}
+			const canonicalIndex = resolve(
+				options.repositoryPath,
+				indexPathResult.stdout.trim(),
+			);
+			const temporaryIndex = `${canonicalIndex}.vault-git-${randomUUID()}`;
+			const privateIndexEnvironment = { GIT_INDEX_FILE: temporaryIndex };
+			try {
+				const seeded = await runGit(
+					["read-tree", request.baselineHead],
+					undefined,
+					privateIndexEnvironment,
+				);
+				if (seeded.timedOut) return { status: "refused", reason: "timed_out" };
+				if (seeded.exitCode !== 0) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				await chmod(temporaryIndex, 0o600);
+				const frozen = await runGit(
+					[
+						"add",
+						"-A",
+						"--",
+						...request.ownedPaths.map((entry) => literalPathspec(entry.path)),
+					],
+					undefined,
+					privateIndexEnvironment,
+				);
+				if (frozen.timedOut) return { status: "refused", reason: "timed_out" };
+				if (frozen.exitCode !== 0) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const treeResult = await runGit(
+					["write-tree"],
+					undefined,
+					privateIndexEnvironment,
+				);
+				if (treeResult.timedOut) return { status: "refused", reason: "timed_out" };
+				if (treeResult.exitCode !== 0) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const treeId = requireObjectId(treeResult.stdout, "candidate tree");
+				const changed = await runGit([
+					"diff-tree",
+					"--no-commit-id",
+					"--name-only",
+					"-r",
+					"-z",
+					request.baselineHead,
+					treeId,
+				]);
+				if (changed.timedOut) return { status: "refused", reason: "timed_out" };
+				if (changed.exitCode !== 0) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const changedPaths = splitNul(changed.stdout);
+				const owned = new Set(request.ownedPaths.map((entry) => entry.path));
+				if (changedPaths.length === 0) {
+					return { status: "refused", reason: "empty_event" };
+				}
+				if (changedPaths.some((path) => !owned.has(path))) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const committed = await runGit(
+					[
+						"commit-tree",
+						treeId,
+						"-p",
+						request.baselineHead,
+						"-F",
+						"-",
+					],
+					request.message,
+					{
+						GIT_AUTHOR_NAME: request.author,
+						GIT_AUTHOR_EMAIL: "vault-git@localhost.invalid",
+						GIT_AUTHOR_DATE: request.timestamp,
+						GIT_COMMITTER_NAME: "vault-git transaction manager",
+						GIT_COMMITTER_EMAIL: "vault-git@localhost.invalid",
+						GIT_COMMITTER_DATE: request.timestamp,
+					},
+				);
+				if (committed.timedOut) return { status: "refused", reason: "timed_out" };
+				if (committed.exitCode !== 0) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const commitId = requireObjectId(committed.stdout, "candidate commit");
+				const proof = await runGit(["cat-file", "commit", commitId]);
+				const separator = proof.stdout.indexOf("\n\n");
+				const headers = proof.stdout.slice(0, separator).split("\n");
+				const provedTree = headers.find((header) => header.startsWith("tree "))?.slice(5);
+				const provedParents = headers
+					.filter((header) => header.startsWith("parent "))
+					.map((header) => header.slice(7));
+				const provedMessage = proof.stdout.slice(separator + 2);
+				if (
+					proof.timedOut ||
+					proof.exitCode !== 0 ||
+					separator < 0 ||
+					provedTree !== treeId ||
+					provedParents.length !== 1 ||
+					provedParents[0] !== request.baselineHead ||
+					provedMessage !== request.message
+				) {
+					return { status: "refused", reason: "candidate_mismatch" };
+				}
+				const advanced = await runGit([
+					"update-ref",
+					"refs/heads/main",
+					commitId,
+					request.baselineHead,
+				]);
+				if (advanced.timedOut) return { status: "refused", reason: "timed_out" };
+				if (advanced.exitCode !== 0) {
+					return { status: "refused", reason: "local_main_moved" };
+				}
+				for (const ownedPath of request.ownedPaths) {
+					const entry = await readTreeEntry(runGit, treeId, ownedPath.path);
+					const indexInfo = entry
+						? `${entry.mode} ${entry.objectId}\t${entry.path}\0`
+						: `0 ${"0".repeat(40)}\t${ownedPath.path}\0`;
+					const updated = await runGit(
+						["update-index", "-z", "--index-info"],
+						indexInfo,
+					);
+					if (updated.timedOut || updated.exitCode !== 0) {
+						throw new Error("local main advanced but owned index update failed");
+					}
+				}
+				return { status: "committed", commitId, treeId };
+			} finally {
+				await unlink(temporaryIndex).catch(() => undefined);
+				await unlink(`${temporaryIndex}.lock`).catch(() => undefined);
+			}
+		},
+	};
+}
+
+async function reconcileAtomicClose(input: {
+	readonly runGit: (
+		args: readonly string[],
+		timeoutMs: number,
+	) => Promise<VaultGitProcessResult>;
+	readonly fetchExactRef: (
+		remote: string,
+		sourceRef: string,
+	) => Promise<
+		| { readonly status: "ok"; readonly commit: string }
+		| {
+				readonly status: "failed";
+				readonly reason: "remote_unavailable" | "timed_out";
+		  }
+	>;
+	readonly remote: string;
+	readonly expectedMainHead: string;
+	readonly mainCommit: string;
+	readonly expectedLedgerGeneration: string;
+	readonly ledgerCommit: string;
+	readonly ledgerRef: string;
+	readonly timeoutMs: number;
+}): Promise<"closed" | "unchanged" | "unknown" | "host_contract_breach"> {
+	const [main, ledger] = await Promise.all([
+		input.fetchExactRef(input.remote, "refs/heads/main"),
+		input.fetchExactRef(input.remote, input.ledgerRef),
+	]);
+	if (main.status === "failed" || ledger.status === "failed") return "unknown";
+	const mainExpected =
+		main.commit === input.mainCommit ||
+		(await isAncestor(
+			input.runGit,
+			input.mainCommit,
+			main.commit,
+			input.timeoutMs,
+		));
+	const ledgerExpected =
+		ledger.commit === input.ledgerCommit ||
+		(await isAncestor(
+			input.runGit,
+			input.ledgerCommit,
+			ledger.commit,
+			input.timeoutMs,
+		));
+	if (mainExpected && ledgerExpected) return "closed";
+	if (
+		main.commit === input.expectedMainHead &&
+		ledger.commit === input.expectedLedgerGeneration
+	) {
+		return "unchanged";
+	}
+	return "host_contract_breach";
 }
 
 /**
@@ -550,4 +1177,118 @@ function requireLocalObject(
 		throw new Error(`could not construct ${label}`);
 	}
 	return objectId;
+}
+
+function requireObjectId(output: string, label: string): string {
+	const objectId = output.trim();
+	if (!/^[0-9a-f]{40,64}$/.test(objectId)) {
+		throw new Error(`${label} is not one complete object id`);
+	}
+	return objectId;
+}
+
+function literalPathspec(path: string): string {
+	return `:(top,literal)${path}`;
+}
+
+function unrelatedPathspecs(ownedPaths: readonly string[]): string[] {
+	return [
+		":(top)",
+		...ownedPaths.map((path) => `:(top,exclude,literal)${path}`),
+	];
+}
+
+function splitNul(output: string): string[] {
+	return output.split("\0").filter((entry) => entry.length > 0);
+}
+
+interface TreeEntry {
+	readonly mode: string;
+	readonly objectId: string;
+	readonly path: string;
+}
+
+async function readTreeEntry(
+	runGit: (
+		args: readonly string[],
+		input?: string,
+		env?: Readonly<Record<string, string>>,
+	) => Promise<VaultGitProcessResult>,
+	treeish: string,
+	path: string,
+): Promise<TreeEntry | null> {
+	const result = await runGit([
+		"ls-tree",
+		"-z",
+		treeish,
+		"--",
+		literalPathspec(path),
+	]);
+	if (result.timedOut || result.exitCode !== 0) {
+		throw new Error("could not inspect owned path baseline");
+	}
+	const record = splitNul(result.stdout)[0];
+	if (!record) return null;
+	const separator = record.indexOf("\t");
+	if (separator < 0) throw new Error("owned path tree entry is malformed");
+	const [mode, type, objectId] = record.slice(0, separator).split(" ");
+	const entryPath = record.slice(separator + 1);
+	if (
+		!mode ||
+		(type !== "blob" && type !== "commit") ||
+		!objectId ||
+		!/^[0-9a-f]{40,64}$/.test(objectId) ||
+		entryPath !== path
+	) {
+		throw new Error("owned path tree entry is malformed");
+	}
+	return { mode, objectId, path: entryPath };
+}
+
+async function isSafeOwnedPath(
+	repositoryPath: string,
+	path: string,
+): Promise<boolean> {
+	if (
+		path.length === 0 ||
+		isAbsolute(path) ||
+		/[\0\r]/.test(path) ||
+		path.endsWith("/")
+	) {
+		return false;
+	}
+	const segments = path.split("/");
+	if (
+		segments[0] === ".git" ||
+		segments.some(
+			(segment) => segment.length === 0 || segment === "." || segment === "..",
+		)
+	) {
+		return false;
+	}
+	const root = await realpath(repositoryPath);
+	const candidate = resolve(root, path);
+	const fromRoot = relative(root, candidate);
+	if (fromRoot.startsWith(`..${sep}`) || fromRoot === ".." || isAbsolute(fromRoot)) {
+		return false;
+	}
+	let current = root;
+	for (const segment of segments.slice(0, -1)) {
+		current = resolve(current, segment);
+		const metadata = await lstat(current).catch((error: unknown) =>
+			isMissingFilesystemEntry(error) ? null : Promise.reject(error),
+		);
+		if (metadata?.isSymbolicLink()) return false;
+		if (metadata === null) break;
+	}
+	return true;
+}
+
+function isMissingFilesystemEntry(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
 }

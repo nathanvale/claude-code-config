@@ -1,3 +1,4 @@
+import { VAULT_GIT_LEDGER_REF } from "./model.ts";
 import type {
 	VaultGitBlockerId,
 	VaultGitEngineNextActionId,
@@ -11,9 +12,14 @@ import type {
 	VaultGitWritePermission,
 } from "./model.ts";
 import type {
+	VaultGitCheckPort,
 	VaultGitRepositoryPort,
 	VaultGitRuntimePort,
 } from "./ports.ts";
+import {
+	buildVaultCommitMessage,
+	validateVaultCommitSubject,
+} from "./commit-policy.ts";
 import {
 	acquireRemoteLease,
 	observeRemoteLedger,
@@ -37,6 +43,8 @@ export interface VaultGitTransactionEngineOptions {
 	readonly runtime: VaultGitRuntimePort;
 	/** Canonical non-secret configured repository identity. */
 	readonly repositoryIdentity: string;
+	/** Injected vault-owned validation command. */
+	readonly check?: VaultGitCheckPort;
 }
 
 /** Input for one transaction admission attempt. */
@@ -62,6 +70,8 @@ export interface VaultGitOwnerInput {
 	readonly transactionId: string;
 	readonly remote: string;
 	readonly capability: Uint8Array;
+	/** Caller-written semantic Conventional Commit subject. */
+	readonly summary?: string;
 }
 
 /** Internal durable phase transition used by later commit and repair units. */
@@ -83,11 +93,17 @@ export interface VaultGitEngineNextAction {
 
 /** Capability-free transaction-engine result. */
 export interface VaultGitEngineResult {
-	readonly status: "admitted" | "joined" | "advanced" | "refused" | "inspected";
+	readonly status:
+		| "admitted"
+		| "joined"
+		| "advanced"
+		| "completed"
+		| "refused"
+		| "inspected";
 	readonly state: VaultGitTransactionState;
 	readonly phase: VaultGitTransactionPhase;
 	readonly writePermission: VaultGitWritePermission;
-	readonly changedState: "none" | "local" | "remote" | "partial";
+	readonly changedState: "none" | "local" | "remote" | "committed" | "partial";
 	readonly retrySafety: "same_input_safe" | "same_input_unsafe" | "operator_required";
 	readonly nextAction: VaultGitEngineNextAction;
 	readonly blocker?: VaultGitBlockerId;
@@ -232,7 +248,7 @@ export function createVaultGitTransactionEngine(
 			}
 			const receiptId = options.runtime.newReceiptId();
 			const receipt: VaultGitReceipt = {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				receiptId,
 				transactionId: null,
 				revision: 1,
@@ -244,6 +260,7 @@ export function createVaultGitTransactionEngine(
 				host: options.runtime.host(),
 				remote: input.remote,
 				ownedPaths: copyPaths(admission.paths),
+				unrelatedState: admission.unrelatedState,
 				localMainHead: main.localHead,
 				remoteMainHead: main.remoteHead,
 				expectedLeaseGeneration: observed.generation,
@@ -251,6 +268,9 @@ export function createVaultGitTransactionEngine(
 				leaseAcquiredAt: null,
 				leaseDurationMs: input.leaseDurationMs,
 				commitId: null,
+				expectedMainCommit: null,
+				ledgerReleaseId: null,
+				pushOutcome: "not_attempted",
 				nextSafeAction: "retry_remote",
 				diagnosticsReference: `receipt:${receiptId}`,
 			};
@@ -304,6 +324,9 @@ export function createVaultGitTransactionEngine(
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one outer transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "join", input.capability);
 			if (authorization) return authorization;
+			if (input.remote !== loaded.remote) {
+				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by the outer transaction.");
+			}
 			if (loaded.phase !== "writing") {
 				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Join requires a transaction in the writing phase; inspect current status.");
 			}
@@ -318,9 +341,15 @@ export function createVaultGitTransactionEngine(
 			if (admission.status === "refused") return refusal("active", loaded.phase, "owned_path_not_admitted", "change_owned_paths", `Change the joined path set; admission found ${admission.reason}.`);
 			const additions = admission.paths.filter((path) => !existing.has(path.path));
 			if (additions.length === 0) return result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
+			const joinedPaths = [...loaded.ownedPaths, ...copyPaths(additions)];
 			const joined = nextReceipt(loaded, {
 				transition: "paths_joined",
-				ownedPaths: [...loaded.ownedPaths, ...copyPaths(additions)],
+				ownedPaths: joinedPaths,
+				unrelatedState: options.repository.captureUnrelatedState
+					? await options.repository.captureUnrelatedState(
+							joinedPaths.map((path) => path.path),
+						)
+					: loaded.unrelatedState,
 				nextSafeAction: "continue_outer_transaction",
 				recordedAt: options.runtime.now().toISOString(),
 			});
@@ -333,6 +362,19 @@ export function createVaultGitTransactionEngine(
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
 			if (authorization) return authorization;
+			if (input.remote !== loaded.remote) {
+				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
+			}
+			if (loaded.phase !== "writing") {
+				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Completion requires the writing phase; inspect current status.");
+			}
+			if (options.repository.commitExact && options.check && options.ledger.git.atomicClose) {
+				const subject = input.summary ?? "";
+				const validatedSubject = validateVaultCommitSubject(subject, loaded.event);
+				if (validatedSubject.status === "refused") {
+					return refusal("active", loaded.phase, "commit_subject_invalid", "change_commit_summary", "Change the semantic commit subject before completion.");
+				}
+			}
 			const fenced = await fence(loaded, input.remote);
 			if (fenced) return fenced;
 			const checking = nextReceipt(loaded, {
@@ -342,7 +384,127 @@ export function createVaultGitTransactionEngine(
 				recordedAt: options.runtime.now().toISOString(),
 			});
 			await options.store.append(checking);
-			return result("advanced", "active", checking, "owner", "local", "run_owned_path_checks", "Run exact owned-path completion checks.");
+			if (!options.repository.commitExact || !options.check || !options.ledger.git.atomicClose) {
+				return result("advanced", "active", checking, "owner", "local", "run_owned_path_checks", "Run exact owned-path completion checks.");
+			}
+			const checked = await options.check.run();
+			if (checked.status === "failed") {
+				const repairable = nextReceipt(checking, {
+					phase: "repairable",
+					transition: "deterministic_repair_available",
+					nextSafeAction: "run_repair",
+					recordedAt: options.runtime.now().toISOString(),
+				});
+				await options.store.append(repairable);
+				return refusal("repairable", repairable.phase, "vault_check_failed", "run_repair", "Repair the vault-owned check failure before replaying completion.", "local", "same_input_unsafe");
+			}
+			const committing = nextReceipt(checking, {
+				phase: "committing",
+				nextSafeAction: "preserve_local_edits",
+				recordedAt: options.runtime.now().toISOString(),
+			});
+			await options.store.append(committing);
+			const message = buildVaultCommitMessage({
+				subject: input.summary ?? "",
+				event: committing.event,
+				transactionId: committing.transactionId ?? "",
+				actor: committing.actor,
+			});
+			const localCommit = await options.repository.commitExact({
+				baselineHead: committing.localMainHead,
+				ownedPaths: committing.ownedPaths,
+				unrelatedState: committing.unrelatedState,
+				message,
+				author: committing.actor,
+				timestamp: options.runtime.now().toISOString(),
+			});
+			if (localCommit.status === "refused") {
+				const blocker = localCommit.reason === "unrelated_state_changed"
+					? "unrelated_state_changed"
+					: localCommit.reason === "owned_path_baseline_changed" ||
+							localCommit.reason === "owned_path_symlink"
+						? "owned_path_changed"
+						: "host_contract_breach";
+				const phase = blocker === "host_contract_breach" ? "human_required" : "repairable";
+				const failed = nextReceipt(committing, {
+					phase,
+					transition: phase === "human_required" ? "human_intervention_required" : "deterministic_repair_available",
+					nextSafeAction: phase === "human_required" ? "request_operator_review" : "run_repair",
+					recordedAt: options.runtime.now().toISOString(),
+				});
+				await options.store.append(failed);
+				return refusal(phase, phase, blocker, failed.nextSafeAction, phase === "human_required" ? "Ask an operator to inspect local commit evidence." : "Repair the changed transaction state, then replay in a new transaction.", "local", phase === "human_required" ? "operator_required" : "same_input_unsafe");
+			}
+			if (!committing.transactionId || !committing.leaseGeneration || !committing.leaseAcquiredAt) {
+				return refusal("human_required", "human_required", "receipt_corrupt", "inspect_private_receipt", "Inspect missing atomic-close receipt evidence.", "committed", "operator_required");
+			}
+			const closedAt = options.runtime.now().toISOString();
+			const releaseContent = `${JSON.stringify({
+				schema_version: 1,
+				operation: "release",
+				previous_generation: committing.leaseGeneration,
+				transitioned_at: closedAt,
+				lease: {
+					transaction_id: committing.transactionId,
+					actor: committing.actor,
+					host: committing.host,
+					event: committing.event,
+					owned_paths: committing.ownedPaths.map((path) => path.path),
+					local_main_head: committing.localMainHead,
+					remote_main_head: committing.remoteMainHead,
+					acquired_at: committing.leaseAcquiredAt,
+					lease_duration_ms: committing.leaseDurationMs,
+					state: "released",
+				},
+			})}\n`;
+			let publicationReceipt = committing;
+			const publication = await options.ledger.git.atomicClose({
+				remote: committing.remote,
+				expectedMainHead: committing.remoteMainHead,
+				mainCommit: localCommit.commitId,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: committing.leaseGeneration,
+				ledgerContent: releaseContent,
+				ledgerMessage: `vault-ledger: release ${committing.transactionId}`,
+				author: committing.actor,
+				timestamp: closedAt,
+				async onPrepared(evidence) {
+					publicationReceipt = nextReceipt(committing, {
+						phase: "push_pending",
+						transition: "push_outcome_unknown",
+						commitId: evidence.mainCommit,
+						expectedMainCommit: evidence.mainCommit,
+						ledgerReleaseId: evidence.ledgerCommit,
+						pushOutcome: "unknown",
+						nextSafeAction: "retry_push",
+						recordedAt: closedAt,
+					});
+					await options.store.append(publicationReceipt);
+				},
+			});
+			if (publication.status === "closed") {
+				const closed = nextReceipt(publicationReceipt, {
+					phase: "closed",
+					transition: "closed",
+					pushOutcome: "closed",
+					nextSafeAction: "none",
+					recordedAt: options.runtime.now().toISOString(),
+				});
+				await options.store.append(closed);
+				return result("completed", "closed", closed, "owner", "remote", "none", "The exact event commit and lease release are remote and closed.");
+			}
+			if (publication.status === "host_contract_breach") {
+				const breach = nextReceipt(publicationReceipt, {
+					phase: "human_required",
+					transition: "human_intervention_required",
+					pushOutcome: "host_contract_breach",
+					nextSafeAction: "request_operator_review",
+					recordedAt: options.runtime.now().toISOString(),
+				});
+				await options.store.append(breach);
+				return refusal("human_required", breach.phase, "host_contract_breach", "request_operator_review", "Ask an operator to reconcile partial or unexpected remote objects.", "partial", "operator_required");
+			}
+			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "retry_push", "Reconcile exact remote refs before the owning host retries publication.", "push_pending");
 		},
 
 		async inspect() {
@@ -375,6 +537,9 @@ export function createVaultGitTransactionEngine(
 			}
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
 			if (authorization) return authorization;
+			if (input.remote !== loaded.remote) {
+				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
+			}
 			const fenced = await fence(loaded, input.remote);
 			if (fenced) return fenced;
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
@@ -404,7 +569,7 @@ async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, 
 }
 
 function nextReceipt(previous: VaultGitReceipt, changes: Partial<VaultGitReceipt>): VaultGitReceipt {
-	return { ...previous, ...changes, schemaVersion: 1, receiptId: previous.receiptId, revision: previous.revision + 1 };
+	return { ...previous, ...changes, schemaVersion: 2, receiptId: previous.receiptId, revision: previous.revision + 1 };
 }
 
 function copyPaths(paths: readonly VaultGitOwnedPathReceipt[]): VaultGitOwnedPathReceipt[] { return paths.map((path) => ({ ...path })); }

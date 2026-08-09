@@ -295,7 +295,11 @@ class FakeRepository implements VaultGitRepositoryPort {
 		this.lastRequested = [...paths];
 		if (this.refusal) return { status: "refused" as const, reason: this.refusal };
 		if (paths.some((path) => this.dirtyPaths.has(path))) return { status: "refused" as const, reason: "dirty_worktree" as const };
-		return { status: "admitted" as const, paths: paths.map((path) => ({ path, baselineHash: null, admittedNewFile: true })) };
+		return {
+			status: "admitted" as const,
+			paths: paths.map((path) => ({ path, baselineHash: null, admittedNewFile: true })),
+			unrelatedState: { statusHex: "", indexHex: "" },
+		};
 	}
 }
 
