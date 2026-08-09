@@ -1,42 +1,12 @@
-/** Agent-runtime source that owns one session format. */
-export type SessionSource = "claude" | "codex"
+import type { RepositoryMatchKind, SessionSource } from "@side-quest/session-corpus"
 
-/** Filesystem roots searched for private agent-runtime histories. */
-export interface SessionRoots {
-	/** Claude Code project-session root. */
-	claude: string
-	/** Active Codex session root. */
-	codexActive: string
-	/** Archived Codex session root. */
-	codexArchived: string
-}
-
-/** Minimal private locator and repository evidence parsed from one session. */
-export interface SessionMetadata {
-	/** Agent runtime that owns the source file. */
-	source: SessionSource
-	/** Source-qualified identifier safe for later CLI selection. */
-	opaqueId: string
-	/** Runtime-native session identifier. */
-	sessionId: string
-	/** Private local source path; never emitted by public results. */
-	path: string
-	/** Working directory recorded by the runtime. */
-	cwd?: string
-	/** Git branch recorded when the session started. */
-	branch?: string
-	/** Best available session start timestamp. */
-	startedAt?: string
-	/** Repository URL recorded by Codex when available. */
-	repositoryUrl?: string
-}
-
-/** Evidence used to associate a session with the requested repository. */
-export type RepositoryMatchKind =
-	| "path"
-	| "git_common_dir"
-	| "repository_url"
-	| "repository_name"
+export type {
+	NormalizedMessage,
+	RepositoryMatchKind,
+	SessionMetadata,
+	SessionRoots,
+	SessionSource,
+} from "@side-quest/session-corpus"
 
 /** Ranked, text-free session candidate returned by discovery. */
 export interface SessionCandidate {
@@ -146,14 +116,4 @@ export interface ExtractResult {
 	contract_id: string
 	/** Stable result schema version. */
 	schema_version: string
-}
-
-/** Internal cross-runtime message shape used by scanning and extraction. */
-export interface NormalizedMessage {
-	/** Conversation role retained by the safe parser. */
-	role: "user" | "assistant"
-	/** Original timestamp when available. */
-	timestamp?: string
-	/** Text content after tool and reasoning blocks are excluded. */
-	text: string
 }
