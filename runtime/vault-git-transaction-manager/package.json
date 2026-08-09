@@ -1,0 +1,29 @@
+{
+  "name": "@side-quest/vault-git-transaction-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Facade-backed transaction boundary for configured Super-vault writes.",
+  "sideQuest": {
+    "sourceLinkedBin": true
+  },
+  "bin": {
+    "vault-git": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "vault-git": "bun run src/cli.ts",
+    "test": "bun test tests",
+    "typecheck": "tsc --ignoreConfig --noEmit --strict --target ESNext --lib ESNext --module Preserve --moduleDetection force --moduleResolution bundler --allowImportingTsExtensions --verbatimModuleSyntax --skipLibCheck --noFallthroughCasesInSwitch --noImplicitOverride --resolveJsonModule --types bun,node src/*.ts tests/*.ts"
+  },
+  "dependencies": {
+    "@side-quest/cli-command-facade": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

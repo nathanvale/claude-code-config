@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "bun:test";
 
@@ -13,8 +14,29 @@ import {
 import { diagnoseFindings } from "../src/doctor.ts";
 
 const SHEBANG_ENTRY = "#!/usr/bin/env bun\nconsole.log(\"bin fixture\");\n";
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("bin manifest", () => {
+	test("discovers and projects vault-git through the managed bin destination", async () => {
+		const fixture = await binFixture();
+		const manifest = await readBinManifest(REPO_ROOT);
+		const declaration = manifest.declarations.find(({ name }) => name === "vault-git");
+		expect(declaration).toBeDefined();
+		expect(declaration?.packageDir.endsWith("runtime/vault-git-transaction-manager")).toBe(true);
+
+		const plan = await inspectBinTopology(REPO_ROOT, fixture.home, fixture.options);
+		const operation = plan.operations.find(({ name }) => name === "vault-git");
+		expect(operation).toMatchObject({
+			destination: join(fixture.binDir, "vault-git"),
+			action: "create",
+		});
+		expect(operation?.destination.startsWith(REPO_ROOT)).toBe(false);
+
+		const result = await applyBinTopology(plan);
+		expect(result.failed).toEqual([]);
+		expect(await readlink(join(fixture.binDir, "vault-git"))).toBe(declaration?.entry);
+	});
+
 	test("pathBin override beats #bin for the same package", async () => {
 		const fixture = await binFixture();
 		await writePackage(fixture.source, "skills/tool", {
