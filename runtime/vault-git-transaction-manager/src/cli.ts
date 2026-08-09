@@ -22,21 +22,13 @@ import {
 	type VaultGitCommand,
 	vaultGitActions,
 	vaultGitContracts,
+	vaultGitMutatingCommands,
 } from "./command-contract.ts";
 import {
 	createVaultGitLifecycleResult,
 	type VaultGitLifecycleResultPayload,
 	type VaultGitNextActionId,
 } from "./model.ts";
-
-const mutatingCommands = new Set<VaultGitCommand>([
-	"begin",
-	"join",
-	"complete",
-	"repair",
-	"tidy",
-	"janitor",
-]);
 
 const runtimeActions = vaultGitActions.map((action) => ({
 	id: action.id,
@@ -129,12 +121,12 @@ export function main(
 		});
 	}
 
-	const nextAction = mutatingCommands.has(invocation.command)
+	const nextAction = vaultGitMutatingCommands.has(invocation.command)
 		? "inspect_status"
 		: invocation.command === "commands"
 			? "inspect_commands"
 			: "wait_for_runtime";
-	const outcome = mutatingCommands.has(invocation.command)
+	const outcome = vaultGitMutatingCommands.has(invocation.command)
 		? "unavailable"
 		: invocation.command === "commands"
 			? "discovered"
@@ -155,7 +147,7 @@ export function main(
 		continuation: { next_action_id: nextAction },
 	} as const;
 
-	if (mutatingCommands.has(invocation.command)) {
+	if (vaultGitMutatingCommands.has(invocation.command)) {
 		const envelope = createCliRuntimeErrorEnvelope({
 			...envelopeOptions,
 			process_exit_code: 1,
@@ -275,7 +267,7 @@ function emitUsageFailure(input: {
 				error: createCliUsageRuntimeError({
 					run_id: input.runId,
 					code: "invalid_usage",
-					message,
+					message: toStructuredUsageMessage(message),
 				}),
 				data,
 				runtime_actions: [action],
@@ -292,9 +284,24 @@ function emitUsageFailure(input: {
 	return 2;
 }
 
-function commandFromArgv(argv: readonly string[]): string {
-	const command = argv.find((value) => !value.startsWith("-"));
-	return command ?? "status";
+/**
+ * Redact user-supplied tokens so structured usage errors never leak local paths.
+ * Plain stderr keeps the original message for the human who typed the value.
+ */
+function toStructuredUsageMessage(message: string): string {
+	const withoutRejectedValue = message.replace(/\s*\(got: .*\)$/, "");
+	if (/[\\/]/.test(withoutRejectedValue)) {
+		return "Invalid command usage; run help for the accepted commands and flags.";
+	}
+	return withoutRejectedValue;
+}
+
+function commandFromArgv(argv: readonly string[]): VaultGitCommand {
+	const candidate = argv[0];
+	if (candidate === undefined || candidate.startsWith("-")) return "status";
+	return VAULT_GIT_COMMANDS.includes(candidate as VaultGitCommand)
+		? (candidate as VaultGitCommand)
+		: "status";
 }
 
 class BufferWriter implements CliWriter {

@@ -6,5 +6,5 @@ export * from "./ports.ts";
 export * from "./command-contract.ts";
 /** Package-owned Branch Station Catalog. */
 export * from "./branch-station-catalog.ts";
-/** CLI entry point and in-process test harness. */
-export { main, renderVaultGitHelp, runVaultGitForTest } from "./cli.ts";
+/** CLI entry point. */
+export { main, renderVaultGitHelp } from "./cli.ts";

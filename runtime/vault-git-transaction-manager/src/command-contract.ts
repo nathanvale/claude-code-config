@@ -3,7 +3,6 @@ import {
 	type CommandFacadeActionAffordance,
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
-	parseEnumFlag,
 	projectCommandDiscoveryTree,
 	requireValue,
 	usageError,
@@ -54,6 +53,10 @@ export type VaultGitCommandContract = CommandFacadeContract<
 	VaultGitAudience,
 	VaultGitMutation
 >;
+
+/** Mutation postures that imply write authority; single source for CLI write gating. */
+export const VAULT_GIT_WRITE_IMPLYING_MUTATIONS: ReadonlySet<VaultGitMutation> =
+	new Set(["local_write", "remote_write", "recovery"]);
 
 /** Facade-owned diagnostic flags accepted before package parsing. */
 export const VAULT_GIT_GLOBAL_DIAGNOSTIC_FLAGS = [
@@ -167,11 +170,7 @@ export function defineVaultGitCommandContracts<
 ): TContracts {
 	const validated = defineCommandFacadeContract(contracts, {
 		path: "runtime/vault-git-transaction-manager/src/command-contract.ts",
-		writeImplyingMutations: new Set([
-			"local_write",
-			"remote_write",
-			"recovery",
-		]),
+		writeImplyingMutations: VAULT_GIT_WRITE_IMPLYING_MUTATIONS,
 	});
 	const issues: string[] = [];
 	if (JSON.stringify(Object.keys(validated)) !== JSON.stringify(VAULT_GIT_COMMANDS)) {
@@ -187,6 +186,11 @@ export function defineVaultGitCommandContracts<
 		if (contract.resultContract?.id !== expectedResultContractIds[command]) {
 			issues.push(
 				`vault-git-result-contract-drift: Restore the package result contract for ${command}.`,
+			);
+		}
+		if (contract.resultContract?.schema_version !== VAULT_GIT_SCHEMA_VERSION) {
+			issues.push(
+				`vault-git-result-schema-version-drift: Restore result schema_version ${VAULT_GIT_SCHEMA_VERSION} for ${command}.`,
 			);
 		}
 		if (!Array.isArray(contract.sideEffects) || contract.sideEffects.length === 0) {
@@ -389,6 +393,13 @@ export const vaultGitContractEntries = VAULT_GIT_COMMANDS.map(
 	(command) => [command, vaultGitContracts[command]] as const,
 );
 
+/** Commands whose validated contract declares a write-implying mutation posture. */
+export const vaultGitMutatingCommands: ReadonlySet<VaultGitCommand> = new Set(
+	VAULT_GIT_COMMANDS.filter((command) =>
+		VAULT_GIT_WRITE_IMPLYING_MUTATIONS.has(vaultGitContracts[command].mutation),
+	),
+);
+
 /** Project machine-readable command discovery directly from live contracts. */
 export function projectVaultGitCommandDiscoveryTree() {
 	return projectCommandDiscoveryTree(vaultGitContractEntries, {
@@ -458,7 +469,7 @@ export function parseVaultGitInvocation(
 		const [flag, inlineValue] = splitFlag(arg);
 		if (!flag.startsWith("-")) {
 			if (command === "repair" && repairAction === undefined) {
-				repairAction = parseEnumFlag("repair action", flag, VAULT_GIT_REPAIR_ACTIONS);
+				repairAction = parseSafeEnumValue("repair action", flag, VAULT_GIT_REPAIR_ACTIONS);
 				continue;
 			}
 			throw usageError(`${command} does not accept positional argument: ${flag}`);
@@ -491,7 +502,7 @@ export function parseVaultGitInvocation(
 			case "--event": {
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
-				event = parseEnumFlag(flag, parsed, VAULT_GIT_EVENT_TYPES);
+				event = parseSafeEnumValue(flag, parsed, VAULT_GIT_EVENT_TYPES);
 				break;
 			}
 			case "--path": {
@@ -521,6 +532,18 @@ export function parseVaultGitInvocation(
 		...(repairAction === undefined ? {} : { repairAction }),
 		...(noArgs || flagOnlyAlias ? { alias: "no_args" as const } : {}),
 	};
+}
+
+/** Reject an out-of-vocabulary value while naming only the label and accepted values. */
+function parseSafeEnumValue<T extends string>(
+	label: string,
+	value: string,
+	values: readonly T[],
+): T {
+	if (!values.includes(value as T)) {
+		throw usageError(`${label} must be one of: ${values.join(", ")}`);
+	}
+	return value as T;
 }
 
 function splitFlag(value: string): [string, string | undefined] {
