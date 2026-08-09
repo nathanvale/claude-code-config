@@ -90,6 +90,8 @@ export interface ScanReconciliation {
 	excluded: number
 	/** Supported sessions whose timestamps could not be resolved. */
 	unresolved_timestamps: number
+	/** Repository-filtered sessions whose ownership evidence was unavailable. */
+	unresolved_repository_matches: number
 }
 
 /** Read-only inventory returned by the scan command. */

@@ -201,7 +201,250 @@ interface CliIo {
 }
 
 function envelope(status: "ok" | "error", runId: string, body: unknown): string {
-	return `${JSON.stringify({ status, run_id: runId, ...(status === "ok" ? { data: body } : { error: body }) })}\n`
+	return `${JSON.stringify({
+		status,
+		run_id: runId,
+		contract_id: CONTRACT_ID,
+		schema_version: SCHEMA_VERSION,
+		...(status === "ok" ? { data: body } : { error: body }),
+	})}\n`
+}
+
+function invalidInput(message: string): never {
+	throw new SessionRecoveryError(message, "invalid_input")
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return invalidInput(`${label} must be an object`)
+	}
+	return value as Record<string, unknown>
+}
+
+function stringValue(value: unknown, label: string): string {
+	if (typeof value !== "string") return invalidInput(`${label} must be a string`)
+	return value
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+	if (typeof value !== "boolean") return invalidInput(`${label} must be a boolean`)
+	return value
+}
+
+function integerValue(value: unknown, label: string): number {
+	if (!Number.isSafeInteger(value) || (value as number) < 0) {
+		return invalidInput(`${label} must be a non-negative integer`)
+	}
+	return value as number
+}
+
+function nullableString(value: unknown, label: string): string | null {
+	if (value === null) return null
+	return stringValue(value, label)
+}
+
+function stringArray(value: unknown, label: string): string[] {
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+		return invalidInput(`${label} must be an array of strings`)
+	}
+	return value as string[]
+}
+
+function literal<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+	if (typeof value !== "string" || !allowed.includes(value as T)) {
+		return invalidInput(`${label} has an invalid value`)
+	}
+	return value as T
+}
+
+function decodeInventoryFilters(value: unknown): {
+	from: number
+	to: number
+	sources: SessionSource[]
+} {
+	const filters = record(value, "inventory.filters")
+	const from = Date.parse(stringValue(filters.from, "inventory.filters.from"))
+	const to = Date.parse(stringValue(filters.to, "inventory.filters.to"))
+	if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+		return invalidInput("inventory filter window is invalid")
+	}
+	stringValue(filters.timezone, "inventory.filters.timezone")
+	if (!Array.isArray(filters.sources)) return invalidInput("inventory.filters.sources must be an array")
+	const sources = filters.sources.map((source) =>
+		literal(source, ["claude", "codex"] as const, "inventory.filters.sources[]"))
+	if (sources.length === 0 || new Set(sources).size !== sources.length) {
+		return invalidInput("inventory.filters.sources must contain unique selected sources")
+	}
+	nullableString(filters.repository, "inventory.filters.repository")
+	const sessions = stringArray(filters.sessions, "inventory.filters.sessions")
+	if (new Set(sessions).size !== sessions.length) {
+		return invalidInput("inventory.filters.sessions contains duplicates")
+	}
+	return { from, to, sources }
+}
+
+function decodeSourceStates(value: unknown, sources: SessionSource[], complete: boolean): number {
+	if (!Array.isArray(value)) return invalidInput("inventory.source_states must be an array")
+	const keys = new Set<string>()
+	let fileCount = 0
+	for (const [index, sourceStateValue] of value.entries()) {
+		const sourceState = record(sourceStateValue, `inventory.source_states[${index}]`)
+		const source = literal(sourceState.source, ["claude", "codex"], `inventory.source_states[${index}].source`)
+		const location = literal(
+			sourceState.location,
+			["active", "archive"],
+			`inventory.source_states[${index}].location`,
+		)
+		const key = `${source}:${location}`
+		if (keys.has(key)) return invalidInput(`duplicate inventory source state: ${key}`)
+		keys.add(key)
+		literal(sourceState.state, ["available", "missing"], `inventory.source_states[${index}].state`)
+		fileCount += integerValue(sourceState.files, `inventory.source_states[${index}].files`)
+		const unreadable = integerValue(
+			sourceState.unreadable_directories,
+			`inventory.source_states[${index}].unreadable_directories`,
+		)
+		if (complete && (sourceState.state !== "available" || unreadable > 0)) {
+			return invalidInput("complete inventory contains incomplete source state")
+		}
+	}
+	const expected = sources.flatMap((source) =>
+		source === "claude" ? ["claude:active"] : ["codex:active", "codex:archive"])
+	if (keys.size !== expected.length || expected.some((key) => !keys.has(key))) {
+		return invalidInput("inventory source states do not match selected sources")
+	}
+	return fileCount
+}
+
+function decodeReconciliation(value: unknown): {
+	scannedFiles: number
+	nativeSessions: number
+	unsupportedFiles: number
+	failedFiles: number
+	eligible: number
+	ledgerRows: number
+	unresolvedTimestamps: number
+	unresolvedRepositoryMatches: number
+} {
+	const reconciliation = record(value, "inventory.reconciliation")
+	const counts = {
+		scannedFiles: integerValue(reconciliation.scanned_files, "inventory.reconciliation.scanned_files"),
+		nativeSessions: integerValue(reconciliation.native_sessions, "inventory.reconciliation.native_sessions"),
+		unsupportedFiles: integerValue(reconciliation.unsupported_files, "inventory.reconciliation.unsupported_files"),
+		failedFiles: integerValue(reconciliation.failed_files, "inventory.reconciliation.failed_files"),
+		eligible: integerValue(reconciliation.eligible, "inventory.reconciliation.eligible"),
+		ledgerRows: integerValue(reconciliation.ledger_rows, "inventory.reconciliation.ledger_rows"),
+		unresolvedTimestamps: integerValue(
+			reconciliation.unresolved_timestamps,
+			"inventory.reconciliation.unresolved_timestamps",
+		),
+		unresolvedRepositoryMatches: integerValue(
+			reconciliation.unresolved_repository_matches,
+			"inventory.reconciliation.unresolved_repository_matches",
+		),
+	}
+	integerValue(reconciliation.excluded, "inventory.reconciliation.excluded")
+	return counts
+}
+
+function decodeInventoryLedger(value: unknown, from: number, to: number): number {
+	if (!Array.isArray(value)) return invalidInput("inventory.ledger must be an array")
+	const sessions = new Set<string>()
+	for (const [index, rowValue] of value.entries()) {
+		const row = record(rowValue, `inventory.ledger[${index}]`)
+		const session = stringValue(row.session, `inventory.ledger[${index}].session`)
+		if (sessions.has(session)) return invalidInput(`duplicate inventory session: ${session}`)
+		sessions.add(session)
+		const sessionId = stringValue(row.session_id, `inventory.ledger[${index}].session_id`)
+		const source = literal(row.source, ["claude", "codex"], `inventory.ledger[${index}].source`)
+		if (session !== `${source}:${sessionId}`) {
+			return invalidInput(`inventory.ledger[${index}] session identity is inconsistent`)
+		}
+		literal(row.kind, ["primary", "helper"], `inventory.ledger[${index}].kind`)
+		nullableString(row.parent_session_id, `inventory.ledger[${index}].parent_session_id`)
+		const createdAt = Date.parse(stringValue(row.created_at, `inventory.ledger[${index}].created_at`))
+		const updatedAt = Date.parse(stringValue(row.updated_at, `inventory.ledger[${index}].updated_at`))
+		if (
+			!Number.isFinite(createdAt) || !Number.isFinite(updatedAt) ||
+			createdAt > updatedAt || createdAt >= to || updatedAt < from
+		) {
+			return invalidInput(`inventory.ledger[${index}] timestamps are inconsistent`)
+		}
+		nullableString(row.repository_hint, `inventory.ledger[${index}].repository_hint`)
+		nullableString(row.branch, `inventory.ledger[${index}].branch`)
+		integerValue(row.message_count, `inventory.ledger[${index}].message_count`)
+		stringValue(row.summary, `inventory.ledger[${index}].summary`)
+		stringValue(row.outcome_hint, `inventory.ledger[${index}].outcome_hint`)
+		const digest = stringValue(row.content_sha256, `inventory.ledger[${index}].content_sha256`)
+		if (!/^[a-f0-9]{64}$/.test(digest)) return invalidInput(`inventory.ledger[${index}].content_sha256 is invalid`)
+		literal(row.classification, ["unclassified"], `inventory.ledger[${index}].classification`)
+		if (row.work_group_id !== null || row.canonical_owner_or_proposal !== null || row.confidence !== null) {
+			return invalidInput(`inventory.ledger[${index}] contains review fields`)
+		}
+		literal(row.reason, ["awaiting evidence review"], `inventory.ledger[${index}].reason`)
+		if (row.source_available !== true) return invalidInput(`inventory.ledger[${index}].source_available must be true`)
+	}
+	return value.length
+}
+
+function decodeInventory(value: unknown): RecoveryScanResult {
+	const result = record(value, "inventory")
+	if (result.contract_id !== CONTRACT_ID || result.schema_version !== SCHEMA_VERSION) {
+		return invalidInput(`Inventory contract mismatch; rerun scan with ${COMMAND_NAME}`)
+	}
+	literal(result.action, ["scan"], "inventory.action")
+	literal(result.side_effect, ["none"], "inventory.side_effect")
+	const complete = booleanValue(result.complete, "inventory.complete")
+	if (result.vault_write_allowed !== false) {
+		return invalidInput("inventory.vault_write_allowed must be false")
+	}
+	const incompleteReasons = stringArray(result.incomplete_reasons, "inventory.incomplete_reasons")
+	if (complete === (incompleteReasons.length > 0)) {
+		return invalidInput("inventory completeness does not match incomplete reasons")
+	}
+	const filters = decodeInventoryFilters(result.filters)
+	const sourceFileCount = decodeSourceStates(result.source_states, filters.sources, complete)
+	const counts = decodeReconciliation(result.reconciliation)
+	const ledgerRows = decodeInventoryLedger(result.ledger, filters.from, filters.to)
+	if (counts.eligible !== ledgerRows || counts.ledgerRows !== ledgerRows) {
+		return invalidInput("inventory reconciliation does not match ledger rows")
+	}
+	if (counts.scannedFiles !== sourceFileCount) {
+		return invalidInput("inventory scanned file count does not match source states")
+	}
+	if (counts.nativeSessions < counts.eligible || counts.scannedFiles < counts.failedFiles + counts.unsupportedFiles) {
+		return invalidInput("inventory reconciliation counts are inconsistent")
+	}
+	if (
+		complete &&
+		(counts.failedFiles > 0 || counts.unresolvedTimestamps > 0 || counts.unresolvedRepositoryMatches > 0)
+	) {
+		return invalidInput("complete inventory contains failed or unresolved evidence")
+	}
+	stringValue(result.next_safe_action, "inventory.next_safe_action")
+	return result as unknown as RecoveryScanResult
+}
+
+function decodeReviewRow(value: unknown, index: number): ReviewLedgerRow {
+	const row = record(value, `review row ${index}`)
+	const decoded = {
+		session: stringValue(row.session, `review row ${index}.session`),
+		classification: literal(
+			row.classification,
+			["project_candidate", "completed_standalone", "supporting_or_duplicate", "test_noise_or_unclear"],
+			`review row ${index}.classification`,
+		),
+		work_group_id: nullableString(row.work_group_id, `review row ${index}.work_group_id`),
+		canonical_owner_or_proposal: nullableString(
+			row.canonical_owner_or_proposal,
+			`review row ${index}.canonical_owner_or_proposal`,
+		),
+		confidence: literal(row.confidence, ["high", "medium", "low"], `review row ${index}.confidence`),
+		reason: stringValue(row.reason, `review row ${index}.reason`),
+		source_available: booleanValue(row.source_available, `review row ${index}.source_available`),
+	}
+	if (!decoded.source_available) return invalidInput(`review row ${index}.source_available must be true`)
+	return decoded
 }
 
 async function readInventory(path: string): Promise<RecoveryScanResult> {
@@ -209,18 +452,13 @@ async function readInventory(path: string): Promise<RecoveryScanResult> {
 	const record = parsed !== null && typeof parsed === "object"
 		? parsed as Record<string, unknown>
 		: undefined
-	const data = record?.status === "ok" && record.data ? record.data : parsed
-	const result = data as Partial<RecoveryScanResult>
-	if (result.action !== "scan" || !Array.isArray(result.ledger)) {
-		throw new SessionRecoveryError("Inventory file is not a session-recovery scan result", "invalid_input")
+	if (record?.status === "ok") {
+		if (record.contract_id !== CONTRACT_ID || record.schema_version !== SCHEMA_VERSION) {
+			return invalidInput(`Inventory envelope contract mismatch; rerun scan with ${COMMAND_NAME}`)
+		}
+		return decodeInventory(record.data)
 	}
-	if (result.contract_id !== CONTRACT_ID || result.schema_version !== SCHEMA_VERSION) {
-		throw new SessionRecoveryError(
-			`Inventory contract mismatch; rerun scan with ${COMMAND_NAME}`,
-			"invalid_input",
-		)
-	}
-	return result as RecoveryScanResult
+	return decodeInventory(parsed)
 }
 
 async function readReviewRows(path: string): Promise<ReviewLedgerRow[]> {
@@ -228,7 +466,7 @@ async function readReviewRows(path: string): Promise<ReviewLedgerRow[]> {
 	for (const [index, line] of (await Bun.file(path).text()).split("\n").entries()) {
 		if (!line.trim()) continue
 		try {
-			rows.push(JSON.parse(line) as ReviewLedgerRow)
+			rows.push(decodeReviewRow(JSON.parse(line), index + 1))
 		} catch {
 			throw new SessionRecoveryError(`Invalid review JSONL at line ${index + 1}`, "invalid_input")
 		}

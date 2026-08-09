@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto"
-import { createReadStream } from "node:fs"
 import { basename } from "node:path"
 import {
 	createRepositoryMatcher,
 	defaultSessionRoots,
-	extractSessionPage,
+	extractSessionFragmentsPage,
 	listSessionFiles,
 	parseNormalizedMessage,
 	parseSessionMetadata,
@@ -93,29 +92,33 @@ function isMeaningfulPrompt(text: string): boolean {
 	return text.length > 0 && !/^(?:yes|no|ok|agree|continue|unlocked|[0-9]+)$/i.test(text)
 }
 
-async function hashFile(path: string): Promise<string> {
-	const hash = createHash("sha256")
-	for await (const chunk of createReadStream(path)) hash.update(chunk)
-	return hash.digest("hex")
-}
-
 async function summarizeFileUnsafe(path: string, source: SessionSource): Promise<FileSummary | undefined> {
-	let metadata = await readMetadata(path, source)
-	if (!metadata) return undefined
-	let createdAt = metadata.startedAt ? Date.parse(metadata.startedAt) : Number.NaN
+	let metadata: SessionMetadata | undefined
+	let createdAt = Number.NaN
 	let updatedAt = createdAt
 	let messageCount = 0
 	let summary = ""
 	let fallbackPrompt = ""
 	let outcomeHint = ""
+	const hash = createHash("sha256")
 
-	for await (const value of readJsonLines(path)) {
+	for await (const value of readJsonLines(path, {
+		strict: true,
+		onChunk: (chunk) => hash.update(chunk),
+	})) {
 		const candidateMetadata = parseSessionMetadata(value, source, path)
-		if (candidateMetadata?.opaqueId === metadata.opaqueId) {
+		if (candidateMetadata && !metadata) {
+			metadata = candidateMetadata
+			createdAt = candidateMetadata.startedAt
+				? Date.parse(candidateMetadata.startedAt)
+				: Number.NaN
+			updatedAt = createdAt
+		} else if (candidateMetadata && metadata && candidateMetadata.opaqueId === metadata.opaqueId) {
 			metadata = {
 				...metadata,
 				cwd: metadata.cwd ?? candidateMetadata.cwd,
 				branch: metadata.branch ?? candidateMetadata.branch,
+				repositoryUrl: metadata.repositoryUrl ?? candidateMetadata.repositoryUrl,
 				parentSessionId: metadata.parentSessionId ?? candidateMetadata.parentSessionId,
 				kind: metadata.kind === "helper" || candidateMetadata.kind === "helper" ? "helper" : "primary",
 			}
@@ -136,6 +139,7 @@ async function summarizeFileUnsafe(path: string, source: SessionSource): Promise
 			outcomeHint = cleaned
 		}
 	}
+	if (!metadata) return undefined
 
 	return {
 		metadata,
@@ -144,7 +148,7 @@ async function summarizeFileUnsafe(path: string, source: SessionSource): Promise
 		messageCount,
 		summary: summary || fallbackPrompt || "No safe user summary available.",
 		outcomeHint: outcomeHint || "No safe assistant outcome available.",
-		contentHash: await hashFile(path),
+		contentHash: hash.digest("hex"),
 	}
 }
 
@@ -206,6 +210,9 @@ function combineFileSummaries(summaries: FileSummary[]): FileSummary {
 	return {
 		metadata: {
 			...first.metadata,
+			cwd: ordered.find((item) => item.metadata.cwd)?.metadata.cwd,
+			branch: ordered.find((item) => item.metadata.branch)?.metadata.branch,
+			repositoryUrl: ordered.find((item) => item.metadata.repositoryUrl)?.metadata.repositoryUrl,
 			kind: summaries.some((item) => item.metadata.kind === "helper") ? "helper" : "primary",
 			parentSessionId: summaries.find((item) => item.metadata.parentSessionId)?.metadata.parentSessionId,
 		},
@@ -214,7 +221,7 @@ function combineFileSummaries(summaries: FileSummary[]): FileSummary {
 		messageCount: summaries.reduce((count, item) => count + item.messageCount, 0),
 		summary: first.summary,
 		outcomeHint: latest.outcomeHint,
-		contentHash: hash.digest("hex"),
+		contentHash: summaries.length === 1 ? first.contentHash : hash.digest("hex"),
 	}
 }
 
@@ -287,12 +294,48 @@ export async function scanRecoverySessions(options: {
 	const incompleteReasons = selectedStates
 		.filter((state) => state.state === "missing")
 		.map((state) => `${state.source} ${state.location} source is missing`)
+	for (const state of selectedStates) {
+		if (state.unreadable_directories > 0) {
+			incompleteReasons.push(
+				`${state.unreadable_directories} ${state.source} ${state.location} director${state.unreadable_directories === 1 ? "y was" : "ies were"} unreadable`,
+			)
+		}
+	}
 	const summaries: FileSummary[] = []
 	let unsupportedFiles = 0
 	const failedBySource = new Map<SessionSource, number>()
-	for (let index = 0; index < selectedFiles.length; index += 8) {
+	let filesToSummarize = selectedFiles
+	let discoveredSessions: Set<string> | undefined
+	if (requestedSessions.size > 0) {
+		discoveredSessions = new Set<string>()
+		filesToSummarize = []
+		for (let index = 0; index < selectedFiles.length; index += 8) {
+			const batchFiles = selectedFiles.slice(index, index + 8)
+			const batch = await Promise.all(batchFiles.map(async (file) => {
+				try {
+					return { file, metadata: await readMetadata(file.path, file.source) }
+				} catch {
+					return { file, failed: true as const }
+				}
+			}))
+			for (const outcome of batch) {
+				if ("failed" in outcome) {
+					failedBySource.set(
+						outcome.file.source,
+						(failedBySource.get(outcome.file.source) ?? 0) + 1,
+					)
+				} else if (!outcome.metadata) {
+					unsupportedFiles += 1
+				} else {
+					discoveredSessions.add(outcome.metadata.opaqueId)
+					if (requestedSessions.has(outcome.metadata.opaqueId)) filesToSummarize.push(outcome.file)
+				}
+			}
+		}
+	}
+	for (let index = 0; index < filesToSummarize.length; index += 8) {
 		const batch = await Promise.all(
-			selectedFiles.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)),
+			filesToSummarize.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)),
 		)
 		for (const outcome of batch) {
 			if (outcome.kind === "summary") summaries.push(outcome.summary)
@@ -311,16 +354,26 @@ export async function scanRecoverySessions(options: {
 	}
 	const combined = [...grouped.values()].map(combineFileSummaries)
 	let unresolvedTimestamps = 0
-	let excluded = 0
+	let unresolvedRepositoryMatches = 0
+	let excluded = discoveredSessions
+		? [...discoveredSessions].filter((session) => !requestedSessions.has(session)).length
+		: 0
 	const eligible: FileSummary[] = []
 	for (const summary of combined) {
 		if (requestedSessions.size > 0 && !requestedSessions.has(summary.metadata.opaqueId)) {
 			excluded += 1
 			continue
 		}
-		if (repository && !repository.matches(summary.metadata)) {
-			excluded += 1
-			continue
+		if (repository) {
+			const assessment = repository.assess(summary.metadata)
+			if (assessment.status === "unresolved") {
+				unresolvedRepositoryMatches += 1
+				continue
+			}
+			if (assessment.status === "mismatch") {
+				excluded += 1
+				continue
+			}
 		}
 		if (summary.createdAt === undefined || summary.updatedAt === undefined) {
 			unresolvedTimestamps += 1
@@ -335,8 +388,13 @@ export async function scanRecoverySessions(options: {
 	if (unresolvedTimestamps > 0) {
 		incompleteReasons.push(`${unresolvedTimestamps} selected sessions had no usable timestamp`)
 	}
+	if (unresolvedRepositoryMatches > 0) {
+		incompleteReasons.push(
+			`${unresolvedRepositoryMatches} selected session${unresolvedRepositoryMatches === 1 ? " had" : "s had"} unresolved repository ownership`,
+		)
+	}
 	if (requestedSessions.size > 0) {
-		const discovered = new Set(combined.map((summary) => summary.metadata.opaqueId))
+		const discovered = discoveredSessions ?? new Set(combined.map((summary) => summary.metadata.opaqueId))
 		const missing = [...requestedSessions].filter((session) => !discovered.has(session)).sort()
 		if (missing.length > 0) incompleteReasons.push(`requested sessions not found: ${missing.join(", ")}`)
 	}
@@ -362,13 +420,14 @@ export async function scanRecoverySessions(options: {
 		source_states: selectedStates,
 			reconciliation: {
 				scanned_files: selectedFiles.length,
-				native_sessions: combined.length,
+			native_sessions: discoveredSessions?.size ?? combined.length,
 				unsupported_files: unsupportedFiles,
 				failed_files: [...failedBySource.values()].reduce((total, count) => total + count, 0),
 			eligible: ledger.length,
 			ledger_rows: ledger.length,
 			excluded,
 			unresolved_timestamps: unresolvedTimestamps,
+			unresolved_repository_matches: unresolvedRepositoryMatches,
 		},
 		ledger,
 		next_safe_action: complete
@@ -402,23 +461,47 @@ export async function extractRecoverySession(options: {
 	if (source !== "claude" && source !== "codex") {
 		throw new SessionRecoveryError(`Invalid source-qualified session: ${options.session}`, "invalid_input")
 	}
-	const { files } = await listSessionFiles(options.roots ?? defaultSessionRoots())
-	let metadata: SessionMetadata | undefined
-	const candidates = files.filter((candidate) => candidate.source === source)
-	for (let index = 0; index < candidates.length && !metadata; index += 8) {
-		const batch = await Promise.all(
-			candidates.slice(index, index + 8).map((file) =>
-				readMetadata(file.path, file.source).catch(() => undefined)),
+	const { files, states } = await listSessionFiles(options.roots ?? defaultSessionRoots())
+	const unavailable = states.filter((state) =>
+		state.source === source && (state.state === "missing" || state.unreadable_directories > 0))
+	if (unavailable.length > 0) {
+		throw new SessionRecoveryError(
+			`Selected ${source} source evidence is incomplete`,
+			"runtime_failure",
 		)
-		metadata = batch.find((candidate) => candidate?.opaqueId === options.session)
 	}
-	if (!metadata) {
+	const fragments: SessionMetadata[] = []
+	const candidates = files.filter((candidate) => candidate.source === source)
+	for (let index = 0; index < candidates.length; index += 8) {
+		const batch = await Promise.all(
+			candidates.slice(index, index + 8).map(async (file) => {
+				try {
+					return await readMetadata(file.path, file.source)
+				} catch {
+					throw new SessionRecoveryError(
+						`Could not inspect all ${source} session files`,
+						"runtime_failure",
+					)
+				}
+			}),
+		)
+		fragments.push(...batch.filter(
+			(candidate): candidate is SessionMetadata => candidate?.opaqueId === options.session,
+		))
+	}
+	if (fragments.length === 0) {
 		throw new SessionRecoveryError(`Session not found: ${options.session}`, "session_not_found")
 	}
 	const offset = options.offset ?? 0
 	const limit = options.limit ?? EXTRACT_DEFAULT_LIMIT
 	const maxMessageChars = options.maxMessageChars ?? MAX_MESSAGE_CHARS
-	const page = await extractSessionPage(metadata, { offset, limit, maxMessageChars })
+	let page: Awaited<ReturnType<typeof extractSessionFragmentsPage>>
+	try {
+		page = await extractSessionFragmentsPage(fragments, { offset, limit, maxMessageChars })
+	} catch {
+		throw new SessionRecoveryError("Selected session evidence is malformed or unreadable", "runtime_failure")
+	}
+	const metadata = fragments[0] as SessionMetadata
 	return {
 		action: "extract",
 		side_effect: "none",
@@ -466,7 +549,7 @@ export function validateReviewLedger(
 	if (!inventory.complete) issues.push("inventory is incomplete")
 	const inventoryIds = new Set(inventory.ledger.map((row) => row.session))
 	const seen = new Set<string>()
-	const projectGroups = new Set<string>()
+	const anchorGroups = new Set<string>()
 	const supportingGroups = new Set<string>()
 	let matchedRows = 0
 	for (const row of rows) {
@@ -486,11 +569,14 @@ export function validateReviewLedger(
 		if (!row.source_available) issues.push(`source unavailable during review: ${row.session}`)
 		if (row.classification === "project_candidate") {
 			if (!row.work_group_id?.trim()) issues.push(`project candidate missing work_group_id: ${row.session}`)
-			else projectGroups.add(row.work_group_id)
+			else anchorGroups.add(row.work_group_id)
 			if (!row.canonical_owner_or_proposal?.trim()) {
 				issues.push(`project candidate missing canonical owner or proposal: ${row.session}`)
 			}
 			if (row.confidence === "low") issues.push(`project candidate has low confidence: ${row.session}`)
+		}
+		if (row.classification === "completed_standalone" && row.work_group_id?.trim()) {
+			anchorGroups.add(row.work_group_id)
 		}
 		if (row.classification === "supporting_or_duplicate") {
 			if (!row.work_group_id?.trim()) issues.push(`supporting row missing work_group_id: ${row.session}`)
@@ -501,7 +587,9 @@ export function validateReviewLedger(
 		if (!seen.has(session)) issues.push(`missing review row: ${session}`)
 	}
 	for (const group of supportingGroups) {
-		if (!projectGroups.has(group)) issues.push(`supporting work group has no project candidate: ${group}`)
+		if (!anchorGroups.has(group)) {
+			issues.push(`supporting work group has no project or completed anchor: ${group}`)
+		}
 	}
 	const valid = issues.length === 0
 	return {

@@ -3,7 +3,7 @@ export const COMMAND_NAME = "session-recovery"
 /** Stable identifier for recovery inventory, extraction, and validation payloads. */
 export const CONTRACT_ID = "session-recovery.review"
 /** Version of the machine-readable result vocabulary. */
-export const SCHEMA_VERSION = "1"
+export const SCHEMA_VERSION = "2"
 /** Default number of normalized messages returned by extract. */
 export const EXTRACT_DEFAULT_LIMIT = 40
 /** Maximum number of normalized messages returned by one extract call. */
