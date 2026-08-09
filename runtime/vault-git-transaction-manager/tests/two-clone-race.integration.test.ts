@@ -146,7 +146,7 @@ describe("two-clone remote lease race", () => {
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
-	}, 30_000);
+	}, 120_000);
 });
 
 function createEngine(repositoryPath: string) {

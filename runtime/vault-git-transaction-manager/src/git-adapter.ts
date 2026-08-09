@@ -504,10 +504,17 @@ function isMissingLedgerPath(stderr: string): boolean {
 }
 
 function assertSafeRemote(remote: string): void {
+	const isRemoteName = /^[A-Za-z0-9._-]+$/.test(remote);
+	const isApprovedUrl = /^(?:https?|ssh|git|file):\/\/[^\s]+$/.test(remote);
+	const isAbsolutePath = /^\/[^\r\n\0]*$/.test(remote);
+	const isScpLike = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^:\s][^\s]*$/.test(
+		remote,
+	);
 	if (
 		remote.trim().length === 0 ||
 		remote.startsWith("-") ||
-		/[\r\n\0]/.test(remote)
+		/[\r\n\0]/.test(remote) ||
+		!(isRemoteName || isApprovedUrl || isAbsolutePath || isScpLike)
 	) {
 		throw new Error("remote must be one safe Git remote name or URL");
 	}

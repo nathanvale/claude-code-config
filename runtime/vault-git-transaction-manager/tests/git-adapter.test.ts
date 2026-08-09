@@ -65,6 +65,34 @@ function ledgerReadResponder(
 }
 
 describe("git adapter ledger reads", () => {
+	test("rejects Git transport-helper remotes before process execution", async () => {
+		const adapter = createFakeAdapter(() => {
+			throw new Error("process must not run");
+		});
+		await expect(
+			adapter.readLedger("ext::sh -c exploit", VAULT_GIT_LEDGER_REF),
+		).rejects.toThrow("remote must be one safe Git remote name or URL");
+	});
+
+	test("accepts supported remote names, URLs, paths, and SCP-like locations", async () => {
+		const adapter = createFakeAdapter(({ args }) =>
+			args[0] === "ls-remote" ? { exitCode: 2 } : {},
+		);
+		for (const remote of [
+			"origin",
+			"https://example.invalid/vault.git",
+			"ssh://git@example.invalid/vault.git",
+			"git://example.invalid/vault.git",
+			"file:///tmp/vault.git",
+			"/tmp/vault.git",
+			"git@example.invalid:vault.git",
+		]) {
+			await expect(adapter.readLedger(remote, VAULT_GIT_LEDGER_REF)).resolves.toEqual(
+				{ status: "ok", head: null },
+			);
+		}
+	});
+
 	test("a timed-out ledger content read fails instead of reporting absence", async () => {
 		const adapter = createFakeAdapter(
 			ledgerReadResponder({ exitCode: null, timedOut: true }),
