@@ -1,12 +1,14 @@
 import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
 	VaultGitBlockerId,
+	VaultGitCheckerAdmissionRecord,
 	VaultGitEngineNextActionId,
 	VaultGitEventType,
 	VaultGitOwnedPathReceipt,
 	VaultGitReceipt,
 	VaultGitReceiptNextAction,
 	VaultGitRetrySafety,
+	VaultGitPrivateHygieneResult,
 	VaultGitTransactionPhase,
 	VaultGitTransactionState,
 	VaultGitWritePermission,
@@ -168,6 +170,29 @@ export interface VaultGitTransactionEngine {
 	doctor(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
 	/** Execute only one fresh doctor-classified deterministic repair. */
 	repair(input: VaultGitRepairInput): Promise<VaultGitRepairResult>;
+	/** Prove Janitor global gates without acquiring or mutating a lease. */
+	inspectJanitorPreflight(remote: string): Promise<
+		| { readonly status: "eligible"; readonly doctor: VaultGitDoctorResult }
+		| {
+				readonly status: "refused";
+				readonly blocker: VaultGitBlockerId;
+				readonly doctor: VaultGitDoctorResult;
+		  }
+	>;
+	/** Read checker admission through engine-owned private-state custody. */
+	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+	/** Prune deterministic private hygiene through engine-owned store custody. */
+	prunePrivateHygiene(): Promise<VaultGitPrivateHygieneResult>;
+	/** Persist one bounded Janitor report under private XDG state. */
+	recordJanitorReport(reportJson: string): Promise<void>;
+	/** Run one checker mutation only while a fresh hygiene transaction owns the lease. */
+	runHygieneTransaction(request: {
+		readonly paths: readonly string[];
+		readonly remote: string;
+		readonly leaseDurationMs: number;
+		readonly summary: string;
+		readonly apply: () => Promise<boolean>;
+	}): Promise<VaultGitEngineResult>;
 }
 
 /**
@@ -248,13 +273,139 @@ export function createVaultGitTransactionEngine(
 		return null;
 	}
 
-	return {
+	const engine: VaultGitTransactionEngine = {
 		async doctor(input) {
 			return doctorEngine.diagnose(input);
 		},
 
 		async repair(input) {
 			return repairEngine.run(input);
+		},
+
+		async inspectJanitorPreflight(remote) {
+			const doctor = await doctorEngine.diagnose({ issueTakeoverToken: false });
+			if (doctor.state !== "absent" && doctor.state !== "closed") {
+				return {
+					status: "refused",
+					blocker:
+						doctor.blocker ??
+						(doctor.state === "push_pending"
+							? "push_pending"
+							: doctor.state === "expired"
+								? "lease_stale"
+								: "lease_active"),
+					doctor,
+				};
+			}
+			try {
+				const identity = await options.repository.resolveCanonicalIdentity();
+				if (identity.identity !== options.repositoryIdentity) {
+					return { status: "refused", blocker: "vault_identity_changed", doctor };
+				}
+				const main = await options.ledger.git.inspectMain(remote);
+				if (main.status !== "ok") {
+					return { status: "refused", blocker: "remote_unavailable", doctor };
+				}
+				if (
+					main.alignment !== "aligned" ||
+					main.localHead !== identity.localMainHead
+				) {
+					return {
+						status: "refused",
+						blocker: alignmentBlocker(main.alignment),
+						doctor,
+					};
+				}
+				if (!options.repository.captureUnrelatedState) {
+					return { status: "refused", blocker: "host_contract_breach", doctor };
+				}
+				const wholeTree = await options.repository.captureUnrelatedState([]);
+				if (wholeTree.statusHex.length > 0) {
+					return { status: "refused", blocker: "dirty_tree", doctor };
+				}
+				const observed = await observeRemoteLedger(options.ledger, { remote });
+				if (observed.status === "refused") {
+					return { status: "refused", blocker: observed.blocker, doctor };
+				}
+				if (observed.lease?.state === "held") {
+					const expired =
+						options.runtime.now().getTime() >=
+						Date.parse(observed.lease.acquiredAt) +
+							observed.lease.leaseDurationMs;
+					return {
+						status: "refused",
+						blocker: expired ? "lease_stale" : "lease_active",
+						doctor,
+					};
+				}
+				return { status: "eligible", doctor };
+			} catch {
+				return { status: "refused", blocker: "host_contract_breach", doctor };
+			}
+		},
+
+		async readCheckerAdmission() {
+			return options.store.readCheckerAdmission();
+		},
+
+		async prunePrivateHygiene() {
+			return options.store.prunePrivateHygiene(
+				options.runtime.now().toISOString(),
+			);
+		},
+
+		async recordJanitorReport(reportJson) {
+			await options.store.recordJanitorReport(
+				reportJson,
+				options.runtime.now().toISOString(),
+			);
+		},
+
+		async runHygieneTransaction(request) {
+			const admitted = await engine.begin({
+				event: "hygiene",
+				requestedPaths: request.paths,
+				remote: request.remote,
+				leaseDurationMs: request.leaseDurationMs,
+			});
+			if (admitted.status !== "admitted" || !admitted.transactionId) {
+				return admitted;
+			}
+			const loaded = await options.store.load();
+			if (loaded.status !== "loaded") {
+				return refusal(
+					"human_required",
+					"human_required",
+					"receipt_corrupt",
+					"inspect_private_receipt",
+					"Inspect the hygiene receipt before any checker repair.",
+				);
+			}
+			const capability = await options.store.readCapability(
+				loaded.receipt.receiptId,
+				"owner",
+			);
+			let applied = false;
+			try {
+				applied = await request.apply();
+			} catch {
+				applied = false;
+			}
+			if (!applied) {
+				return engine.recordPhase({
+					transactionId: admitted.transactionId,
+					remote: request.remote,
+					capability,
+					phase: "repairable",
+					nextSafeAction: "run_doctor",
+				});
+			}
+			return engine.complete({
+				transactionId: admitted.transactionId,
+				remote: request.remote,
+				capability,
+				summary: request.summary,
+			});
 		},
 
 		async begin(input) {
@@ -684,6 +835,7 @@ export function createVaultGitTransactionEngine(
 			return result("advanced", stateForPhase(recorded.phase) ?? "active", recorded, "owner", "local", recorded.nextSafeAction, summaryForState(stateForPhase(recorded.phase) ?? "active"));
 		},
 	};
+	return engine;
 }
 
 async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, transactionId: string, role: VaultGitCapabilityRole, capability: Uint8Array): Promise<VaultGitEngineResult | null> {

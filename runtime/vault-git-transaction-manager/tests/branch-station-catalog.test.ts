@@ -31,8 +31,8 @@ describe("vault-git Branch Station Catalog", () => {
 			"repair.join_role_refused",
 			"repair.stale_takeover_usage",
 			"tidy.invalid_usage",
-			"tidy.unavailable",
-			"janitor.unavailable",
+			"tidy.preview",
+			"janitor.preview",
 		]);
 	});
 
@@ -78,13 +78,10 @@ describe("vault-git Branch Station Catalog", () => {
 		expect(projectVaultGitStationMap(evidence).findings).toEqual([]);
 	});
 
-	test("keeps only U7 worker stations at runtime_unavailable", () => {
+	test("removes the U7 runtime-unavailable worker stations", () => {
 		const unavailable = stations.filter(
 			(station) => station.expectedErrorCode === "runtime_unavailable",
 		);
-		expect(unavailable.map((station) => station.id)).toEqual([
-			"tidy.unavailable",
-			"janitor.unavailable",
-		]);
+		expect(unavailable.map((station) => station.id)).toEqual([]);
 	});
 });

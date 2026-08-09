@@ -1,9 +1,62 @@
 import type {
+	VaultGitCheckerAdmissionRecord,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
 	VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
+
+/** Exact current checker implementation fingerprint. */
+export interface VaultGitCheckerFingerprint {
+	/** SHA-256 of the declared checker entrypoint. */
+	readonly entrypointHash: string;
+	/** SHA-256 of the checker dependency bundle. */
+	readonly dependencyBundleHash: string;
+}
+
+/** Bounded shell-free checker subprocess result. */
+export interface VaultGitCheckerProcessResult {
+	/** Process exit status, or null when unavailable. */
+	readonly exitCode: number | null;
+	/** Structured JSON candidate from stdout. */
+	readonly stdout: string;
+	/** Diagnostic text ignored by Janitor policy. */
+	readonly stderr: string;
+	/** Whether the hard checker deadline fired. */
+	readonly timedOut: boolean;
+}
+
+/** Exact checker-owned repair request derived from structured registry data. */
+export interface VaultGitCheckerRepairRequest {
+	/** Registered stable repair id. */
+	readonly repairId: string;
+	/** Repository-relative file selected by the finding. */
+	readonly file: string;
+	/** Stable field selector supplied by checker detail. */
+	readonly field: string;
+}
+
+/** External checker boundary; Janitor alone parses its structured stdout. */
+export interface VaultGitCheckerPort {
+	/** Fingerprint the current checker entrypoint and dependency bundle. */
+	fingerprint(): Promise<VaultGitCheckerFingerprint>;
+	/** Run the declared vault check in structured mode. */
+	runCheck(): Promise<VaultGitCheckerProcessResult>;
+	/** Read the checker-owned deterministic repair registry. */
+	readRepairRegistry(): Promise<VaultGitCheckerProcessResult>;
+	/** Apply one exact registry-owned repair without Git operations. */
+	applyRepair(
+		request: VaultGitCheckerRepairRequest,
+	): Promise<VaultGitCheckerProcessResult>;
+}
+
+/** Private checker-admission custody boundary. */
+export interface VaultGitCheckerAdmissionPort {
+	/** Persist an operator-approved checker fingerprint. */
+	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
+	/** Read the current admitted checker fingerprint. */
+	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+}
 
 /** Read-side request accepted by a future transaction engine. */
 export interface VaultGitReadRequest {

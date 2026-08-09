@@ -279,6 +279,11 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"host_quarantined",
 	"deterministic_repair_mismatch",
 	"repair_action_required",
+	"dirty_tree",
+	"checker_unadmitted",
+	"checker_changed",
+	"checker_output_invalid",
+	"checker_repair_refused",
 ] as const;
 
 /** Stable transaction blocker id. */
@@ -368,7 +373,42 @@ export const VAULT_GIT_NEXT_ACTION_IDS = [
 	"wait_for_runtime",
 	"inspect_commands",
 	"change_input",
+	"run_janitor",
 ] as const;
+
+/** Closed trigger vocabulary for one bounded hygiene worker. */
+export const VAULT_GIT_HYGIENE_WORKER_TRIGGERS = [
+	"transaction_close",
+	"tidy_now",
+	"nightly",
+] as const;
+
+/** One admitted source for a bounded hygiene worker. */
+export type VaultGitHygieneWorkerTrigger =
+	(typeof VAULT_GIT_HYGIENE_WORKER_TRIGGERS)[number];
+
+/** Vault mutation posture while a hygiene worker changes lease state. */
+export type VaultGitHygieneVaultPosture = "normal" | "read_only";
+
+/** Private operator admission for one exact checker implementation bundle. */
+export interface VaultGitCheckerAdmissionRecord {
+	/** Admission record schema. */
+	readonly schemaVersion: 1;
+	/** SHA-256 of the declared checker entrypoint. */
+	readonly entrypointHash: string;
+	/** SHA-256 of the checker dependency bundle. */
+	readonly dependencyBundleHash: string;
+	/** Operator-controlled admission timestamp. */
+	readonly admittedAt: string;
+}
+
+/** Bounded count of private material removed by one hygiene pass. */
+export interface VaultGitPrivateHygieneResult {
+	/** Closed-receipt owner and join capability files removed. */
+	readonly capabilityFiles: number;
+	/** Consumed or expired doctor-token record groups removed. */
+	readonly doctorTokenRecords: number;
+}
 
 /** One safe continuation selected for the current result. */
 export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];

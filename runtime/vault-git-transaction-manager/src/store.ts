@@ -21,6 +21,8 @@ import {
 	VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	VAULT_GIT_RECEIPT_TRANSITIONS,
 	VAULT_GIT_TRANSACTION_PHASES,
+	type VaultGitCheckerAdmissionRecord,
+	type VaultGitPrivateHygieneResult,
 	type VaultGitReceipt,
 } from "./model.ts";
 
@@ -61,6 +63,8 @@ export type VaultGitDurabilityTarget =
 	| "current"
 	| "capability"
 	| "doctor_token"
+	| "checker_admission"
+	| "janitor_report"
 	| "quarantine";
 
 /** One observable load-bearing filesystem operation. */
@@ -224,6 +228,8 @@ export interface VaultGitReceiptStore {
 		readonly history: string;
 		readonly capabilities: string;
 		readonly doctorTokens: string;
+		readonly checkerAdmission: string;
+		readonly janitorReports: string;
 		readonly quarantine: string;
 	};
 	/** Create first history entry, pointer, and role capabilities. */
@@ -268,6 +274,14 @@ export interface VaultGitReceiptStore {
 		candidate: Uint8Array,
 		consumedAt: string,
 	): Promise<boolean>;
+	/** Persist one exact checker admission using owner-only durable storage. */
+	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
+	/** Read the current checker admission, or null before operator admission. */
+	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+	/** Remove only closed capability material and consumed or expired doctor tokens. */
+	prunePrivateHygiene(now: string): Promise<VaultGitPrivateHygieneResult>;
+	/** Append one owner-only Janitor report outside the configured vault. */
+	recordJanitorReport(reportJson: string, recordedAt: string): Promise<void>;
 	/** Append a quarantine or reconciliation marker without erasing history. */
 	recordQuarantine(record: VaultGitQuarantineRecord): Promise<void>;
 	/** Read the newest append-only quarantine marker. */
@@ -351,6 +365,8 @@ export function createReceiptStore(
 		history: join(repositoryRoot, "history"),
 		capabilities: join(repositoryRoot, "capabilities"),
 		doctorTokens: join(repositoryRoot, "doctor-tokens"),
+		checkerAdmission: join(repositoryRoot, "checker-admission.json"),
+		janitorReports: join(repositoryRoot, "janitor-reports"),
 		quarantine: join(repositoryRoot, "quarantine"),
 	} as const;
 
@@ -361,6 +377,7 @@ export function createReceiptStore(
 			paths.history,
 			paths.capabilities,
 			paths.doctorTokens,
+			paths.janitorReports,
 			paths.quarantine,
 		]) {
 			await mkdir(path, { recursive: true, mode: 0o700 });
@@ -523,6 +540,52 @@ export function createReceiptStore(
 				if (error instanceof VaultGitReceiptExistsError) return false;
 				throw error;
 			}
+		},
+		async admitChecker(record) {
+			validateCheckerAdmission(record);
+			await prepare();
+			await durableJson(
+				paths.checkerAdmission,
+				record,
+				"checker_admission",
+				durability,
+			);
+		},
+		async readCheckerAdmission() {
+			let source: string;
+			try {
+				source = await readPrivateText(paths.checkerAdmission);
+			} catch (error) {
+				if (isMissing(error)) return null;
+				throw error;
+			}
+			const value: unknown = JSON.parse(source);
+			validateCheckerAdmission(value);
+			return value;
+		},
+		async prunePrivateHygiene(now) {
+			if (!isIso(now)) throw new Error("private hygiene time invalid");
+			await prepare();
+			return prunePrivateMaterial(paths, now, durability);
+		},
+		async recordJanitorReport(reportJson, recordedAt) {
+			if (!isIso(recordedAt) || reportJson.length === 0 || reportJson.length > 1_000_000) {
+				throw new Error("Janitor report invalid");
+			}
+			let report: unknown;
+			try {
+				report = JSON.parse(reportJson);
+			} catch {
+				throw new Error("Janitor report invalid");
+			}
+			if (!isRecord(report)) throw new Error("Janitor report invalid");
+			await prepare();
+			await durablePublishExclusiveValue(
+				join(paths.janitorReports, `${randomUUID().replaceAll("-", "")}.json`),
+				{ schemaVersion: 1, recordedAt, report },
+				"janitor_report",
+				durability,
+			);
 		},
 		async recordQuarantine(record) {
 			validateQuarantineRecord(record);
@@ -1053,6 +1116,100 @@ function sameDoctorProof(
 		record.proofFingerprint === proof.proofFingerprint &&
 		record.issuedAt === proof.issuedAt
 	);
+}
+
+function validateCheckerAdmission(
+	value: unknown,
+): asserts value is VaultGitCheckerAdmissionRecord {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, [
+			"schemaVersion",
+			"entrypointHash",
+			"dependencyBundleHash",
+			"admittedAt",
+		]) ||
+		value.schemaVersion !== 1 ||
+		!isHexDigest(value.entrypointHash) ||
+		!isHexDigest(value.dependencyBundleHash) ||
+		!isIso(value.admittedAt)
+	) {
+		throw new Error("checker admission invalid");
+	}
+}
+
+async function prunePrivateMaterial(
+	paths: VaultGitReceiptStore["paths"],
+	now: string,
+	durability: VaultGitDurabilityPort,
+): Promise<VaultGitPrivateHygieneResult> {
+	const latestReceipts = new Map<string, VaultGitReceipt>();
+	for (const name of (await readdir(paths.history)).filter((entry) =>
+		entry.endsWith(".json"),
+	)) {
+		const parsed = parseReceipt(
+			await readPrivateText(join(paths.history, name)).catch(() => ""),
+		);
+		if (!parsed) throw new Error("receipt history malformed");
+		const previous = latestReceipts.get(parsed.receiptId);
+		if (!previous || parsed.revision > previous.revision) {
+			latestReceipts.set(parsed.receiptId, parsed);
+		}
+	}
+	const closedReceiptIds = new Set(
+		[...latestReceipts.values()]
+			.filter((receipt) => receipt.phase === "closed")
+			.map((receipt) => receipt.receiptId),
+	);
+	let capabilityFiles = 0;
+	for (const name of await readdir(paths.capabilities)) {
+		const match = name.match(/^(receipt_[0-9a-f]{32})\.(owner|join)$/);
+		if (!match?.[1] || !closedReceiptIds.has(match[1])) continue;
+		await unlinkPrivateFile(join(paths.capabilities, name));
+		capabilityFiles += 1;
+	}
+	if (capabilityFiles > 0) {
+		await durability.syncDirectory(paths.capabilities, "capability");
+	}
+
+	const doctorNames = await readdir(paths.doctorTokens);
+	const doctorNameSet = new Set(doctorNames);
+	let doctorTokenRecords = 0;
+	for (const name of doctorNames.filter((entry) =>
+		entry.endsWith(".issued.json"),
+	)) {
+		const value: unknown = JSON.parse(
+			await readPrivateText(join(paths.doctorTokens, name)),
+		);
+		if (!isDoctorTokenRecord(value)) {
+			throw new Error("doctor token record invalid");
+		}
+		const consumed = doctorNameSet.has(`${value.tokenId}.consumed.json`);
+		const expired = Date.parse(now) - Date.parse(value.issuedAt) > 5 * 60_000;
+		if (!consumed && !expired) continue;
+		for (const suffix of ["token", "issued.json", "consumed.json"] as const) {
+			const candidate = `${value.tokenId}.${suffix}`;
+			if (!doctorNameSet.has(candidate)) continue;
+			await unlinkPrivateFile(join(paths.doctorTokens, candidate));
+		}
+		doctorTokenRecords += 1;
+	}
+	if (doctorTokenRecords > 0) {
+		await durability.syncDirectory(paths.doctorTokens, "doctor_token");
+	}
+	return { capabilityFiles, doctorTokenRecords };
+}
+
+async function unlinkPrivateFile(path: string): Promise<void> {
+	const metadata = await lstat(path);
+	if (
+		!metadata.isFile() ||
+		metadata.isSymbolicLink() ||
+		(metadata.mode & 0o777) !== 0o600
+	) {
+		throw new Error("private hygiene candidate permissions invalid");
+	}
+	await unlink(path);
 }
 
 function validateQuarantineRecord(

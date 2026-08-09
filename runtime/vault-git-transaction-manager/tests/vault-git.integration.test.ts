@@ -30,6 +30,8 @@ import {
 } from "../src/branch-station-catalog.ts";
 import type { VAULT_GIT_STATION_IDS } from "../src/branch-station-catalog.ts";
 import { vaultGitActions } from "../src/command-contract.ts";
+import { createVaultCheckerPort } from "../src/cli.ts";
+import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -146,10 +148,10 @@ const scenarios = {
 	"tidy.invalid_usage": scenario(async (fixture) =>
 		fixture.run(["tidy", "--json"]),
 	),
-	"tidy.unavailable": scenario(async (fixture) =>
+	"tidy.preview": scenario(async (fixture) =>
 		fixture.run(["tidy", "now", "--json"]),
 	),
-	"janitor.unavailable": scenario(async (fixture) =>
+	"janitor.preview": scenario(async (fixture) =>
 		fixture.run(["janitor", "--json"]),
 	),
 } as const satisfies Record<StationId, StationScenario<Station>>;
@@ -282,6 +284,48 @@ describe("vault-git catalog-driven process boundary", () => {
 			data: { outcome: "refused", changed_state: "none" },
 		});
 	});
+
+	test("closes one admitted checker repair as exactly one hygiene commit", async () => {
+		const fixture = await createFixture({ checkerRepair: true });
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "fixture-vault",
+		});
+		const checker = createVaultCheckerPort(
+			fixture.clone,
+			createNodeProcessPort(),
+		);
+		const fingerprint = await checker.fingerprint();
+		await store.admitChecker({
+			schemaVersion: 1,
+			...fingerprint,
+			admittedAt: "2026-08-09T00:00:00.000Z",
+		});
+		const before = Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"]));
+		const result = await fixture.run(["janitor", "--json"]);
+		expect(result.exitCode).toBe(0);
+		expect(parseCliProcessJson(result)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "repaired",
+				janitor_report: {
+					status: "repaired",
+					proposed_transaction_groups: [
+						{
+							files: ["notes/a.md"],
+							repair_ids: ["remove-empty-optional-field"],
+						},
+					],
+				},
+			},
+		});
+		expect(Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"]))).toBe(
+			before + 1,
+		);
+		expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
+			"baseline",
+		);
+	});
 });
 
 function scenario(
@@ -397,7 +441,10 @@ interface Fixture {
 }
 
 async function createFixture(
-	options: { readonly checkPasses?: boolean } = {},
+	options: {
+		readonly checkPasses?: boolean;
+		readonly checkerRepair?: boolean;
+	} = {},
 ): Promise<Fixture> {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-cli-process-"));
 	roots.push(root);
@@ -410,21 +457,63 @@ async function createFixture(
 	git(clone, ["config", "user.name", "Vault CLI Test"]);
 	git(clone, ["config", "user.email", "vault-cli@example.invalid"]);
 	await mkdir(join(clone, "notes"), { recursive: true });
-	await writeFile(join(clone, "notes", "a.md"), "baseline\n");
+	await writeFile(
+		join(clone, "notes", "a.md"),
+		options.checkerRepair ? "baseline\nowner:\n" : "baseline\n",
+	);
+	if (options.checkerRepair) {
+		await mkdir(join(clone, "scripts"), { recursive: true });
+		await writeFile(
+			join(clone, "scripts", "vault-check.ts"),
+			[
+				'import { readFile } from "node:fs/promises";',
+				'import { join } from "node:path";',
+				'const source = await readFile(join(process.cwd(), "notes/a.md"), "utf8");',
+				'const findings = source.includes("owner:\\n") ? [{ id: "optional-field-empty", file: "notes/a.md", message: "empty optional field", repair_id: "remove-empty-optional-field", detail: { field: "owner" } }] : [];',
+				'process.stdout.write(JSON.stringify({ schema_version: 1, findings }) + "\\n");',
+				"process.exit(findings.length === 0 ? 0 : 1);",
+			].join("\n"),
+		);
+		await writeFile(
+			join(clone, "scripts", "vault-repair-registry.ts"),
+			[
+				'import { readFile, writeFile } from "node:fs/promises";',
+				'import { join } from "node:path";',
+				'const args = Bun.argv.slice(2);',
+				'const apply = args.indexOf("--apply");',
+				'if (apply < 0) { process.stdout.write(JSON.stringify({ schema_version: 1, repairs: [{ id: "remove-empty-optional-field", finding_id: "optional-field-empty", description: "remove line" }] }) + "\\n"); process.exit(0); }',
+				'const file = args[args.indexOf("--file") + 1];',
+				'const root = args[args.indexOf("--root") + 1];',
+				'const path = join(root, file);',
+				'const source = await readFile(path, "utf8");',
+				'await writeFile(path, source.replace(/^owner:\\s*$/m, "").replace(/\\n\\n/g, "\\n"));',
+				'process.stdout.write(JSON.stringify({ schema_version: 1, status: "repaired" }) + "\\n");',
+			].join("\n"),
+		);
+	}
 	await writeFile(
 		join(clone, "package.json"),
 		`${JSON.stringify(
 			{
 				private: true,
 				scripts: {
-					check: `bun -e 'process.exit(${options.checkPasses === false ? 1 : 0})'`,
+					check: options.checkerRepair
+						? "bun run scripts/vault-check.ts"
+						: `bun -e 'process.exit(${options.checkPasses === false ? 1 : 0})'`,
 				},
 			},
 			null,
 			2,
 		)}\n`,
 	);
-	git(clone, ["add", "package.json", "notes/a.md"]);
+	git(clone, [
+		"add",
+		"package.json",
+		"notes/a.md",
+		...(options.checkerRepair
+			? ["scripts/vault-check.ts", "scripts/vault-repair-registry.ts"]
+			: []),
+	]);
 	git(clone, ["commit", "-m", "chore: initialize vault fixture"]);
 	git(clone, ["push", "-u", "origin", "main"]);
 	git(bare, ["symbolic-ref", "HEAD", "refs/heads/main"]);
