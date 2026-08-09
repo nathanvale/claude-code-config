@@ -87,6 +87,44 @@ export function validateVaultCommitSubject(
 	return { status: "accepted", subject };
 }
 
+/** Validated non-secret identity label. */
+export type VaultCommitLabelValidation =
+	| { readonly status: "accepted"; readonly label: string }
+	| { readonly status: "refused"; readonly reason: "unsafe_text" | "sensitive_text" };
+
+/**
+ * Validate one non-secret identity label (actor or host) for commit trailers.
+ *
+ * Applies the same length, secret-like, and private-path gates that protect
+ * commit subjects, so stored labels can never make message construction throw.
+ *
+ * @param label - Candidate single-line actor or host label
+ * @returns Accepted label or one stable refusal category
+ * @throws Never; unsafe caller text is represented as a refusal
+ *
+ * @example
+ * ```typescript
+ * validateVaultCommitLabel("agent-a") // { status: "accepted", label: "agent-a" }
+ * validateVaultCommitLabel("token=super-secret") // { status: "refused", ... }
+ * ```
+ */
+export function validateVaultCommitLabel(
+	label: string,
+): VaultCommitLabelValidation {
+	if (
+		label.trim() !== label ||
+		label.length === 0 ||
+		label.length > 80 ||
+		/[\r\n\0]/.test(label)
+	) {
+		return { status: "refused", reason: "unsafe_text" };
+	}
+	if (SECRET_LIKE_TEXT.test(label) || PRIVATE_PATH_TEXT.test(label)) {
+		return { status: "refused", reason: "sensitive_text" };
+	}
+	return { status: "accepted", label };
+}
+
 /**
  * Build the exact commit message owned by the transaction manager.
  *
@@ -112,14 +150,7 @@ export function buildVaultCommitMessage(input: VaultCommitMessageInput): string 
 	if (!/^txn_[0-9a-f]{32}$/.test(input.transactionId)) {
 		throw new Error("transaction id is invalid");
 	}
-	if (
-		input.actor.trim() !== input.actor ||
-		input.actor.length === 0 ||
-		input.actor.length > 80 ||
-		/[\r\n\0]/.test(input.actor) ||
-		SECRET_LIKE_TEXT.test(input.actor) ||
-		PRIVATE_PATH_TEXT.test(input.actor)
-	) {
+	if (validateVaultCommitLabel(input.actor).status === "refused") {
 		throw new Error("actor is unsafe for commit trailers");
 	}
 	return `${validated.subject}\n\nVault-Event: ${input.event}\nVault-Transaction: ${input.transactionId}\nVault-Actor: ${input.actor}\n`;

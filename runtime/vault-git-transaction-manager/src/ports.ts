@@ -274,6 +274,14 @@ export type VaultGitOwnedPathInspection =
 			readonly reason: VaultGitOwnedPathRefusalReason;
 	  };
 
+/** One owned path bound to the exact worktree content hash observed pre-check. */
+export interface VaultGitOwnedPathContentHash {
+	/** Repository-relative owned leaf path. */
+	readonly path: string;
+	/** Blob object id of current worktree content, or null when absent. */
+	readonly contentHash: string | null;
+}
+
 /** Input for one exact local event commit. */
 export interface VaultGitExactCommitRequest {
 	/** Exact local main object admitted at begin. */
@@ -282,6 +290,12 @@ export interface VaultGitExactCommitRequest {
 	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
 	/** Exact unrelated state recorded at admission or the latest join. */
 	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
+	/**
+	 * Content hashes captured immediately before the vault-owned check ran.
+	 * When present, the frozen candidate blobs must equal these hashes so the
+	 * committed bytes are exactly the checked bytes.
+	 */
+	readonly expectedContentHashes?: readonly VaultGitOwnedPathContentHash[];
 	/** Complete manager-owned commit message. */
 	readonly message: string;
 	/** Non-secret admitted actor identity. */
@@ -298,11 +312,22 @@ export type VaultGitExactCommitResult =
 			readonly treeId: string;
 	  }
 	| {
+			/**
+			 * Local main advanced to the new commit but the canonical owned index
+			 * could not be synchronized; commit evidence must be preserved.
+			 */
+			readonly status: "committed_incomplete";
+			readonly reason: "index_update_failed";
+			readonly commitId: string;
+			readonly treeId: string;
+	  }
+	| {
 			readonly status: "refused";
 			readonly reason:
 				| "owned_path_baseline_changed"
 				| "owned_path_symlink"
 				| "unrelated_state_changed"
+				| "checked_content_changed"
 				| "empty_event"
 				| "candidate_mismatch"
 				| "local_main_moved"
@@ -321,6 +346,10 @@ export interface VaultGitRepositoryPort {
 	readonly captureUnrelatedState?: (
 		ownedPaths: readonly string[],
 	) => Promise<VaultGitUnrelatedStateSnapshot>;
+	/** Hash current owned-path worktree content for check-to-commit binding. */
+	readonly hashOwnedPaths?: (
+		ownedPaths: readonly string[],
+	) => Promise<readonly VaultGitOwnedPathContentHash[]>;
 	/** Build, verify, and install one exact local event commit. */
 	readonly commitExact?: (
 		request: VaultGitExactCommitRequest,

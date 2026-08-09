@@ -501,9 +501,22 @@ describe("vault-git KTD16 boundaries", () => {
 			adapter.indexOf("async atomicClose"),
 			adapter.indexOf("export interface VaultGitRepositoryAdapterOptions"),
 		);
-		expect(atomicClose).toContain('"--atomic"');
-		expect(atomicClose).toContain('"--porcelain"');
-		expect(atomicClose).toContain('"--no-verify"');
+		// KTD4: the plan-mandated flags live in one named constant the sole
+		// atomic close push spreads verbatim.
+		const flagConstant = adapter.slice(
+			adapter.indexOf("export const VAULT_GIT_ATOMIC_PUSH_FLAGS"),
+			adapter.indexOf("] as const;", adapter.indexOf("export const VAULT_GIT_ATOMIC_PUSH_FLAGS")),
+		);
+		expect(flagConstant).toContain('"--atomic"');
+		expect(flagConstant).toContain('"--porcelain"');
+		expect(flagConstant).toContain('"--no-verify"');
+		expect(atomicClose).toContain("...VAULT_GIT_ATOMIC_PUSH_FLAGS");
+		expect(atomicClose).toContain(
+			["`--force-with-lease=refs/heads/main:${", "request.expectedMainHead", "}`"].join(""),
+		);
+		expect(atomicClose).toContain(
+			["`--force-with-lease=${", "request.ledgerRef", "}:${", "request.expectedLedgerGeneration", "}`"].join(""),
+		);
 		expect(atomicClose).toContain(
 			["`", "${", "request.mainCommit", "}:refs/heads/main`"].join(""),
 		);

@@ -24,8 +24,14 @@ import {
 	createNodeProcessPort,
 } from "../src/git-adapter.ts";
 import { createVaultGitTransactionEngine } from "../src/engine.ts";
-import type { VaultGitProcessPort, VaultGitRuntimePort } from "../src/ports.ts";
-import { createReceiptStore } from "../src/store.ts";
+import type {
+	VaultGitProcessPort,
+	VaultGitProcessRequest,
+	VaultGitProcessResult,
+	VaultGitRemotePort,
+	VaultGitRuntimePort,
+} from "../src/ports.ts";
+import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
 
 const roots: string[] = [];
 
@@ -61,6 +67,17 @@ describe("transaction completion policy", () => {
 				reason: expect.any(String),
 			});
 		}
+	});
+
+	test("refuses a valid Conventional subject whose type mismatches the admitted event", () => {
+		expect(
+			validateVaultCommitSubject("feat(vault): add admitted note", "note_created"),
+		).toEqual({ status: "refused", reason: "event_type_mismatch" });
+		// The same subject passes for an event whose type set allows feat, so the
+		// refusal above is the event gate, not general subject validation.
+		expect(
+			validateVaultCommitSubject("feat(vault): add admitted note", "project_created"),
+		).toEqual({ status: "accepted", subject: "feat(vault): add admitted note" });
 	});
 
 	test("scrubs ambient pathspec mode toggles from Git subprocesses", async () => {
@@ -249,6 +266,84 @@ describe("exact owned-path commit", () => {
 		);
 	});
 
+	test("a timed-out commit proof read refuses as timed_out, not candidate_mismatch", async () => {
+		const repository = await repositoryFixture();
+		const admission = await repository.adapter.inspectOwnedPaths(["owned.md"]);
+		if (admission.status !== "admitted") throw new Error("admission failed");
+		await writeFile(join(repository.root, "owned.md"), "owned after\n");
+		const nodeProcess = createNodeProcessPort();
+		const adapter = createGitRepositoryAdapter({
+			repositoryPath: repository.root,
+			repositoryIdentity: "fixture-vault",
+			process: {
+				async run(request) {
+					if (request.args[0] === "cat-file") {
+						return { exitCode: null, stdout: "", stderr: "", timedOut: true };
+					}
+					return nodeProcess.run(request);
+				},
+			},
+			timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+		});
+		if (!adapter.commitExact) throw new Error("exact commit unavailable");
+		expect(
+			await adapter.commitExact({
+				baselineHead: repository.head,
+				ownedPaths: admission.paths,
+				unrelatedState: admission.unrelatedState,
+				message: `docs(vault): update owned note\n\nVault-Event: note_created\nVault-Transaction: txn_${"7".repeat(32)}\nVault-Actor: agent-a\n`,
+				author: "agent-a",
+				timestamp: "2026-08-09T00:00:00.000Z",
+			}),
+		).toEqual({ status: "refused", reason: "timed_out" });
+		expect(git(repository.root, "rev-parse", "refs/heads/main")).toBe(repository.head);
+	});
+
+	test("uses the repo object format for deletion records in a sha256 repository", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-sha256-"));
+		roots.push(root);
+		try {
+			git(root, "init", "--object-format=sha256", "-b", "main");
+		} catch {
+			// This git build cannot create sha256 repositories; skip gracefully.
+			return;
+		}
+		git(root, "config", "user.name", "Fixture");
+		git(root, "config", "user.email", "fixture@example.invalid");
+		await writeFile(join(root, "owned.md"), "owned before\n");
+		await writeFile(join(root, "deleted.md"), "deleted before\n");
+		git(root, "add", "--all");
+		git(root, "commit", "-m", "initial");
+		const adapter = createGitRepositoryAdapter({
+			repositoryPath: root,
+			repositoryIdentity: "fixture-vault",
+			process: createNodeProcessPort(),
+			timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+		});
+		const admission = await adapter.inspectOwnedPaths(["deleted.md"]);
+		if (admission.status !== "admitted") {
+			throw new Error(`admission failed: ${admission.reason}`);
+		}
+		await unlink(join(root, "deleted.md"));
+		const head = git(root, "rev-parse", "refs/heads/main");
+		if (!adapter.commitExact) throw new Error("exact commit unavailable");
+		expect(
+			await adapter.commitExact({
+				baselineHead: head,
+				ownedPaths: admission.paths,
+				unrelatedState: admission.unrelatedState,
+				message: `docs(vault): delete admitted note\n\nVault-Event: document_deleted\nVault-Transaction: txn_${"8".repeat(32)}\nVault-Actor: agent-a\n`,
+				author: "agent-a",
+				timestamp: "2026-08-09T00:00:00.000Z",
+			}),
+		).toMatchObject({ status: "committed" });
+		expect(
+			git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"),
+		).toBe("deleted.md");
+		// The 64-character null object id keeps the canonical index in sync.
+		expect(git(root, "status", "--porcelain")).toBe("");
+	});
+
 	test("expands a directory request to its tracked leaf set before admission", async () => {
 		const repository = await repositoryFixture(["notes/a.md", "notes/b.md"]);
 		const admission = await repository.adapter.inspectOwnedPaths(["notes"]);
@@ -288,8 +383,14 @@ describe("complete transaction", () => {
 		});
 		const remoteMain = git(fixture.bare, "rev-parse", "refs/heads/main");
 		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(remoteMain);
-		expect(git(fixture.clone, "show", "-s", "--format=%B", remoteMain)).toContain(
-			`Vault-Transaction: ${begun.transactionId}`,
+		expect(git(fixture.clone, "show", "-s", "--format=%B", remoteMain)).toBe(
+			[
+				"docs(vault): record admitted note",
+				"",
+				"Vault-Event: note_created",
+				`Vault-Transaction: ${begun.transactionId}`,
+				"Vault-Actor: agent-a",
+			].join("\n"),
 		);
 		const loaded = await fixture.store.load();
 		expect(loaded).toMatchObject({
@@ -302,10 +403,16 @@ describe("complete transaction", () => {
 				pushOutcome: "closed",
 			},
 		});
+		if (loaded.status !== "loaded") throw new Error("receipt missing");
+		// The committing append carries its own transition instead of
+		// inheriting completion_requested from the checking revision.
+		expect(loaded.history.map((entry) => entry.transition)).toContain(
+			"commit_candidate_frozen",
+		);
 	});
 
 	test("check failure records a repair action without creating a commit", async () => {
-		const fixture = await engineRepositoryFixture(false);
+		const fixture = await engineRepositoryFixture({ checkPasses: false });
 		const begun = await fixture.engine.begin({
 			event: "note_created",
 			requestedPaths: ["owned.md"],
@@ -331,6 +438,522 @@ describe("complete transaction", () => {
 			nextAction: { id: "run_repair" },
 		});
 		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("refuses completion when owned content changes while the vault check runs", async () => {
+		const fixture = await engineRepositoryFixture({
+			async onCheck(clone) {
+				await writeFile(join(clone, "owned.md"), "raced write during check\n");
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "validated content\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "repairable",
+			blocker: "completion_baseline_changed",
+			nextAction: { id: "run_repair" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("an unchanged completion refuses as repairable empty_event, not human_required", async () => {
+		const fixture = await engineRepositoryFixture();
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "repairable",
+			blocker: "empty_event",
+			retrySafety: "same_input_unsafe",
+			nextAction: { id: "run_repair" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("a timed-out local commit refuses retry-safe and the same input then closes", async () => {
+		let timeOutFreeze = false;
+		const fixture = await engineRepositoryFixture({
+			intercept(request) {
+				if (
+					timeOutFreeze &&
+					request.args[0] === "write-tree" &&
+					request.env?.GIT_INDEX_FILE
+				) {
+					return { exitCode: null, stdout: "", stderr: "", timedOut: true };
+				}
+				return undefined;
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		timeOutFreeze = true;
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "completion_interrupted",
+			retrySafety: "same_input_safe",
+			nextAction: { id: "complete_transaction" },
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "committing", commitId: null },
+		});
+		timeOutFreeze = false;
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({ status: "completed", state: "closed", phase: "closed" });
+	});
+
+	test("persists commit evidence durably before the atomic push begins", async () => {
+		const observed: Array<{
+			phase: string;
+			commitId: string | null;
+			ledgerReleaseId: string | null;
+		}> = [];
+		const holder: { store?: VaultGitReceiptStore } = {};
+		const fixture = await engineRepositoryFixture({
+			async intercept(request) {
+				if (request.args[0] === "push" && request.args.includes("--atomic") && holder.store) {
+					const loaded = await holder.store.load();
+					if (loaded.status === "loaded") {
+						observed.push({
+							phase: loaded.receipt.phase,
+							commitId: loaded.receipt.commitId,
+							ledgerReleaseId: loaded.receipt.ledgerReleaseId,
+						});
+					}
+				}
+				return undefined;
+			},
+		});
+		holder.store = fixture.store;
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({ status: "completed", state: "closed" });
+		const remoteMain = git(fixture.bare, "rev-parse", "refs/heads/main");
+		expect(observed).toEqual([
+			{
+				phase: "push_pending",
+				commitId: remoteMain,
+				ledgerReleaseId: expect.stringMatching(/^[0-9a-f]{40}$/) as never,
+			},
+		]);
+	});
+
+	test("an adapter throw after the local commit refuses with durable evidence", async () => {
+		let throwOnPush = false;
+		const fixture = await engineRepositoryFixture({
+			intercept(request) {
+				if (throwOnPush && request.args[0] === "push") return "throw";
+				return undefined;
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		throwOnPush = true;
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			state: "human_required",
+			blocker: "host_contract_breach",
+			changedState: "committed",
+			retrySafety: "operator_required",
+		});
+		const localMain = git(fixture.clone, "rev-parse", "refs/heads/main");
+		expect(localMain).not.toBe(fixture.mainHead);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "human_required",
+				commitId: localMain,
+				expectedMainCommit: localMain,
+				pushOutcome: "unknown",
+			},
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("a failed owned index update after the ref advance preserves commit evidence", async () => {
+		let failIndexUpdate = false;
+		const fixture = await engineRepositoryFixture({
+			intercept(request) {
+				if (
+					failIndexUpdate &&
+					request.args[0] === "update-index" &&
+					!request.env?.GIT_INDEX_FILE
+				) {
+					return { exitCode: 1, stdout: "", stderr: "", timedOut: false };
+				}
+				return undefined;
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		failIndexUpdate = true;
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			state: "human_required",
+			blocker: "host_contract_breach",
+			changedState: "committed",
+		});
+		const localMain = git(fixture.clone, "rev-parse", "refs/heads/main");
+		expect(localMain).not.toBe(fixture.mainHead);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "human_required",
+				commitId: localMain,
+				expectedMainCommit: localMain,
+				pushOutcome: "unknown",
+				ledgerReleaseId: null,
+			},
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("staging an unrelated file after admission refuses completion without a commit", async () => {
+		const fixture = await engineRepositoryFixture();
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "unrelated.md"), "unrelated\n");
+		git(fixture.clone, "add", "--", "unrelated.md");
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "repairable",
+			blocker: "unrelated_state_changed",
+			retrySafety: "same_input_unsafe",
+			nextAction: { id: "run_repair" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		// The unrelated staged entry survives the refusal untouched.
+		expect(git(fixture.clone, "ls-files", "--stage", "--", "unrelated.md")).not.toBe("");
+	});
+
+	test("an owned-path baseline change after admission refuses repairably with evidence", async () => {
+		let fakeBaseline = false;
+		const fixture = await engineRepositoryFixture({
+			intercept(request) {
+				// Report a different baseline blob for the owned path so the
+				// adapter's admission-to-commit baseline comparison genuinely fires.
+				if (fakeBaseline && request.args[0] === "ls-tree") {
+					return {
+						exitCode: 0,
+						stdout: `100644 blob ${"f".repeat(40)}\towned.md\0`,
+						stderr: "",
+						timedOut: false,
+					};
+				}
+				return undefined;
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		fakeBaseline = true;
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "repairable",
+			blocker: "owned_path_changed",
+			retrySafety: "same_input_unsafe",
+			nextAction: { id: "run_repair" },
+		});
+		fakeBaseline = false;
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(await readFile(join(fixture.clone, "owned.md"), "utf8")).toBe("owned after\n");
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "repairable", commitId: null },
+		});
+	});
+
+	test("an invalid commit subject refuses before any durable completion transition", async () => {
+		const fixture = await engineRepositoryFixture();
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			state: "active",
+			phase: "writing",
+			blocker: "commit_subject_invalid",
+			changedState: "none",
+			nextAction: { id: "change_commit_summary" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "writing", commitId: null },
+		});
+	});
+
+	test("a well-formed subject whose type mismatches the admitted event refuses", async () => {
+		const fixture = await engineRepositoryFixture();
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		// Valid Conventional Commit, but feat is not allowed for note_created.
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "feat(vault): add admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "writing",
+			blocker: "commit_subject_invalid",
+			nextAction: { id: "change_commit_summary" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("an atomic-close host contract breach escalates durably with push evidence intact", async () => {
+		const fixture = await engineRepositoryFixture({
+			atomicCloseOutcome: "host_contract_breach",
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			state: "human_required",
+			phase: "human_required",
+			blocker: "host_contract_breach",
+			changedState: "partial",
+			retrySafety: "operator_required",
+			nextAction: { id: "request_operator_review" },
+		});
+		const localMain = git(fixture.clone, "rev-parse", "refs/heads/main");
+		expect(localMain).not.toBe(fixture.mainHead);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "human_required",
+				pushOutcome: "host_contract_breach",
+				commitId: localMain,
+				expectedMainCommit: localMain,
+				ledgerReleaseId: STUB_LEDGER_RELEASE_ID,
+			},
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("a pending atomic close keeps durable push expectations and advertises retry", async () => {
+		const fixture = await engineRepositoryFixture({ atomicCloseOutcome: "push_pending" });
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "advanced",
+			state: "push_pending",
+			phase: "push_pending",
+			changedState: "partial",
+			blocker: "push_pending",
+			nextAction: { id: "retry_push" },
+		});
+		const localMain = git(fixture.clone, "rev-parse", "refs/heads/main");
+		expect(localMain).not.toBe(fixture.mainHead);
+		// The durable receipt admits an honestly unknown push with the exact
+		// expected main commit, so a retry can reconcile before republishing.
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "push_pending",
+				pushOutcome: "unknown",
+				commitId: localMain,
+				expectedMainCommit: localMain,
+				ledgerReleaseId: STUB_LEDGER_RELEASE_ID,
+			},
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
 	});
 
 	test("refuses a completion recipient switch", async () => {
@@ -397,7 +1020,25 @@ async function repositoryFixture(
 	return { root, adapter, head: git(root, "rev-parse", "refs/heads/main") };
 }
 
-async function engineRepositoryFixture(checkPasses = true) {
+interface EngineFixtureOptions {
+	readonly checkPasses?: boolean;
+	/** Runs inside the injected vault check with the clone root. */
+	readonly onCheck?: (clone: string) => Promise<void>;
+	/** Optional per-request interception; "throw" simulates an adapter throw. */
+	readonly intercept?: (
+		request: VaultGitProcessRequest,
+	) =>
+		| VaultGitProcessResult
+		| "throw"
+		| undefined
+		| Promise<VaultGitProcessResult | "throw" | undefined>;
+	/** Stub the atomic close outcome after durable prepared evidence lands. */
+	readonly atomicCloseOutcome?: "host_contract_breach" | "push_pending";
+}
+
+const STUB_LEDGER_RELEASE_ID = "e".repeat(40);
+
+async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-engine-complete-"));
 	roots.push(root);
 	const bare = join(root, "remote.git");
@@ -412,7 +1053,15 @@ async function engineRepositoryFixture(checkPasses = true) {
 	git(clone, "commit", "-m", "initial");
 	git(clone, "push", "origin", "refs/heads/main:refs/heads/main");
 	const mainHead = git(clone, "rev-parse", "refs/heads/main");
-	const processPort = createNodeProcessPort();
+	const nodeProcess = createNodeProcessPort();
+	const processPort: VaultGitProcessPort = {
+		async run(request) {
+			const intercepted = await options.intercept?.(request);
+			if (intercepted === "throw") throw new Error("intercepted process failure");
+			if (intercepted) return intercepted;
+			return nodeProcess.run(request);
+		},
+	};
 	const timeouts = { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 };
 	const repository = createGitRepositoryAdapter({
 		repositoryPath: clone,
@@ -425,6 +1074,31 @@ async function engineRepositoryFixture(checkPasses = true) {
 		process: processPort,
 		timeouts,
 	});
+	const ledgerGit: VaultGitRemotePort = options.atomicCloseOutcome
+		? {
+				inspectMain: (remoteName) => remote.inspectMain(remoteName),
+				readLedger: (remoteName, ledgerRef) => remote.readLedger(remoteName, ledgerRef),
+				appendLedgerCommit: (request) => remote.appendLedgerCommit(request),
+				async atomicClose(request) {
+					await request.onPrepared({
+						mainCommit: request.mainCommit,
+						ledgerCommit: STUB_LEDGER_RELEASE_ID,
+					});
+					return options.atomicCloseOutcome === "host_contract_breach"
+						? {
+								status: "host_contract_breach",
+								mainCommit: request.mainCommit,
+								ledgerCommit: STUB_LEDGER_RELEASE_ID,
+							}
+						: {
+								status: "push_pending",
+								reason: "remote_unavailable",
+								mainCommit: request.mainCommit,
+								ledgerCommit: STUB_LEDGER_RELEASE_ID,
+							};
+				},
+			}
+		: remote;
 	const store = createReceiptStore({
 		stateRoot: join(root, "state"),
 		repositoryIdentity: "fixture-vault",
@@ -433,14 +1107,15 @@ async function engineRepositoryFixture(checkPasses = true) {
 	const engine = createVaultGitTransactionEngine({
 		store,
 		repository,
-		ledger: { git: remote, clock: runtime },
+		ledger: { git: ledgerGit, clock: runtime },
 		runtime,
 		repositoryIdentity: "fixture-vault",
 		check: {
 			async run() {
-				return checkPasses
-					? { status: "passed" as const }
-					: { status: "failed" as const, reason: "check_failed" as const };
+				await options.onCheck?.(clone);
+				return options.checkPasses === false
+					? { status: "failed" as const, reason: "check_failed" as const }
+					: { status: "passed" as const };
 			},
 		},
 	});

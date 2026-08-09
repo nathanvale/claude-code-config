@@ -39,6 +39,59 @@ describe("atomic remote close", () => {
 		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(prepared[0]?.ledgerCommit);
 	});
 
+	test("a rewound remote rejects the push even when it would fast-forward", async () => {
+		const fixture = await remoteFixture();
+		// Advance remote main one commit past the fixture head, then rewind the
+		// remote back to the old head. The candidate still descends from the
+		// rewound ref, so only an exact-old-OID lease can reject the push.
+		const advanced = commitFile(fixture.clone, "advanced.md", "advanced\n", "advanced");
+		git(fixture.clone, "push", "origin", `${advanced}:refs/heads/main`);
+		git(fixture.bare, "update-ref", "refs/heads/main", fixture.mainHead);
+		writeFileSync(join(fixture.clone, "candidate-two.md"), "candidate two\n");
+		git(fixture.clone, "add", "--", "candidate-two.md");
+		const candidateTree = git(fixture.clone, "write-tree");
+		const candidate = git(fixture.clone, "commit-tree", candidateTree, "-p", advanced, "-m", "candidate two");
+		const result = await fixture.adapter.atomicClose?.({
+			remote: "origin",
+			expectedMainHead: advanced,
+			mainCommit: candidate,
+			ledgerRef: VAULT_GIT_LEDGER_REF,
+			expectedLedgerGeneration: fixture.ledgerHead,
+			ledgerContent: fixture.releaseContent,
+			ledgerMessage: `vault-ledger: release txn_${"1".repeat(32)}`,
+			author: "agent-a",
+			timestamp: "2026-08-09T00:00:00.000Z",
+			onPrepared() {},
+		});
+		expect(result).toMatchObject({ status: "host_contract_breach" });
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(fixture.ledgerHead);
+	});
+
+	test("refuses a merge candidate even when its first parent is the admitted head", async () => {
+		const fixture = await remoteFixture();
+		const orphanTree = gitInput(fixture.clone, "", "mktree");
+		const orphan = git(fixture.clone, "commit-tree", orphanTree, "-m", "orphan");
+		writeFileSync(join(fixture.clone, "merge.md"), "merge\n");
+		git(fixture.clone, "add", "--", "merge.md");
+		const mergeTree = git(fixture.clone, "write-tree");
+		const merge = git(fixture.clone, "commit-tree", mergeTree, "-p", fixture.mainHead, "-p", orphan, "-m", "merge");
+		expect(
+			fixture.adapter.atomicClose?.({
+				remote: "origin",
+				expectedMainHead: fixture.mainHead,
+				mainCommit: merge,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: fixture.ledgerHead,
+				ledgerContent: fixture.releaseContent,
+				ledgerMessage: `vault-ledger: release txn_${"1".repeat(32)}`,
+				author: "agent-a",
+				timestamp: "2026-08-09T00:00:00.000Z",
+				onPrepared() {},
+			}),
+		).rejects.toThrow("main commit does not descend from the admitted head");
+	});
+
 	test("remote main movement rejects both ref updates", async () => {
 		const fixture = await remoteFixture();
 		const competing = commitFile(fixture.clone, "competing.md", "competing\n", "competing");
@@ -56,6 +109,11 @@ describe("atomic remote close", () => {
 			onPrepared() {},
 		});
 		expect(result).toMatchObject({ status: "host_contract_breach" });
+		// Both refs must stay untouched: a sequential main-first push would land
+		// the candidate on main before the ledger rejection could stop it.
+		const remoteMain = git(fixture.bare, "rev-parse", "refs/heads/main");
+		expect(remoteMain).not.toBe(fixture.candidate);
+		expect(remoteMain).toBe(competing);
 		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(fixture.ledgerHead);
 	});
 });

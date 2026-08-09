@@ -686,7 +686,9 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 		!isNullableObjectId(value.expectedMainCommit) ||
 		!isNullableObjectId(value.ledgerReleaseId) ||
 		!["not_attempted", "unknown", "closed", "host_contract_breach"].includes(String(value.pushOutcome)) ||
-		(value.expectedMainCommit === null) !== (value.ledgerReleaseId === null) ||
+		// Commit evidence may exist before the release-ledger commit does, but a
+		// release id without its main commit is always corrupt.
+		(value.ledgerReleaseId !== null && value.expectedMainCommit === null) ||
 		(value.commitId !== null && value.commitId !== value.expectedMainCommit) ||
 		(value.pushOutcome === "not_attempted" && value.expectedMainCommit !== null) ||
 		(value.pushOutcome !== "not_attempted" && value.expectedMainCommit === null) ||

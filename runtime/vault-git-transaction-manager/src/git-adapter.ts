@@ -69,6 +69,20 @@ export function createVaultOwnedCheckPort(
 	};
 }
 
+/**
+ * Fixed flags for the sole atomic close push.
+ *
+ * `--no-verify` is plan-mandated (KTD4): hooks are deliberately bypassed
+ * because the vault owns validation through the injected check port and hook
+ * execution is banned in the Super-vault. `--atomic` makes both ref updates
+ * one all-or-nothing transaction; `--porcelain` keeps output machine-stable.
+ */
+export const VAULT_GIT_ATOMIC_PUSH_FLAGS = [
+	"--atomic",
+	"--porcelain",
+	"--no-verify",
+] as const;
+
 /** Deadlines for local Git plumbing and remote fetch/push operations. */
 export interface VaultGitGitTimeouts {
 	/** Exact-ref fetch deadline. */
@@ -266,24 +280,30 @@ export function createGitAdapter(
 			if (localHead === remoteHead) {
 				return { status: "ok", alignment: "aligned", localHead, remoteHead };
 			}
-			if (
-				await isAncestor(
-					runGit,
-					localHead,
-					remoteHead,
-					options.timeouts.localMs,
-				)
-			) {
+			const behind = await isAncestor(
+				runGit,
+				localHead,
+				remoteHead,
+				options.timeouts.localMs,
+			);
+			if (behind === "timed_out") return { status: "failed", reason: "timed_out" };
+			if (behind === "unknown") {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			if (behind === "yes") {
 				return { status: "ok", alignment: "behind", localHead, remoteHead };
 			}
-			if (
-				await isAncestor(
-					runGit,
-					remoteHead,
-					localHead,
-					options.timeouts.localMs,
-				)
-			) {
+			const ahead = await isAncestor(
+				runGit,
+				remoteHead,
+				localHead,
+				options.timeouts.localMs,
+			);
+			if (ahead === "timed_out") return { status: "failed", reason: "timed_out" };
+			if (ahead === "unknown") {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			if (ahead === "yes") {
 				return { status: "ok", alignment: "ahead", localHead, remoteHead };
 			}
 			return { status: "ok", alignment: "diverged", localHead, remoteHead };
@@ -407,11 +427,12 @@ export function createGitAdapter(
 				["show", "-s", "--format=%P", request.mainCommit],
 				options.timeouts.localMs,
 			);
+			const mainParents = mainParent.stdout.trim().split(/\s+/).filter(Boolean);
 			if (
 				mainParent.timedOut ||
 				mainParent.exitCode !== 0 ||
-				mainParent.stdout.trim().split(/\s+/).filter(Boolean)[0] !==
-					request.expectedMainHead
+				mainParents.length !== 1 ||
+				mainParents[0] !== request.expectedMainHead
 			) {
 				throw new Error("main commit does not descend from the admitted head");
 			}
@@ -459,12 +480,14 @@ export function createGitAdapter(
 				mainCommit: request.mainCommit,
 				ledgerCommit,
 			});
+			// Exact-old-OID leases: a rewound remote whose ref would still
+			// fast-forward must be rejected, not silently absorbed.
 			const pushed = await runGit(
 				[
 					"push",
-					"--atomic",
-					"--porcelain",
-					"--no-verify",
+					...VAULT_GIT_ATOMIC_PUSH_FLAGS,
+					`--force-with-lease=refs/heads/main:${request.expectedMainHead}`,
+					`--force-with-lease=${request.ledgerRef}:${request.expectedLedgerGeneration}`,
 					request.remote,
 					`${request.mainCommit}:refs/heads/main`,
 					`${ledgerCommit}:${request.ledgerRef}`,
@@ -585,6 +608,33 @@ export function createGitRepositoryAdapter(
 			statusHex: Buffer.from(status.stdout, "utf8").toString("hex"),
 			indexHex: Buffer.from(index.stdout, "utf8").toString("hex"),
 		};
+	};
+
+	const hashOwnedPaths = async (
+		ownedPaths: readonly string[],
+	): Promise<readonly { path: string; contentHash: string | null }[]> => {
+		const hashes: { path: string; contentHash: string | null }[] = [];
+		for (const path of ownedPaths) {
+			const metadata = await lstat(resolve(options.repositoryPath, path)).catch(
+				(error: unknown) =>
+					isMissingFilesystemEntry(error) ? null : Promise.reject(error),
+			);
+			if (metadata === null) {
+				hashes.push({ path, contentHash: null });
+				continue;
+			}
+			// hash-object applies the same attribute filters as `git add`, so the
+			// resulting object id equals the blob a later freeze would produce.
+			const hashed = await runGit(["hash-object", "--", path]);
+			if (hashed.timedOut || hashed.exitCode !== 0) {
+				throw new Error("could not hash owned path content");
+			}
+			hashes.push({
+				path,
+				contentHash: requireObjectId(hashed.stdout, "owned path content"),
+			});
+		}
+		return hashes;
 	};
 
 	return {
@@ -727,6 +777,8 @@ export function createGitRepositoryAdapter(
 
 		captureUnrelatedState,
 
+		hashOwnedPaths,
+
 		async commitExact(request) {
 			const localHead = await runGit([
 				"rev-parse",
@@ -813,6 +865,26 @@ export function createGitRepositoryAdapter(
 					return { status: "refused", reason: "candidate_mismatch" };
 				}
 				const treeId = requireObjectId(treeResult.stdout, "candidate tree");
+				if (request.expectedContentHashes) {
+					// Bind the checked bytes to the committed blobs: the frozen tree
+					// must carry exactly the content hashed before the vault check ran.
+					const expectedByPath = new Map(
+						request.expectedContentHashes.map((entry) => [
+							entry.path,
+							entry.contentHash,
+						]),
+					);
+					for (const ownedPath of request.ownedPaths) {
+						const frozen = await readTreeEntry(runGit, treeId, ownedPath.path);
+						const expected = expectedByPath.get(ownedPath.path);
+						if (
+							!expectedByPath.has(ownedPath.path) ||
+							(frozen?.objectId ?? null) !== (expected ?? null)
+						) {
+							return { status: "refused", reason: "checked_content_changed" };
+						}
+					}
+				}
 				const changed = await runGit([
 					"diff-tree",
 					"--no-commit-id",
@@ -859,6 +931,9 @@ export function createGitRepositoryAdapter(
 				}
 				const commitId = requireObjectId(committed.stdout, "candidate commit");
 				const proof = await runGit(["cat-file", "commit", commitId]);
+				// Timeout classification must precede stdout consumption: a truncated
+				// timed-out read is transient, not a candidate mismatch.
+				if (proof.timedOut) return { status: "refused", reason: "timed_out" };
 				const separator = proof.stdout.indexOf("\n\n");
 				const headers = proof.stdout.slice(0, separator).split("\n");
 				const provedTree = headers.find((header) => header.startsWith("tree "))?.slice(5);
@@ -867,7 +942,6 @@ export function createGitRepositoryAdapter(
 					.map((header) => header.slice(7));
 				const provedMessage = proof.stdout.slice(separator + 2);
 				if (
-					proof.timedOut ||
 					proof.exitCode !== 0 ||
 					separator < 0 ||
 					provedTree !== treeId ||
@@ -887,17 +961,53 @@ export function createGitRepositoryAdapter(
 				if (advanced.exitCode !== 0) {
 					return { status: "refused", reason: "local_main_moved" };
 				}
+				// Deletion records need the repo's null object id: 40 zeros under
+				// sha1, 64 under sha256; a wrong width makes update-index refuse.
+				let nullObjectId: string | undefined;
 				for (const ownedPath of request.ownedPaths) {
-					const entry = await readTreeEntry(runGit, treeId, ownedPath.path);
+					// After update-ref, every failure in this loop must preserve commit
+					// evidence as a structured outcome instead of a raw throw.
+					const entry = await readTreeEntry(
+						runGit,
+						treeId,
+						ownedPath.path,
+					).catch(() => undefined);
+					if (entry === undefined) {
+						return {
+							status: "committed_incomplete",
+							reason: "index_update_failed",
+							commitId,
+							treeId,
+						};
+					}
+					if (!entry && nullObjectId === undefined) {
+						const objectFormat = await runGit([
+							"rev-parse",
+							"--show-object-format",
+						]);
+						nullObjectId =
+							!objectFormat.timedOut &&
+							objectFormat.exitCode === 0 &&
+							objectFormat.stdout.trim() === "sha256"
+								? "0".repeat(64)
+								: "0".repeat(40);
+					}
 					const indexInfo = entry
 						? `${entry.mode} ${entry.objectId}\t${entry.path}\0`
-						: `0 ${"0".repeat(40)}\t${ownedPath.path}\0`;
+						: `0 ${nullObjectId ?? "0".repeat(40)}\t${ownedPath.path}\0`;
 					const updated = await runGit(
 						["update-index", "-z", "--index-info"],
 						indexInfo,
 					);
 					if (updated.timedOut || updated.exitCode !== 0) {
-						throw new Error("local main advanced but owned index update failed");
+						// Local main already advanced; a raw throw here would strand the
+						// commit evidence. Surface a structured outcome instead.
+						return {
+							status: "committed_incomplete",
+							reason: "index_update_failed",
+							commitId,
+							treeId,
+						};
 					}
 				}
 				return { status: "committed", commitId, treeId };
@@ -937,23 +1047,35 @@ async function reconcileAtomicClose(input: {
 		input.fetchExactRef(input.remote, input.ledgerRef),
 	]);
 	if (main.status === "failed" || ledger.status === "failed") return "unknown";
-	const mainExpected =
-		main.commit === input.mainCommit ||
-		(await isAncestor(
-			input.runGit,
-			input.mainCommit,
-			main.commit,
-			input.timeoutMs,
-		));
-	const ledgerExpected =
-		ledger.commit === input.ledgerCommit ||
-		(await isAncestor(
-			input.runGit,
-			input.ledgerCommit,
-			ledger.commit,
-			input.timeoutMs,
-		));
-	if (mainExpected && ledgerExpected) return "closed";
+	const mainAncestry =
+		main.commit === input.mainCommit
+			? ("yes" as const)
+			: await isAncestor(
+					input.runGit,
+					input.mainCommit,
+					main.commit,
+					input.timeoutMs,
+				);
+	const ledgerAncestry =
+		ledger.commit === input.ledgerCommit
+			? ("yes" as const)
+			: await isAncestor(
+					input.runGit,
+					input.ledgerCommit,
+					ledger.commit,
+					input.timeoutMs,
+				);
+	if (mainAncestry === "yes" && ledgerAncestry === "yes") return "closed";
+	// Unknown ancestry proves nothing; the outcome stays push_pending rather
+	// than escalating a transient local failure to host_contract_breach.
+	if (
+		mainAncestry === "timed_out" ||
+		mainAncestry === "unknown" ||
+		ledgerAncestry === "timed_out" ||
+		ledgerAncestry === "unknown"
+	) {
+		return "unknown";
+	}
 	if (
 		main.commit === input.expectedMainHead &&
 		ledger.commit === input.expectedLedgerGeneration
@@ -1054,6 +1176,12 @@ function scrubbedAmbientEnvironment(): NodeJS.ProcessEnv {
 	return environment;
 }
 
+/**
+ * `merge-base --is-ancestor` is tri-state: exit 0 proves ancestry, exit 1
+ * proves non-ancestry, and a timeout or any other exit proves nothing. Callers
+ * must never treat "unknown" as "no" — that misclassifies transient failures
+ * as contract breaches.
+ */
 async function isAncestor(
 	runGit: (
 		args: readonly string[],
@@ -1062,12 +1190,15 @@ async function isAncestor(
 	ancestor: string,
 	descendant: string,
 	timeoutMs: number,
-): Promise<boolean> {
+): Promise<"yes" | "no" | "timed_out" | "unknown"> {
 	const result = await runGit(
 		["merge-base", "--is-ancestor", ancestor, descendant],
 		timeoutMs,
 	);
-	return result.exitCode === 0 && !result.timedOut;
+	if (result.timedOut) return "timed_out";
+	if (result.exitCode === 0) return "yes";
+	if (result.exitCode === 1) return "no";
+	return "unknown";
 }
 
 async function assertNoConfiguredPushRefspec(
