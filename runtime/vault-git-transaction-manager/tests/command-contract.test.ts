@@ -28,6 +28,7 @@ import { renderVaultGitHelp, runVaultGitForTest } from "../src/cli.ts";
 import {
 	VAULT_GIT_CHANGED_STATES,
 	VAULT_GIT_COMMANDS_CONTRACT_ID,
+	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_RESULT_CONTRACT_ID,
 	VAULT_GIT_RETRY_SAFETIES,
 	VAULT_GIT_TRANSACTION_PHASES,
@@ -163,8 +164,8 @@ describe("vault-git command contract", () => {
 });
 
 describe("vault-git U1 read-only runtime", () => {
-	test("routes no args to one bounded read-only dashboard action", () => {
-		const run = runVaultGitForTest([], { runId: "run-dashboard" });
+	test("routes no args to one bounded read-only dashboard action", async () => {
+		const run = await runVaultGitForTest([], { runId: "run-dashboard" });
 		expect(run.exitCode).toBe(0);
 		expect(run.stderr).toBe("");
 		expect(
@@ -172,13 +173,13 @@ describe("vault-git U1 read-only runtime", () => {
 				.trim()
 				.split("\n")
 				.filter((line) => line.startsWith("next:")),
-		).toEqual(["next: wait_for_runtime"]);
+		).toEqual(["next: inspect_configured_vault"]);
 		expect(run.stdout).toContain("write_permission: denied");
 		expect(run.stdout).toContain("changed_state: none");
 	});
 
-	test("status JSON exposes the complete safe lifecycle result", () => {
-		const run = runVaultGitForTest(["status", "--json"], {
+	test("status JSON exposes the complete safe lifecycle result", async () => {
+		const run = await runVaultGitForTest(["status", "--json"], {
 			runId: "run-status",
 		});
 		expect(run.exitCode).toBe(0);
@@ -191,49 +192,49 @@ describe("vault-git U1 read-only runtime", () => {
 				contract_id: VAULT_GIT_RESULT_CONTRACT_ID,
 				command: "status",
 				outcome: "read_only",
-				phase: "unavailable",
+				phase: "blocked",
 				write_permission: "denied",
 				changed_state: "none",
-				retry_safety: "same_input_safe",
-				next_action: { id: "wait_for_runtime" },
+				retry_safety: "same_input_unsafe",
+				next_action: { id: "inspect_configured_vault" },
 			},
-			continuation: { next_action_id: "wait_for_runtime" },
+			continuation: { next_action_id: "inspect_configured_vault" },
 		});
-		expect(envelope.data.blockers).toEqual(["runtime_unavailable"]);
+		expect(envelope.data.blockers).toEqual(["vault_unconfigured"]);
 		expect(JSON.stringify(envelope)).not.toMatch(
 			/\/Users\/|\/private\/|capability/i,
 		);
 	});
 
-	test("every mutating station refuses explicitly without reporting a change", () => {
-		for (const argv of [
-			["begin"],
-			["join"],
-			["complete"],
-			["repair"],
+	test("every mutating station refuses explicitly without reporting a change", async () => {
+		for (const [caseIndex, argv] of [
+			["begin", "--event", "note_created", "--path", "notes/a.md"],
+			["join", "--transaction-id", "txn_00000000000000000000000000000000", "--path", "notes/a.md"],
+			["complete", "--transaction-id", "txn_00000000000000000000000000000000", "--summary", "docs(vault): record note"],
+			["repair", "resume", "--transaction-id", "txn_00000000000000000000000000000000"],
 			["tidy", "now"],
 			["janitor"],
-		] as const) {
-			const run = runVaultGitForTest([...argv, "--json"], {
-				runId: `run-${argv.join("-")}`,
+		].entries()) {
+			const run = await runVaultGitForTest([...argv, "--json"], {
+				runId: `run-mutating-${caseIndex}`,
 			});
 			expect(run.exitCode).toBe(1);
 			const envelope = JSON.parse(run.stdout);
 			expect(envelope).toMatchObject({
 				status: "error",
-				error: { code: "runtime_unavailable", retryable: false },
+					error: { code: "vault_unconfigured", retryable: false },
 				data: {
-					outcome: "unavailable",
+					outcome: "refused",
 					write_permission: "denied",
 					changed_state: "none",
-					next_action: { id: "inspect_status" },
+					next_action: { id: "inspect_configured_vault" },
 				},
 			});
 		}
 	});
 
-	test("usage-failure JSON never echoes private path values", () => {
-		const rejectedEnum = runVaultGitForTest(
+	test("usage-failure JSON never echoes private path values", async () => {
+		const rejectedEnum = await runVaultGitForTest(
 			["begin", "--event", "/Users/example/private-vault", "--json"],
 			{ runId: "run-usage-event" },
 		);
@@ -244,7 +245,7 @@ describe("vault-git U1 read-only runtime", () => {
 			/\/Users\/|\/private\//,
 		);
 
-		const unknownCommand = runVaultGitForTest(
+		const unknownCommand = await runVaultGitForTest(
 			["/Users/example/private-vault", "--json"],
 			{ runId: "run-usage-unknown" },
 		);
@@ -256,8 +257,8 @@ describe("vault-git U1 read-only runtime", () => {
 		expect(unknownEnvelope.data.command).toBe("status");
 	});
 
-	test("usage-failure JSON attributes the alias command, not a flag value", () => {
-		const run = runVaultGitForTest(["--transaction-id", "t1", "--json"], {
+	test("usage-failure JSON attributes the alias command, not a flag value", async () => {
+		const run = await runVaultGitForTest(["--transaction-id", "t1", "--json"], {
 			runId: "run-usage-alias",
 		});
 		expect(run.exitCode).toBe(2);
@@ -275,8 +276,17 @@ describe("vault-git U1 read-only runtime", () => {
 			parseVaultGitInvocation(["join", "--capability-fd", "owner-secret"]),
 		).toThrow("numeric inherited file descriptor");
 		expect(() =>
+			parseVaultGitInvocation(["join", "--capability-fd", "65"]),
+		).toThrow("from 3 through 64");
+		expect(() =>
 			parseVaultGitInvocation(["join", "--capability", "secret"]),
 		).toThrow("Unsupported flag");
+	});
+
+	test("repair without an engine-owned action is a usage failure", () => {
+		expect(() => parseVaultGitInvocation(["repair", "--json"])).toThrow(
+			`repair requires one action: ${VAULT_GIT_REPAIR_ACTIONS.join(", ")}`,
+		);
 	});
 
 	test("result construction rejects literals outside package vocabulary", () => {
@@ -303,10 +313,10 @@ describe("vault-git U1 read-only runtime", () => {
 });
 
 describe("vault-git Branch Station runtime coverage", () => {
-	test("preview and doctor stay read-only through the runtime in json and plain output", () => {
+	test("preview and doctor stay read-only through the runtime in json and plain output", async () => {
 		for (const command of ["preview", "doctor"] as const) {
 			const station = stationById(`${command}.read_only`);
-			const json = runVaultGitForTest([command, "--json"], {
+			const json = await runVaultGitForTest([command, "--json"], {
 				runId: `run-${command}-json`,
 			});
 			expect(json.exitCode).toBe(station.expectedExitCode);
@@ -319,16 +329,16 @@ describe("vault-git Branch Station runtime coverage", () => {
 					contract_id: station.expectedResultContractId,
 					command,
 					outcome: "read_only",
-					phase: "unavailable",
+					phase: "blocked",
 					write_permission: "denied",
 					changed_state: "none",
-					retry_safety: "same_input_safe",
-					next_action: { id: "wait_for_runtime" },
+					retry_safety: "same_input_unsafe",
+					next_action: { id: "inspect_configured_vault" },
 				},
-				continuation: { next_action_id: "wait_for_runtime" },
+				continuation: { next_action_id: "inspect_configured_vault" },
 			});
 
-			const plain = runVaultGitForTest([command], {
+			const plain = await runVaultGitForTest([command], {
 				runId: `run-${command}-plain`,
 			});
 			expect(plain.exitCode).toBe(station.expectedExitCode);
@@ -337,11 +347,11 @@ describe("vault-git Branch Station runtime coverage", () => {
 			expect(plain.stdout).toContain("outcome: read_only");
 			expect(plain.stdout).toContain("write_permission: denied");
 			expect(plain.stdout).toContain("changed_state: none");
-			expect(plain.stdout).toContain("next: wait_for_runtime");
+			expect(plain.stdout).toContain("next: inspect_configured_vault");
 		}
 	});
 
-	test("usage failures land on the invalid_usage stations with exit 2", () => {
+	test("usage failures land on the invalid_usage stations with exit 2", async () => {
 		const cases = [
 			{ argv: ["status", "--force"], stationId: "status.invalid_usage" },
 			{ argv: ["tidy"], stationId: "tidy.invalid_usage" },
@@ -350,7 +360,7 @@ describe("vault-git Branch Station runtime coverage", () => {
 			const station = stationById(stationId);
 			expect(station.expectedActionId).toBe("change_input");
 
-			const json = runVaultGitForTest([...argv, "--json"], {
+			const json = await runVaultGitForTest([...argv, "--json"], {
 				runId: `run-${stationId}`,
 			});
 			expect(json.exitCode).toBe(station.expectedExitCode);
@@ -368,7 +378,7 @@ describe("vault-git Branch Station runtime coverage", () => {
 				station.expectedContinuationId,
 			);
 
-			const plain = runVaultGitForTest(argv, {
+			const plain = await runVaultGitForTest(argv, {
 				runId: `run-${stationId}-plain`,
 			});
 			expect(plain.exitCode).toBe(station.expectedExitCode);
@@ -377,9 +387,9 @@ describe("vault-git Branch Station runtime coverage", () => {
 		}
 	});
 
-	test("commands --json round-trips full discovery through main", () => {
+	test("commands --json round-trips full discovery through main", async () => {
 		const station = stationById("commands.discovery");
-		const run = runVaultGitForTest(["commands", "--json"], {
+		const run = await runVaultGitForTest(["commands", "--json"], {
 			runId: "run-commands-discovery",
 		});
 		expect(run.exitCode).toBe(station.expectedExitCode);
@@ -401,25 +411,25 @@ describe("vault-git Branch Station runtime coverage", () => {
 		expect(envelope.continuation.next_action_id).toBe("inspect_commands");
 	});
 
-	test("help routing exits 0 through main for --help, -h, and help <command>", () => {
-		const root = runVaultGitForTest(["--help"], { runId: "run-help-root" });
+	test("help routing exits 0 through main for --help, -h, and help <command>", async () => {
+		const root = await runVaultGitForTest(["--help"], { runId: "run-help-root" });
 		expect(root.exitCode).toBe(0);
 		expect(root.stderr).toBe("");
 		expect(root.stdout).toContain("vault-git tidy now");
 
-		const short = runVaultGitForTest(["-h"], { runId: "run-help-short" });
+		const short = await runVaultGitForTest(["-h"], { runId: "run-help-short" });
 		expect(short.exitCode).toBe(0);
 		expect(short.stderr).toBe("");
 		expect(short.stdout).toContain("read-only dashboard");
 
-		const named = runVaultGitForTest(["help", "begin"], {
+		const named = await runVaultGitForTest(["help", "begin"], {
 			runId: "run-help-begin",
 		});
 		expect(named.exitCode).toBe(0);
 		expect(named.stderr).toBe("");
 		expect(named.stdout).toContain("vault-git begin");
 
-		const bare = runVaultGitForTest(["help"], { runId: "run-help-bare" });
+		const bare = await runVaultGitForTest(["help"], { runId: "run-help-bare" });
 		expect(bare.exitCode).toBe(0);
 		expect(bare.stderr).toBe("");
 		expect(bare.stdout).toContain("vault-git tidy now");
@@ -557,7 +567,12 @@ function argvForFlag(
 	command: (typeof VAULT_GIT_COMMANDS)[number],
 	flag: string,
 ): string[] {
-	const argv = command === "tidy" ? [command, "now"] : [command];
+	const argv =
+		command === "tidy"
+			? [command, "now"]
+			: command === "repair"
+				? [command, flag === "--prior-writer-stopped" ? "stale-lease-takeover" : "resume"]
+				: [command];
 	switch (flag) {
 		case "--capability-fd":
 			return [...argv, flag, "7"];
@@ -568,7 +583,7 @@ function argvForFlag(
 		case "--summary":
 			return [...argv, flag, "docs(vault): record example"];
 		case "--transaction-id":
-			return [...argv, flag, "txn-example"];
+			return [...argv, flag, "txn_00000000000000000000000000000000"];
 		default:
 			return [...argv, flag];
 	}

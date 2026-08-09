@@ -53,6 +53,10 @@ import {
 	setupContractEntries,
 	setupContracts,
 } from "../runtime/setup/src/command-contract.ts";
+import {
+	VAULT_GIT_COMMANDS,
+	vaultGitContracts,
+} from "../runtime/vault-git-transaction-manager/src/command-contract.ts";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -115,6 +119,7 @@ const packageRoots = {
 	browserConnect: join(repoRoot, "runtime/browser-connect"),
 	browserUse: join(repoRoot, "skills/browser-use"),
 	setup: join(repoRoot, "runtime/setup"),
+	vaultGit: join(repoRoot, "runtime/vault-git-transaction-manager"),
 } as const;
 
 /**
@@ -127,6 +132,7 @@ const sourceEntries = {
 	browserConnect: join(repoRoot, "runtime/browser-connect/src/cli.ts"),
 	browserUse: join(repoRoot, "skills/browser-use/src/browser-use.ts"),
 	setup: join(repoRoot, "runtime/setup/src/cli.ts"),
+	vaultGit: join(repoRoot, "runtime/vault-git-transaction-manager/src/cli.ts"),
 } as const;
 
 /**
@@ -2407,6 +2413,72 @@ describe("command entrypoint integration: setup", () => {
 		const data = envelopeData(envelope, result);
 		expect(data.contract_id, describeRun(result)).toBe("setup.result");
 		expect(data.station, describeRun(result)).toBe("doctor.invalid_usage");
+	});
+});
+
+describe("command entrypoint integration: vault-git", () => {
+	const packageScripts = readPackageScripts(packageRoots.vaultGit);
+
+	test("derives the complete vault-git command set and package entrypoint", () => {
+		expect(Object.keys(vaultGitContracts)).toEqual([...VAULT_GIT_COMMANDS]);
+		expect(packageScripts["vault-git"]).toBe("bun run src/cli.ts");
+	});
+
+	test(
+		"keeps package help and source discovery aligned with live contracts",
+		async () => {
+			const help = await runCommand(
+				runners.packageCwd({
+					packageRoot: packageRoots.vaultGit,
+					script: "vault-git",
+					args: ["--help"],
+					label: "vault-git --help (package-cwd)",
+				}),
+			);
+			expect(help.exitCode, describeRun(help)).toBe(0);
+			for (const command of VAULT_GIT_COMMANDS) {
+				expect(help.stdout, describeRun(help)).toContain(
+					vaultGitContracts[command].usage[0] ?? command,
+				);
+			}
+
+			const commands = await runCommand(
+				runners.source({
+					sourcePath: sourceEntries.vaultGit,
+					args: ["commands", "--json"],
+					label: "vault-git commands --json (source)",
+				}),
+			);
+			const data = expectOkEnvelope(
+				commands,
+				"vault-git.command-discovery",
+			);
+			expect(Object.keys(data.commands as object), describeRun(commands)).toEqual(
+				[...VAULT_GIT_COMMANDS],
+			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test("repair without an action is one structured usage failure", async () => {
+		const result = await runCommand(
+			runners.packageCwd({
+				packageRoot: packageRoots.vaultGit,
+				script: "vault-git",
+				args: ["repair", "--json"],
+				label: "vault-git repair missing action (package-cwd)",
+			}),
+		);
+		expect(result.exitCode, describeRun(result)).toBe(2);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status, describeRun(result)).toBe("error");
+		expect(
+			(envelope.error as Record<string, unknown>).code,
+			describeRun(result),
+		).toBe("invalid_usage");
+		expect(JSON.stringify(envelope), describeRun(result)).toContain(
+			"engine-owned repair action",
+		);
 	});
 });
 

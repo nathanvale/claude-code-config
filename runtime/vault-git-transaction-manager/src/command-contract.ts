@@ -85,19 +85,34 @@ const discoveryResultContract = {
 	schema_version: VAULT_GIT_SCHEMA_VERSION,
 } as const;
 
-const actionSummaries: Record<VaultGitNextActionId, string> = {
-	wait_for_runtime: "Wait for the transaction runtime implementation before writing.",
-	inspect_status: "Inspect the read-only lifecycle status.",
-	inspect_commands: "Use the discovered command metadata to choose a safe surface.",
-	change_input: "Correct the command arguments and retry parsing.",
-};
-
 /** Runtime action affordances shared by discovery and envelopes. */
 export const vaultGitActions = VAULT_GIT_NEXT_ACTION_IDS.map((id) => ({
 	id,
-	summary: actionSummaries[id],
-	sideEffects: ["read", "check"],
+	summary: actionSummary(id),
+	sideEffects: actionSideEffects(id),
 })) as readonly (CommandFacadeActionAffordance & { id: VaultGitNextActionId })[];
+
+function actionSummary(id: VaultGitNextActionId): string {
+	if (id === "wait_for_runtime") return "Wait for the remaining runtime owner before writing.";
+	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
+	if (id === "change_input") return "Correct the command arguments and retry parsing.";
+	return `Continue with the ${id.replaceAll("_", " ")} action.`;
+}
+
+function actionSideEffects(
+	id: VaultGitNextActionId,
+): readonly ("read" | "check" | "network" | "write")[] {
+	return new Set<VaultGitNextActionId>([
+		"complete_transaction",
+		"resume_writing",
+		"run_repair",
+		"retry_push",
+		"retry_remote",
+		"begin_transaction",
+	]).has(id)
+		? ["read", "check", "network", "write"]
+		: ["read", "check"];
+}
 
 const actionAffordances = { continuations: vaultGitActions } as const;
 const diagnosticsUsage = "[--run-id <id>] [--quiet] [--verbose] [--debug]";
@@ -106,6 +121,12 @@ const jsonFlag = {
 } as const;
 const noInputFlag = {
 	"--no-input": { type: "boolean", description: "Disable interactive input." },
+} as const;
+const priorWriterStoppedFlag = {
+	"--prior-writer-stopped": {
+		type: "boolean",
+		description: "Attest that the prior writer has stopped before stale takeover.",
+	},
 } as const;
 const transactionIdFlag = {
 	"--transaction-id": {
@@ -121,7 +142,7 @@ const capabilityFdFlag = {
 } as const;
 const previewExemption = {
 	reason:
-		"The separate read-only preview surface owns planning; this scaffold refuses before any write.",
+		"The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
 } as const;
 
 const expectedFlags = {
@@ -137,7 +158,13 @@ const expectedFlags = {
 	status: ["--json"],
 	preview: ["--json", "--transaction-id"],
 	doctor: ["--json", "--transaction-id"],
-	repair: ["--json", "--no-input", "--transaction-id", "--capability-fd"],
+	repair: [
+		"--json",
+		"--no-input",
+		"--transaction-id",
+		"--capability-fd",
+		"--prior-writer-stopped",
+	],
 	tidy: ["--json", "--no-input"],
 	janitor: ["--json", "--no-input"],
 	commands: ["--json"],
@@ -207,8 +234,8 @@ export function defineVaultGitCommandContracts<
 export const vaultGitContracts = defineVaultGitCommandContracts({
 	begin: {
 		script: "vault-git",
-		summary: "Request one transaction admission; unavailable until the ledger and receipt units land.",
-		usage: [`vault-git begin [--event <event>] [--path <path>] [--no-input] [--json] ${diagnosticsUsage}`],
+		summary: "Acquire one fenced transaction and issue separate private owner and join capabilities.",
+		usage: [`vault-git begin --event <event> --path <path> [--path <path>] [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "agent",
 		mutation: "remote_write",
@@ -237,7 +264,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	join: {
 		script: "vault-git",
 		summary: "Join an outer transaction and add owned paths without owner authority.",
-		usage: [`vault-git join [--transaction-id <id>] [--capability-fd <fd>] [--path <path>] [--no-input] [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git join --transaction-id <id> --path <path> [--path <path>] [--capability-fd <fd>] [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "agent",
 		mutation: "local_write",
@@ -254,7 +281,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	complete: {
 		script: "vault-git",
 		summary: "Complete one owner-authorized transaction through verified atomic publication.",
-		usage: [`vault-git complete [--transaction-id <id>] [--capability-fd <fd>] [--summary <subject>] [--no-input] [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git complete --transaction-id <id> --summary <subject> [--capability-fd <fd>] [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "agent",
 		mutation: "remote_write",
@@ -321,7 +348,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	repair: {
 		script: "vault-git",
 		summary: "Run only a doctor-classified deterministic repair with owner authority.",
-		usage: [`vault-git repair [${VAULT_GIT_REPAIR_ACTIONS.join("|")}] [--transaction-id <id>] [--capability-fd <fd>] [--no-input] [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git repair <${VAULT_GIT_REPAIR_ACTIONS.join("|")}> --transaction-id <id> [--capability-fd <fd>] [--prior-writer-stopped] [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
 		mutation: "recovery",
@@ -332,7 +359,13 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		interactivity: "none",
 		resultContract: lifecycleResultContract,
 		actionAffordances,
-		flags: { ...jsonFlag, ...noInputFlag, ...transactionIdFlag, ...capabilityFdFlag },
+		flags: {
+			...jsonFlag,
+			...noInputFlag,
+			...transactionIdFlag,
+			...capabilityFdFlag,
+			...priorWriterStoppedFlag,
+		},
 		exitCodes: vaultGitExitCodes,
 	},
 	tidy: {
@@ -427,6 +460,8 @@ export interface ParsedVaultGitInvocation {
 	readonly summary?: string;
 	/** Optional repair action. */
 	readonly repairAction?: VaultGitRepairAction;
+	/** Explicit stale-takeover operator attestation. */
+	readonly priorWriterStopped: boolean;
 	/** Bare invocation alias marker. */
 	readonly alias?: "no_args";
 }
@@ -462,6 +497,7 @@ export function parseVaultGitInvocation(
 	let event: VaultGitEventType | undefined;
 	let summary: string | undefined;
 	let repairAction: VaultGitRepairAction | undefined;
+	let priorWriterStopped = false;
 	const paths: string[] = [];
 
 	for (; index < argv.length; index += 1) {
@@ -484,6 +520,10 @@ export function parseVaultGitInvocation(
 				rejectBooleanValue(flag, inlineValue);
 				noInput = true;
 				break;
+			case "--prior-writer-stopped":
+				rejectBooleanValue(flag, inlineValue);
+				priorWriterStopped = true;
+				break;
 			case "--transaction-id": {
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
@@ -493,8 +533,15 @@ export function parseVaultGitInvocation(
 			case "--capability-fd": {
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
-				if (!/^\d+$/.test(parsed) || Number(parsed) < 3 || !Number.isSafeInteger(Number(parsed))) {
-					throw usageError("--capability-fd requires a numeric inherited file descriptor of 3 or greater");
+				if (
+					!/^\d+$/.test(parsed) ||
+					Number(parsed) < 3 ||
+					Number(parsed) > 64 ||
+					!Number.isSafeInteger(Number(parsed))
+				) {
+					throw usageError(
+						"--capability-fd requires a numeric inherited file descriptor from 3 through 64",
+					);
 				}
 				capabilityFd = Number(parsed);
 				break;
@@ -520,10 +567,21 @@ export function parseVaultGitInvocation(
 		}
 	}
 	if (command === "commands" && !json) throw usageError("commands requires --json");
+	if (command === "repair" && repairAction === undefined) {
+		throw usageError(
+			`repair requires one action: ${VAULT_GIT_REPAIR_ACTIONS.join(", ")}`,
+		);
+	}
+	if (priorWriterStopped && repairAction !== "stale-lease-takeover") {
+		throw usageError(
+			"--prior-writer-stopped is accepted only for repair stale-lease-takeover",
+		);
+	}
 	return {
 		command,
 		json,
 		noInput,
+		priorWriterStopped,
 		paths,
 		...(transactionId === undefined ? {} : { transactionId }),
 		...(capabilityFd === undefined ? {} : { capabilityFd }),
