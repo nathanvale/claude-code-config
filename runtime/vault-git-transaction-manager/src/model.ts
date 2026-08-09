@@ -68,8 +68,7 @@ export const VAULT_GIT_RETRY_SAFETIES = [
 ] as const;
 
 /** Safety of retrying the exact same input. */
-export type VaultGitRetrySafety =
-	(typeof VAULT_GIT_RETRY_SAFETIES)[number];
+export type VaultGitRetrySafety = (typeof VAULT_GIT_RETRY_SAFETIES)[number];
 
 /** Stable blocker vocabulary shared by status, doctor, repair, and Janitor. */
 export const VAULT_GIT_BLOCKER_IDS = [
@@ -82,6 +81,9 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"push_pending",
 	"lease_active",
 	"lease_stale",
+	"ledger_malformed",
+	"lease_generation_stale",
+	"lease_owner_unknown",
 	"remote_moved",
 	"receipt_conflict",
 	"host_contract_breach",
@@ -132,14 +134,20 @@ export const VAULT_GIT_NEXT_ACTION_IDS = [
 /** One safe continuation selected for the current result. */
 export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];
 
+/** Exact remote branch used as the append-only lease sequencer. */
+export const VAULT_GIT_LEDGER_REF =
+	"refs/heads/vault-system/transaction-ledger" as const;
+
 /** Schema version for package-owned JSON results. */
 export const VAULT_GIT_SCHEMA_VERSION = "1" as const;
 
 /** Lifecycle result contract id. */
-export const VAULT_GIT_RESULT_CONTRACT_ID = "vault-git.lifecycle-result" as const;
+export const VAULT_GIT_RESULT_CONTRACT_ID =
+	"vault-git.lifecycle-result" as const;
 
 /** Machine command-discovery result contract id. */
-export const VAULT_GIT_COMMANDS_CONTRACT_ID = "vault-git.command-discovery" as const;
+export const VAULT_GIT_COMMANDS_CONTRACT_ID =
+	"vault-git.command-discovery" as const;
 
 /** Exactly one safe continuation for a command result. */
 export interface VaultGitNextAction {
@@ -215,7 +223,11 @@ export function createVaultGitLifecycleResult(
 	for (const blocker of input.blockers) {
 		assertLiteral("blocker", blocker, VAULT_GIT_BLOCKER_IDS);
 	}
-	assertLiteral("next_action.id", input.next_action.id, VAULT_GIT_NEXT_ACTION_IDS);
+	assertLiteral(
+		"next_action.id",
+		input.next_action.id,
+		VAULT_GIT_NEXT_ACTION_IDS,
+	);
 	if (input.next_action.summary.trim().length === 0) {
 		throw new Error("next_action.summary must not be empty");
 	}
