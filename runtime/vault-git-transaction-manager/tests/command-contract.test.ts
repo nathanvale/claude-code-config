@@ -468,6 +468,7 @@ describe("vault-git KTD16 boundaries", () => {
 		expect(graph.get("remote-ledger.ts")?.external).toEqual(["node:crypto"]);
 		expect(graph.get("git-adapter.ts")?.external).toEqual([
 			"node:child_process",
+			"node:crypto",
 		]);
 	});
 

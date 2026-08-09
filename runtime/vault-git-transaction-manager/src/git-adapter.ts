@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import { VAULT_GIT_LEDGER_REF } from "./model.ts";
 import type {
@@ -65,9 +66,50 @@ export function createGitAdapter(
 			args,
 			cwd: options.repositoryPath,
 			stdin: input,
-			env: { GIT_TERMINAL_PROMPT: "0", ...env },
+			// LC_ALL=C keeps diagnostic messages stable for error classification.
+			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
 			timeoutMs,
 		});
+
+	const fetchExactRef = async (
+		remote: string,
+		sourceRef: string,
+	): Promise<
+		| { readonly status: "ok"; readonly commit: string }
+		| {
+				readonly status: "failed";
+				readonly reason: "remote_unavailable" | "timed_out";
+		  }
+	> => {
+		// FETCH_HEAD is repository-wide mutable state, so concurrent operations
+		// in one clone could read each other's fetched commit. A fresh private
+		// ref per call isolates the read: the refspec is non-force, and a
+		// never-before-seen ref always fast-forwards from nothing.
+		const tempRef = `refs/vault-git/fetch-${randomUUID().replaceAll("-", "")}`;
+		const fetched = await runGit(
+			["fetch", "--no-tags", remote, `${sourceRef}:${tempRef}`],
+			options.timeouts.fetchMs,
+		);
+		if (fetched.timedOut || fetched.exitCode !== 0) {
+			await runGit(["update-ref", "-d", tempRef], options.timeouts.localMs);
+			return {
+				status: "failed",
+				reason: fetched.timedOut ? "timed_out" : "remote_unavailable",
+			};
+		}
+		const resolved = await runGit(
+			["rev-parse", "--verify", `${tempRef}^{commit}`],
+			options.timeouts.localMs,
+		);
+		await runGit(["update-ref", "-d", tempRef], options.timeouts.localMs);
+		if (resolved.exitCode !== 0 || resolved.timedOut) {
+			return {
+				status: "failed",
+				reason: resolved.timedOut ? "timed_out" : "remote_unavailable",
+			};
+		}
+		return { status: "ok", commit: resolved.stdout.trim() };
+	};
 
 	const readLedger = async (
 		remote: string,
@@ -97,25 +139,9 @@ export function createGitAdapter(
 			return { status: "failed", reason: "remote_unavailable" };
 		}
 
-		const fetched = await runGit(
-			["fetch", "--no-tags", remote, ledgerRef],
-			options.timeouts.fetchMs,
-		);
-		if (fetched.timedOut) return { status: "failed", reason: "timed_out" };
-		if (fetched.exitCode !== 0) {
-			return { status: "failed", reason: "remote_unavailable" };
-		}
-		const generationResult = await runGit(
-			["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
-			options.timeouts.localMs,
-		);
-		if (generationResult.exitCode !== 0 || generationResult.timedOut) {
-			return {
-				status: "failed",
-				reason: generationResult.timedOut ? "timed_out" : "remote_unavailable",
-			};
-		}
-		const generation = generationResult.stdout.trim();
+		const fetched = await fetchExactRef(remote, ledgerRef);
+		if (fetched.status === "failed") return fetched;
+		const generation = fetched.commit;
 		const parentsResult = await runGit(
 			["show", "-s", "--format=%P", generation],
 			options.timeouts.localMs,
@@ -130,15 +156,21 @@ export function createGitAdapter(
 			["show", `${generation}:ledger.json`],
 			options.timeouts.localMs,
 		);
+		if (contentResult.timedOut) return { status: "failed", reason: "timed_out" };
+		// content:null is reserved for a completed command proving the file is
+		// absent; any other nonzero exit is a failed read, not missing content.
+		if (
+			contentResult.exitCode !== 0 &&
+			!isMissingLedgerPath(contentResult.stderr)
+		) {
+			return { status: "failed", reason: "remote_unavailable" };
+		}
 		return {
 			status: "ok",
 			head: {
 				generation,
 				parents: parentsResult.stdout.trim().split(/\s+/).filter(Boolean),
-				content:
-					contentResult.exitCode === 0 && !contentResult.timedOut
-						? contentResult.stdout
-						: null,
+				content: contentResult.exitCode === 0 ? contentResult.stdout : null,
 			},
 		};
 	};
@@ -157,27 +189,9 @@ export function createGitAdapter(
 			if (advertised.exitCode !== 0) {
 				return { status: "failed", reason: "remote_unavailable" };
 			}
-			const fetched = await runGit(
-				["fetch", "--no-tags", remote, "refs/heads/main"],
-				options.timeouts.fetchMs,
-			);
-			if (fetched.timedOut) return { status: "failed", reason: "timed_out" };
-			if (fetched.exitCode !== 0) {
-				return { status: "failed", reason: "remote_unavailable" };
-			}
-			const remoteHeadResult = await runGit(
-				["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
-				options.timeouts.localMs,
-			);
-			if (remoteHeadResult.exitCode !== 0 || remoteHeadResult.timedOut) {
-				return {
-					status: "failed",
-					reason: remoteHeadResult.timedOut
-						? "timed_out"
-						: "remote_unavailable",
-				};
-			}
-			const remoteHead = remoteHeadResult.stdout.trim();
+			const fetched = await fetchExactRef(remote, "refs/heads/main");
+			if (fetched.status === "failed") return fetched;
+			const remoteHead = fetched.commit;
 			const localHeadResult = await runGit(
 				["rev-parse", "--verify", "refs/heads/main^{commit}"],
 				options.timeouts.localMs,
@@ -296,24 +310,26 @@ export function createGitAdapter(
 				],
 				options.timeouts.pushMs,
 			);
-			if (pushed.exitCode === 0)
+			if (pushed.exitCode === 0 && !pushed.timedOut)
 				return { status: "appended", generation: commit };
 
 			const current = await readLedger(request.remote, request.ledgerRef);
 			if (current.status === "ok" && current.head?.generation === commit) {
 				return { status: "appended", generation: commit };
 			}
+			if (pushed.timedOut) {
+				// A timed-out push may still land after this re-read observed the
+				// old generation; the remote outcome remains unknown.
+				return { status: "refused", reason: "timed_out" };
+			}
 			if (
 				current.status === "ok" &&
-				current.head?.generation !== request.expectedGeneration
+				(current.head?.generation ?? null) !== request.expectedGeneration
 			) {
 				return { status: "refused", reason: "remote_moved" };
 			}
 			if (current.status === "ok") {
-				return {
-					status: "refused",
-					reason: pushed.timedOut ? "timed_out" : "remote_unavailable",
-				};
+				return { status: "refused", reason: "remote_unavailable" };
 			}
 			return { status: "refused", reason: "remote_state_unknown" };
 		},
@@ -338,7 +354,7 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 			return new Promise((resolve) => {
 				const child = spawn(request.command, [...request.args], {
 					cwd: request.cwd,
-					env: { ...process.env, ...request.env },
+					env: { ...scrubbedAmbientEnvironment(), ...request.env },
 					stdio: ["pipe", "pipe", "pipe"],
 					shell: false,
 				});
@@ -370,13 +386,45 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 				deadline = setTimeout(() => {
 					timedOut = true;
 					child.kill("SIGTERM");
-					forceKill = setTimeout(() => child.kill("SIGKILL"), 250);
+					forceKill = setTimeout(() => {
+						child.kill("SIGKILL");
+						// A grandchild holding inherited stdio can keep "close" from
+						// ever emitting; bound the wait through the settled guard.
+						const fallback = setTimeout(() => finish(null), 1_000);
+						fallback.unref?.();
+					}, 250);
 				}, request.timeoutMs);
+				// EPIPE surfaces when the child exits before consuming stdin; an
+				// unhandled stream error would crash the process.
+				child.stdin.on("error", () => {});
 				if (request.stdin === undefined) child.stdin.end();
 				else child.stdin.end(request.stdin);
 			});
 		},
 	};
+}
+
+/**
+ * Ambient Git redirection variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*,
+ * GIT_INDEX_FILE, ...) can silently retarget spawned git away from the
+ * adapter-owned repository; only transport-auth and prompt variables survive.
+ */
+const PRESERVED_GIT_ENVIRONMENT = new Set([
+	"GIT_TERMINAL_PROMPT",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_ASKPASS",
+	"GIT_CONFIG_NOSYSTEM",
+]);
+
+function scrubbedAmbientEnvironment(): NodeJS.ProcessEnv {
+	const environment: NodeJS.ProcessEnv = { ...process.env };
+	for (const key of Object.keys(environment)) {
+		if (key.startsWith("GIT_") && !PRESERVED_GIT_ENVIRONMENT.has(key)) {
+			delete environment[key];
+		}
+	}
+	return environment;
 }
 
 async function isAncestor(
@@ -403,21 +451,56 @@ async function assertNoConfiguredPushRefspec(
 	remote: string,
 	timeoutMs: number,
 ): Promise<void> {
-	if (!/^[A-Za-z0-9._-]+$/.test(remote)) return;
-	const configured = await runGit(
-		["config", "--get-all", `remote.${remote}.push`],
+	// url.<base>.pushInsteadOf rewrites the push endpoint away from the
+	// fetch/ls-remote endpoint for named and URL-form remotes alike, defeating
+	// compare-and-swap observation.
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get-regexp", "^url\\..*\\.pushinsteadof$"],
+		"configured pushInsteadOf rewrites are not accepted for ledger writes",
 		timeoutMs,
 	);
+	// URL-form remotes cannot carry remote.<name>.* configuration; the explicit
+	// non-force refspec still constrains the push destination for them.
+	if (!/^[A-Za-z0-9._-]+$/.test(remote)) return;
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get-all", `remote.${remote}.push`],
+		"configured push refspecs are not accepted for ledger writes",
+		timeoutMs,
+	);
+	// remote.<name>.pushUrl diverges the push endpoint from the observed
+	// fetch endpoint, so the CAS re-read would inspect the wrong remote.
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get", `remote.${remote}.pushurl`],
+		"configured push URLs are not accepted for ledger writes",
+		timeoutMs,
+	);
+}
+
+async function refuseConfiguredValue(
+	runGit: (
+		args: readonly string[],
+		timeoutMs: number,
+	) => Promise<VaultGitProcessResult>,
+	args: readonly string[],
+	refusalMessage: string,
+	timeoutMs: number,
+): Promise<void> {
+	const configured = await runGit(args, timeoutMs);
 	if (configured.timedOut)
-		throw new Error("timed out while checking configured push refspecs");
+		throw new Error("timed out while checking configured push redirection");
 	if (configured.exitCode === 0 && configured.stdout.trim().length > 0) {
-		throw new Error(
-			"configured push refspecs are not accepted for ledger writes",
-		);
+		throw new Error(refusalMessage);
 	}
 	if (configured.exitCode !== 0 && configured.exitCode !== 1) {
-		throw new Error("could not validate configured push refspecs");
+		throw new Error("could not validate configured push redirection");
 	}
+}
+
+function isMissingLedgerPath(stderr: string): boolean {
+	return /does not exist in|exists on disk, but not in/.test(stderr);
 }
 
 function assertSafeRemote(remote: string): void {

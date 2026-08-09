@@ -9,6 +9,7 @@ import {
 } from "./model.ts";
 import type { VaultGitClockPort, VaultGitRemotePort } from "./ports.ts";
 
+/** Exact remote branch used as the append-only lease sequencer. */
 export { VAULT_GIT_LEDGER_REF } from "./model.ts";
 
 /** Dependencies required by remote lease engine functions. */
@@ -382,7 +383,7 @@ export async function validateRemoteLease(
 	request: ValidateRemoteLeaseRequest,
 ): Promise<ValidateRemoteLeaseResult> {
 	const observed = await observeRemoteLedger(engine, request);
-	if (observed.status === "refused") return quarantine(observed);
+	if (observed.status === "refused") return observed;
 	const generationFence = requireExpectedGeneration(
 		request.expectedGeneration,
 		observed.generation,
@@ -581,7 +582,10 @@ function appendFailure(
 			"Preserve local edits and inspect the winning ledger generation.",
 		);
 	}
-	if (reason === "remote_state_unknown") {
+	// A timed-out append leaves the remote outcome unknown: the pushed
+	// packfile may still land after the adapter's re-read, so the refusal
+	// must not claim changedState "none" or same-input retry safety.
+	if (reason === "remote_state_unknown" || reason === "timed_out") {
 		return refusal(
 			"remote_unavailable",
 			"operator_required",
@@ -624,10 +628,6 @@ function refusal(
 		hostDisposition: "quarantined",
 		...(diagnostics ? { diagnostics } : {}),
 	};
-}
-
-function quarantine(refused: RemoteLedgerRefusal): RemoteLedgerRefusal {
-	return { ...refused, hostDisposition: "quarantined" };
 }
 
 function toDocument(
@@ -717,7 +717,26 @@ function parseLedgerDocument(
 	) {
 		return null;
 	}
-	return value as unknown as LedgerDocument;
+	// Explicit construction: a future LedgerDocument field fails this compile
+	// until the guard list above learns to validate it.
+	return {
+		schema_version: value.schema_version,
+		operation: value.operation,
+		previous_generation: previousGeneration,
+		transitioned_at: value.transitioned_at,
+		lease: {
+			transaction_id: lease.transaction_id,
+			actor: lease.actor,
+			host: lease.host,
+			event: lease.event as VaultGitEventType,
+			owned_paths: lease.owned_paths.filter(isOwnedPath),
+			local_main_head: lease.local_main_head,
+			remote_main_head: lease.remote_main_head,
+			acquired_at: lease.acquired_at,
+			lease_duration_ms: lease.lease_duration_ms as number,
+			state: lease.state,
+		},
+	};
 }
 
 function validateAcquireRequest(request: AcquireRemoteLeaseRequest): void {

@@ -160,7 +160,13 @@ export type VaultGitLedgerAppendResult =
 				| "timed_out";
 	  };
 
-/** Single Git boundary used by remote-ledger engine logic. */
+/**
+ * Single Git boundary used by remote-ledger engine logic.
+ *
+ * Callers must serialize operations per repository clone: fetches avoid
+ * shared FETCH_HEAD by using private per-call refs, but local branch refs
+ * and the object database remain repository-wide shared state.
+ */
 export interface VaultGitRemotePort {
 	/** Fetch and compare exact local and upstream main refs. */
 	inspectMain(remote: string): Promise<VaultGitMainInspection>;

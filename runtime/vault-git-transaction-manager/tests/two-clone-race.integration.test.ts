@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createGitAdapter, createNodeProcessPort } from "../src/git-adapter.ts";
 import {
+	VAULT_GIT_LEDGER_REF,
 	acquireRemoteLease,
 	observeRemoteLedger,
 	releaseRemoteLease,
@@ -87,16 +88,27 @@ export async function runTwoCloneRace(
 			const refused = attempts.filter((result) => result.status === "refused");
 			expect(acquired).toHaveLength(1);
 			expect(refused).toHaveLength(1);
-			expect(refused[0]).toMatchObject({
-				blocker: "remote_moved",
-				changedState: "none",
-			});
+			const loser = refused[0];
+			if (!loser || loser.status !== "refused")
+				throw new Error("race had no fenced loser");
+			expect(loser.blocker).toBe("remote_moved");
+			expect(loser.changedState).toBe("none");
 			winners += acquired.length;
 			fenced += refused.length;
 
 			const winner = acquired[0];
 			if (!winner || winner.status !== "acquired")
 				throw new Error("race had no winner");
+
+			// Independent remote read outside both engines: the ledger tip must
+			// be exactly the winner's generation before release.
+			const remoteTip = git(root, [
+				"ls-remote",
+				remoteUrl,
+				VAULT_GIT_LEDGER_REF,
+			]).split("\t")[0];
+			expect(remoteTip).toBe(winner.generation);
+
 			const winnerEngine = winner.lease.host === "laptop" ? engineA : engineB;
 			const released = await releaseRemoteLease(winnerEngine, {
 				remote: "origin",

@@ -1,10 +1,15 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { createGitAdapter, createNodeProcessPort } from "../src/git-adapter.ts";
+import type {
+	VaultGitProcessPort,
+	VaultGitProcessResult,
+	VaultGitRemotePort,
+} from "../src/ports.ts";
 import {
 	VAULT_GIT_LEDGER_REF,
 	acquireRemoteLease,
@@ -86,6 +91,59 @@ describe("remote lease ledger", () => {
 			status: "ok",
 			head: { generation: released.generation, parents: [acquired.generation] },
 		});
+	});
+
+	test("admits exactly one winner when two clones bootstrap concurrently", async () => {
+		const fixture = await createFixture();
+		const engineA = createEngine(fixture.cloneA, "2026-08-09T00:00:00.000Z");
+		const engineB = createEngine(fixture.cloneB, "2026-08-09T00:00:00.000Z");
+		const [observedA, observedB] = await Promise.all([
+			observeRemoteLedger(engineA, { remote: "origin" }),
+			observeRemoteLedger(engineB, { remote: "origin" }),
+		]);
+		expect(observedA).toMatchObject({ status: "observed", generation: null });
+		expect(observedB).toMatchObject({ status: "observed", generation: null });
+
+		const attempts = await Promise.all([
+			acquireRemoteLease(engineA, {
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				ownedPaths: ["notes/a.md"],
+				leaseDurationMs: 60_000,
+			}),
+			acquireRemoteLease(engineB, {
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "agent-b",
+				host: "mac-mini",
+				event: "note_created",
+				ownedPaths: ["notes/b.md"],
+				leaseDurationMs: 60_000,
+			}),
+		]);
+		const acquired = attempts.filter((result) => result.status === "acquired");
+		const refused = attempts.filter((result) => result.status === "refused");
+		expect(acquired).toHaveLength(1);
+		expect(refused).toHaveLength(1);
+		const winner = acquired[0];
+		if (!winner || winner.status !== "acquired")
+			throw new Error("bootstrap race had no winner");
+		const loser = refused[0];
+		if (!loser || loser.status !== "refused")
+			throw new Error("bootstrap race had no fenced loser");
+		expect(loser.blocker).toBe("remote_moved");
+
+		// Independent ledger read straight from the bare remote, bypassing
+		// both engines: the remote tip must be the winner's generation.
+		const remoteTip = git(fixture.root, [
+			"ls-remote",
+			fixture.remote,
+			VAULT_GIT_LEDGER_REF,
+		]).split("\t")[0];
+		expect(remoteTip).toBe(winner.generation);
 	});
 
 	test("requires a human for active, stale, and unknown lease ownership", async () => {
@@ -170,8 +228,9 @@ describe("remote lease ledger", () => {
 		});
 		if (acquired.status !== "acquired")
 			throw new Error("fixture acquisition failed");
+		await mkdir(join(fixture.cloneA, "notes"), { recursive: true });
 		await writeFile(
-			join(fixture.cloneA, "notes-local-edit.md"),
+			join(fixture.cloneA, "notes", "local-edit.md"),
 			"preserve me\n",
 		);
 
@@ -213,8 +272,33 @@ describe("remote lease ledger", () => {
 			hostDisposition: "quarantined",
 		});
 		expect(
-			await Bun.file(join(fixture.cloneA, "notes-local-edit.md")).text(),
+			await Bun.file(join(fixture.cloneA, "notes", "local-edit.md")).text(),
 		).toBe("preserve me\n");
+	});
+
+	test("rejects operator takeover without one observed generation", async () => {
+		const unusedGit: VaultGitRemotePort = {
+			inspectMain: () => Promise.reject(new Error("not used")),
+			readLedger: () => Promise.reject(new Error("not used")),
+			appendLedgerCommit: () => Promise.reject(new Error("not used")),
+		};
+		await expect(
+			takeOverRemoteLease(
+				{
+					git: unusedGit,
+					clock: { now: () => new Date("2026-08-09T00:00:00.000Z") },
+				},
+				{
+					remote: "origin",
+					expectedGeneration: null,
+					actor: "operator",
+					host: "mac-mini",
+					event: "note_created",
+					ownedPaths: ["notes/recovery.md"],
+					leaseDurationMs: 60_000,
+				},
+			),
+		).rejects.toThrow("operator takeover requires one observed generation");
 	});
 
 	test("refuses unavailable remotes, malformed ledgers, and unsafe destinations", async () => {
@@ -313,6 +397,187 @@ describe("remote lease ledger", () => {
 		expect(
 			await observeRemoteLedger(configuredEngine, { remote: "origin" }),
 		).toMatchObject({ status: "observed", generation: null });
+
+		git(configuredFixture.cloneA, [
+			"config",
+			"--unset-all",
+			"remote.origin.push",
+		]);
+		git(configuredFixture.cloneA, [
+			"config",
+			"remote.origin.pushurl",
+			"https://example.invalid/elsewhere.git",
+		]);
+		await expect(
+			acquireRemoteLease(configuredEngine, {
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				ownedPaths: ["notes/a.md"],
+				leaseDurationMs: 60_000,
+			}),
+		).rejects.toThrow("configured push URLs");
+
+		git(configuredFixture.cloneA, [
+			"config",
+			"--unset",
+			"remote.origin.pushurl",
+		]);
+		git(configuredFixture.cloneA, [
+			"config",
+			"url.ssh://example.invalid/.pushInsteadOf",
+			"https://example.invalid/",
+		]);
+		await expect(
+			acquireRemoteLease(configuredEngine, {
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				ownedPaths: ["notes/a.md"],
+				leaseDurationMs: 60_000,
+			}),
+		).rejects.toThrow("configured pushInsteadOf");
+	});
+
+	test("classifies a timed-out append as unknown remote completion", async () => {
+		const generation = "a".repeat(40);
+		const mainHead = "b".repeat(40);
+		const transactionId = `txn_${"0".repeat(32)}`;
+		const timestamp = "2026-08-09T00:00:00.000Z";
+		const content = JSON.stringify({
+			schema_version: 1,
+			operation: "acquire",
+			previous_generation: null,
+			transitioned_at: timestamp,
+			lease: {
+				transaction_id: transactionId,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				owned_paths: ["notes/a.md"],
+				local_main_head: mainHead,
+				remote_main_head: mainHead,
+				acquired_at: timestamp,
+				lease_duration_ms: 60_000,
+				state: "held",
+			},
+		});
+		const git: VaultGitRemotePort = {
+			inspectMain: () => Promise.reject(new Error("not used")),
+			readLedger: () =>
+				Promise.resolve({
+					status: "ok",
+					head: { generation, parents: [], content },
+				}),
+			appendLedgerCommit: () =>
+				Promise.resolve({ status: "refused", reason: "timed_out" }),
+		};
+		const released = await releaseRemoteLease(
+			{ git, clock: { now: () => new Date(timestamp) } },
+			{ remote: "origin", expectedGeneration: generation, transactionId },
+		);
+		expect(released).toMatchObject({
+			status: "refused",
+			blocker: "remote_unavailable",
+			changedState: "partial",
+			retrySafety: "operator_required",
+			nextAction: { id: "preserve_local_edits" },
+			hostDisposition: "quarantined",
+		});
+	});
+
+	test("quarantines with partial change when push fails and the verification re-read fails", async () => {
+		const generation = "a".repeat(40);
+		const mainHead = "b".repeat(40);
+		const commit = "e".repeat(40);
+		const transactionId = `txn_${"0".repeat(32)}`;
+		const timestamp = "2026-08-09T00:00:00.000Z";
+		const content = JSON.stringify({
+			schema_version: 1,
+			operation: "acquire",
+			previous_generation: null,
+			transitioned_at: timestamp,
+			lease: {
+				transaction_id: transactionId,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				owned_paths: ["notes/a.md"],
+				local_main_head: mainHead,
+				remote_main_head: mainHead,
+				acquired_at: timestamp,
+				lease_duration_ms: 60_000,
+				state: "held",
+			},
+		});
+		let pushAttempted = false;
+		const port: VaultGitProcessPort = {
+			run(request): Promise<VaultGitProcessResult> {
+				const args = request.args;
+				const respond = (
+					overrides: Partial<VaultGitProcessResult> = {},
+				): Promise<VaultGitProcessResult> =>
+					Promise.resolve({
+						exitCode: 0,
+						stdout: "",
+						stderr: "",
+						timedOut: false,
+						...overrides,
+					});
+				if (args[0] === "push") {
+					pushAttempted = true;
+					return respond({ exitCode: 1, stderr: "error: failed to push" });
+				}
+				if (args[0] === "ls-remote") {
+					// The verification re-read after the failed push also fails,
+					// leaving the remote outcome unknown.
+					return pushAttempted
+						? respond({
+								exitCode: 128,
+								stderr: "fatal: unable to access remote",
+							})
+						: respond({ stdout: `${generation}\t${VAULT_GIT_LEDGER_REF}\n` });
+				}
+				if (args[0] === "config") return respond({ exitCode: 1 });
+				if (args[0] === "rev-parse") return respond({ stdout: `${generation}\n` });
+				if (args[0] === "hash-object")
+					return respond({ stdout: `${"c".repeat(40)}\n` });
+				if (args[0] === "mktree") return respond({ stdout: `${"d".repeat(40)}\n` });
+				if (args[0] === "commit-tree") return respond({ stdout: `${commit}\n` });
+				if (args[0] === "show" && args[1] === "-s") {
+					return respond({
+						stdout: args[3] === commit ? `${generation}\n` : "\n",
+					});
+				}
+				if (args[0] === "show") return respond({ stdout: content });
+				return respond();
+			},
+		};
+		const engine = {
+			git: createGitAdapter({
+				repositoryPath: "/repository",
+				process: port,
+				timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			}),
+			clock: { now: () => new Date(timestamp) },
+		};
+		const released = await releaseRemoteLease(engine, {
+			remote: "origin",
+			expectedGeneration: generation,
+			transactionId,
+		});
+		expect(released).toMatchObject({
+			status: "refused",
+			blocker: "remote_unavailable",
+			changedState: "partial",
+			retrySafety: "operator_required",
+			nextAction: { id: "preserve_local_edits" },
+			hostDisposition: "quarantined",
+		});
 	});
 
 	test("refuses main states that are not exactly aligned", async () => {
