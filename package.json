@@ -28,6 +28,7 @@
     }
   },
   "scripts": {
+    "agent-attention": "python3 runtime/agent-attention/agent-attention.py",
     "biome:check": "biome check --diagnostic-level=error .",
     "biome:fix": "biome check --write .",
     "biome:format": "biome format --write .",
