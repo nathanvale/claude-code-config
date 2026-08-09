@@ -396,6 +396,36 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
+	if (command === "auth-login") {
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("auth login requires --handoff <path>.");
+		}
+		const service = stringField(flagValues["--service"]);
+		if (service === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(service)) {
+			throw usageError("auth login requires --service <id> as a safe slug.");
+		}
+		const allowedOrigin = stringField(flagValues["--allowed-origin"]);
+		let exactOrigin = false;
+		if (allowedOrigin !== undefined) {
+			try {
+				const parsedOrigin = new URL(allowedOrigin);
+				// https only: freeform auth login delivers real credentials into the
+				// page with no reviewed origin gate, so a cleartext http origin would
+				// expose the secret to on-path capture.
+				exactOrigin =
+					parsedOrigin.protocol === "https:" &&
+					parsedOrigin.origin === allowedOrigin;
+			} catch {
+				exactOrigin = false;
+			}
+		}
+		if (!exactOrigin) {
+			throw usageError(
+				"auth login requires --allowed-origin <origin> as an exact https origin.",
+			);
+		}
+	}
 	if (
 		command === "auth-binding-create" ||
 		command === "auth-binding-show" ||

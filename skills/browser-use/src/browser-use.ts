@@ -26,6 +26,7 @@ import {
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	emitCliDiagnostic,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	resetCliDiagnostics,
@@ -83,7 +84,6 @@ import type { BrowserUseDeliveryHook } from "./browser-use-confidential-field-de
 import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
 import {
 	type BrowserUseDevToolsRequest,
-	type BrowserUseDevToolsTransport,
 	type BrowserUseMintedVerifiedTarget,
 	mintBrowserUseVerifiedTarget,
 	resolveBrowserUseCdpTargetIdentity,
@@ -120,7 +120,14 @@ import {
 	revalidateAuthAttestation,
 } from "./browser-use-run-model";
 import { createBrowserUseAuthContract } from "./browser-use-auth";
-import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
+import {
+	type BrowserUseAuthBlockedCause,
+	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
+} from "./browser-use-auth-model";
+import {
+	acquireBrowserUseAuthAccess,
+	managedBrowserUseAuthAccessProvider,
+} from "./browser-use-auth-access";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -134,7 +141,6 @@ import {
 	USAGE_EXIT_CODE,
 	actionFor,
 	redactUnsafeText,
-	stripControlChars,
 	stringField,
 	targetEnvelopeIdOf,
 	truncateText,
@@ -223,7 +229,6 @@ import {
 import {
 	type HandoffFacts,
 	parseHandoffFacts,
-	readHandoffFacts,
 	runTargetsList,
 } from "./browser-use-discovery";
 import {
@@ -258,7 +263,10 @@ import {
 	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
-import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
+import {
+	runBrowserUseFreeformAuth,
+	runBrowserUseRunbookAuth,
+} from "./browser-use-runbook-auth";
 import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import {
 	applyRunbookDraft,
@@ -831,6 +839,17 @@ async function executeCommand(input: {
 		parsed.family === "auth" &&
 		!parsed.dryRun
 	) {
+		if (parsed.subcommand === "login") {
+			return runOpenEndedAuthLogin({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
 		if (parsed.subcommand.startsWith("binding ")) {
 			return runAuthBinding({
 				parsed,
@@ -3782,6 +3801,8 @@ async function recordTaskRunOutcome(
 		runbookNextStep?: number;
 		heldClaim?: LeaseWriteClaim;
 		structuredResults?: readonly BrowserUseRunStructuredResult[];
+		dataExtra?: Readonly<Record<string, unknown>>;
+		plainExtra?: readonly string[];
 	} = {},
 ): Promise<number> {
 	const artifacts = options.artifacts ?? [];
@@ -3872,11 +3893,13 @@ async function recordTaskRunOutcome(
 		...(resolvedMapping.kind === "confirmed"
 			? { executed_steps: resolvedMapping.executedSteps }
 			: {}),
+		...(options.dataExtra ?? {}),
 	};
 	const plainExtra = [
 		`selected_lane=${route.lane_id}`,
 		`lane_source=${route.source}`,
 		`external_effect=${externalEffect}`,
+		...(options.plainExtra ?? []),
 	];
 
 	// The one pending stdout/stderr emission this outcome produces: the shared-run
@@ -5065,6 +5088,420 @@ function createWebSocketTargetTransport(
 	};
 }
 
+async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<number> {
+	const flags = input.parsed.flagValues;
+	const serviceId = stringField(flags["--service"]) ?? "";
+	const allowedOrigin = stringField(flags["--allowed-origin"]) ?? "";
+	const runFlag = stringField(flags["--run"]);
+	const acquiredHandoff = await acquireVerifiedHandoff({
+		command: input,
+		mintAdapterId: undefined,
+		subject: "an authentication transaction",
+	});
+	if (!acquiredHandoff.ok) return acquiredHandoff.exitCode;
+	const { handoff, rawHandoffData } = acquiredHandoff;
+	if (runFlag !== undefined && runFlag !== handoff.runId) {
+		return emitTaskRunFailure(input, runFlag, {
+			code: "task_run_handoff_lane_mismatch",
+			message:
+				"the requested run id differs from the Verified Handoff Envelope run id.",
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	let run: BrowserUseSharedRun;
+	// Resume when a run id is supplied, and also — because the run id is fully
+	// determined by the handoff — when a bare retry lands on a run a prior blocked
+	// attempt already persisted. Both cases load and re-validate the same run;
+	// only a fresh run id creates.
+	const resumeFlag = runFlag ?? handoff.runId;
+	const existing = await loadSharedRun(store.deps, resumeFlag);
+	if (existing.ok) {
+		if (isTerminalRunState(existing.run.state)) {
+			return emitPlatformStoreFailure(input, {
+				code: "run_terminal_truth",
+				message: `run ${existing.run.run_id} holds terminal truth ${existing.run.state}; terminal truth never re-enters execution.`,
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		}
+		const mismatch = checkSameLaneResumeForTaskRun(
+			existing.run,
+			handoff.adapter,
+			handoff,
+		);
+		if (
+			mismatch !== undefined ||
+			existing.run.handoff_evidence_id !== handoff.handoffEvidenceId
+		) {
+			return emitTaskRunFailure(
+				input,
+				resumeFlag,
+				mismatch ?? {
+					code: "task_run_handoff_lane_mismatch",
+					message:
+						"the supplied handoff does not match the run's verified attachment evidence.",
+					actionId: "supply_matching_handoff",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "change_input",
+				},
+			);
+		}
+		run = existing.run;
+	} else if (runFlag !== undefined) {
+		// An explicit --run that does not resolve is a caller error, not a create.
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(existing.code, existing.message),
+		);
+	} else {
+		const created = await createSharedRun(store.deps, {
+			run_id: handoff.runId,
+			state: "running",
+			task_intent: "routine-automation",
+			environment_profile: {
+				environment: handoff.environmentName,
+				profile: handoff.environmentProfile,
+			},
+			adapter_id: handoff.adapter,
+			handoff_evidence_id: handoff.handoffEvidenceId,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		if (!created.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(created.code, created.message),
+			);
+		}
+		run = created.run;
+	}
+
+	// Refuse before browser dispatch when no identity-proof owner is present.
+	// Freeform has no human-attestation fallback (the reviewed-runbook route's
+	// third option), so without a proof owner the login engine would submit real
+	// credentials it can never prove authenticated — a real login attempt that
+	// dead-ends at unknown-post-submit-state. Plan R30 requires an identity basis
+	// of session-identity-proof or human-identity-attestation, never neither, so
+	// this refusal enforces the invariant before any credential leaves the vault.
+	// Checked after terminal-truth and handoff-evidence validation so those
+	// stronger refusals still take precedence; no proof owner is ever wired in
+	// production today, so this is the freeform production path until a native
+	// Session Identity Proof owner exists.
+	if (
+		input.runtime.authenticatedStateProof === undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined
+	) {
+		const blocked = await persistFreeformAuthBlock({
+			deps: store.deps,
+			run,
+			cause: "freeform-identity-proof-required",
+		});
+		if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+		return emitSharedRunSuccess({
+			command: input,
+			run: blocked.run,
+			continuationId:
+				BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[
+					"freeform-identity-proof-required"
+				].continuation.next_action_id,
+			dataExtra: {
+				entry_mode: "freeform",
+				auth_access_path: "unavailable",
+				external_effect: "none",
+			},
+		});
+	}
+
+	const dispatchLease = await acquireLease(store.deps, {
+		key: leaseKeyForRun(run),
+		holderId: `freeform-auth-${run.run_id}`,
+		ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+	});
+	if (!dispatchLease.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(
+				dispatchLease.code,
+				dispatchLease.code === "lease_held"
+					? dispatchLease.continuation.summary
+					: dispatchLease.message,
+			),
+		);
+	}
+	const dispatchClaim: LeaseWriteClaim = {
+		fencing_token: dispatchLease.lease.fencing_token,
+		activation_epoch: dispatchLease.lease.activation_epoch,
+		holderId: dispatchLease.lease.holder_id,
+	};
+	let accessLease:
+		| Extract<
+				Awaited<ReturnType<typeof acquireBrowserUseAuthAccess>>,
+				{ ok: true }
+		  >["lease"]
+		| undefined;
+	let authTransport: CloseableTargetTransport | undefined;
+	try {
+		const access = await acquireBrowserUseAuthAccess({
+			now: input.runtime.now,
+			request: {
+				run_id: run.run_id,
+				service_id: serviceId,
+				environment: run.environment_profile.environment,
+				profile: run.environment_profile.profile,
+				allowed_origins: [allowedOrigin],
+				ttl_ms: 30_000,
+			},
+			...(input.runtime.authManagedAccess !== undefined
+				? { managed: input.runtime.authManagedAccess }
+				: input.runtime.authTokenRetrieval !== undefined
+					? {
+							managed: managedBrowserUseAuthAccessProvider({
+								tokenRetrieval: input.runtime.authTokenRetrieval,
+								now: input.runtime.now,
+							}),
+						}
+					: {}),
+			...(input.runtime.authUserPresentAccess === undefined
+				? {}
+				: { userPresent: input.runtime.authUserPresentAccess }),
+		});
+		if (!access.ok) {
+			const blocked = await persistFencedSharedRun(
+				store.deps,
+				run,
+				`freeform-auth-blocked-${run.run_id}`,
+				(current) => ({
+					...current,
+					state: "awaiting-auth",
+					continuation: access.continuation,
+				}),
+				dispatchClaim,
+			);
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+			return emitSharedRunSuccess({
+				command: input,
+				run: blocked.run,
+				continuationId: access.continuation.next_action_id,
+				dataExtra: {
+					entry_mode: "freeform",
+					auth_access_path: "unavailable",
+					external_effect: "none",
+				},
+			});
+		}
+		accessLease = access.lease;
+		const tokenRetrieval = accessLease.token_retrieval;
+		const provider = createBrowserUseAuthProvider({
+			store: store.deps,
+			tokenRetrieval,
+			attestationByDigest: attestationByDigestFrom(store.deps),
+		});
+		const activeAuthTransport =
+			input.runtime.authTransport?.() ??
+			input.runtime.runbookAuthTransport?.() ??
+			createWebSocketTargetTransport(
+				rawHandoffData as AgentBrowserVerifiedHandoff,
+			);
+		authTransport = activeAuthTransport;
+		const target = await resolveBrowserUseCdpTargetIdentity(
+			activeAuthTransport.transport,
+			{ expected_url: allowedOrigin, allowed_origins: [allowedOrigin] },
+		);
+		if (!target.ok) {
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run,
+				claim: dispatchClaim,
+				cause: target.cause,
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					target.cause,
+					"the current login wall could not be resolved to exactly one browser target on the allowed origin; close any duplicate tabs open on this origin so a single login target remains, then retry.",
+				),
+			);
+		}
+		const deliver = environmentLoginDeliveryHook({
+			tokenRetrieval,
+			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+		});
+		if (deliver === undefined) {
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run,
+				claim: dispatchClaim,
+				cause: "capability-loss",
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+			return emitPlatformStoreFailure(input, {
+				code: "auth_delivery_unavailable",
+				message:
+					"the acquired Browser Authentication authority has no confidential delivery helper.",
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		const authenticated = await runBrowserUseFreeformAuth(
+			{
+				store: store.deps,
+				provider,
+				implementation_integrity_key: `${handoff.adapter}:verified-handoff-v2`,
+				...(input.runtime.authApprovedBindingResolver === undefined &&
+				input.runtime.runbookApprovedBindingResolver === undefined
+					? {}
+					: {
+							resolveApprovedBinding:
+								input.runtime.authApprovedBindingResolver ??
+								input.runtime.runbookApprovedBindingResolver,
+						}),
+				login: {
+					observer: createBrowserUseCdpObserver(activeAuthTransport.transport),
+					proveTarget: async (proofInput) =>
+						await mintBrowserUseVerifiedTarget(
+							activeAuthTransport.transport,
+							proofInput,
+						),
+					tokenRetrieval,
+					deliver,
+					waitForPostActivation: async () =>
+						await new Promise<void>((resolve) => setTimeout(resolve, 50)),
+					...(input.runtime.authenticatedStateProof === undefined &&
+					input.runtime.runbookAuthenticatedStateProof === undefined
+						? {}
+						: {
+								proveAuthenticatedState:
+									input.runtime.authenticatedStateProof ??
+									input.runtime.runbookAuthenticatedStateProof,
+							}),
+				},
+				navigateToDeclaredTarget: async (navigation) =>
+					await navigateRunbookAuthTarget(
+						activeAuthTransport.transport,
+						navigation,
+					),
+			},
+			{
+				run,
+				dispatch_claim: dispatchClaim,
+				service_id: serviceId,
+				auth_context_ref: "interactive-login",
+				allowed_origins: [allowedOrigin],
+				expected_url: target.target.top_level_url,
+				observed_url: target.target.top_level_url,
+				target_id: target.target.target_id,
+				lane_id: handoff.adapter,
+			},
+		);
+		if (!authenticated.ok) {
+			if ("blocked" in authenticated) {
+				// A block reached after the login engine dispatched a credential
+				// submit (unknown-post-submit-state) means the real portal may
+				// already hold a submission — report the effect as unknown, never
+				// none, so a retrying caller does not double-submit.
+				const blockedExternalEffect =
+					authenticated.blocked.blocked_cause === "unknown-post-submit-state"
+						? "unknown"
+						: "none";
+				return emitSharedRunSuccess({
+					command: input,
+					run: authenticated.run,
+					continuationId:
+						authenticated.blocked.continuation.next_action_id,
+					dataExtra: {
+						entry_mode: "freeform",
+						auth_access_path: accessLease.access_path,
+						selected_lane: handoff.adapter,
+						external_effect: blockedExternalEffect,
+					},
+				});
+			}
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run: authenticated.run,
+				claim: dispatchClaim,
+				cause: "capability-loss",
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					authenticated.failure.code,
+					authenticated.failure.message,
+				),
+			);
+		}
+		return emitSharedRunSuccess({
+			command: input,
+			run: authenticated.run,
+			continuationId: "inspect_shared_run",
+			dataExtra: {
+				entry_mode: "freeform",
+				auth_access_path: accessLease.access_path,
+				selected_lane: handoff.adapter,
+				external_effect: "browser-authentication",
+			},
+		});
+	} finally {
+		await settleAuthCleanup("freeform-auth-transport", () =>
+			authTransport?.close(),
+		);
+		await settleAuthCleanup("freeform-auth-access-lease", async () =>
+			await accessLease?.release(),
+		);
+		await settleAuthCleanup("freeform-auth-dispatch-lease", async () =>
+			await releaseLease(store.deps, dispatchLease.lease),
+		);
+	}
+}
+
+async function persistFreeformAuthBlock(input: {
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	// Omitted by the pre-dispatch identity-proof gate, which runs before any
+	// dispatch lease exists; persistFencedSharedRun then self-acquires a
+	// short-lived lease to fence the write.
+	claim?: LeaseWriteClaim;
+	cause: BrowserUseAuthBlockedCause;
+}): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	const blocked = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[input.cause];
+	return await persistFencedSharedRun(
+		input.deps,
+		input.run,
+		`freeform-auth-blocked-${input.run.run_id}`,
+		(current) => ({
+			...current,
+			state: blocked.run_state,
+			continuation: structuredClone(blocked.continuation),
+		}),
+		input.claim,
+	);
+}
+
+async function settleAuthCleanup(
+	label: string,
+	cleanup: () => unknown | Promise<unknown>,
+): Promise<void> {
+	try {
+		await cleanup();
+	} catch {
+		emitCliDiagnostic("browser-use.cli", "debug", "auth-cleanup-refused", {
+			cleanup: label,
+		});
+	}
+}
+
 // Auth-delivery seam for `runbook run`. Built only when a Token Retrieval Port
 // exists. Every refusal carries the blocking cause and its repair continuation.
 function buildRunbookAuthDelivery(
@@ -5539,6 +5976,7 @@ async function runRunbookRun(
 	}
 	if (
 		plan.auth_context_ref !== undefined &&
+		input.runtime.authenticatedStateProof === undefined &&
 		input.runtime.runbookAuthenticatedStateProof === undefined &&
 		input.runtime.runbookHumanIdentityAttestation === undefined
 	) {
@@ -5782,6 +6220,12 @@ async function runRunbookRun(
 		store.deps,
 		dispatchLease.lease,
 	);
+	let runbookAccessLease:
+		| Extract<
+				Awaited<ReturnType<typeof acquireBrowserUseAuthAccess>>,
+				{ ok: true }
+		  >["lease"]
+		| undefined;
 	try {
 	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
 	// non-sensitive until confidential delivery participates. A confidential
@@ -5790,15 +6234,39 @@ async function runRunbookRun(
 	const guardResult = beginSensitiveRunGuard(run.run_id);
 	const guard = guardResult.ok ? guardResult.guard : undefined;
 
-	// Auth-delivery wiring (auth plan U11): the Browser Authentication provider is
-	// constructed ONLY when the runtime carries a native Token Retrieval Port
-	// (store + tokenRetrieval + the store-backed attestation lookup). On this
-	// (unsigned) machine the port is absent, so no seam is threaded and the engine
-	// fails a confidential runbook closed with a typed native-capability-absent
-	// repair pointer — never a public bypass. When the port exists, the provider
-	// builds the sensitive-interval delivery context the agent-browser executor
-	// routes each confidential fill through.
-	const tokenRetrieval = input.runtime.authTokenRetrieval;
+	// Acquire one bounded Browser Authentication authority for the whole reviewed
+	// run. The broker prefers managed service authority, then one user-present
+	// desktop session. Browser Use receives only the retrieval port; the provider
+	// still proves exactly-one-vault scope before any confidential delivery.
+	const authAccess =
+		plan.auth_context_ref === undefined
+			? undefined
+			: await acquireBrowserUseAuthAccess({
+					now: input.runtime.now,
+					request: {
+						run_id: run.run_id,
+						service_id: plan.service_id,
+						environment: run.environment_profile.environment,
+						profile: run.environment_profile.profile,
+						allowed_origins: plan.allowed_origins,
+						ttl_ms: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+					},
+					...(input.runtime.authManagedAccess !== undefined
+						? { managed: input.runtime.authManagedAccess }
+						: input.runtime.authTokenRetrieval !== undefined
+							? {
+									managed: managedBrowserUseAuthAccessProvider({
+										tokenRetrieval: input.runtime.authTokenRetrieval,
+										now: input.runtime.now,
+									}),
+								}
+							: {}),
+					...(input.runtime.authUserPresentAccess === undefined
+						? {}
+						: { userPresent: input.runtime.authUserPresentAccess }),
+				});
+	if (authAccess?.ok) runbookAccessLease = authAccess.lease;
+	const tokenRetrieval = runbookAccessLease?.token_retrieval;
 	const authProvider =
 		tokenRetrieval !== undefined
 			? createBrowserUseAuthProvider({
@@ -5818,7 +6286,19 @@ async function runRunbookRun(
 		const actionPolicyHash =
 			run.run_execution_binding?.action_registry_digest ??
 			run.run_execution_binding?.runbook_digest;
-		if (authProvider === undefined || tokenRetrieval === undefined) {
+		if (
+			authAccess?.ok !== true ||
+			authProvider === undefined ||
+			tokenRetrieval === undefined
+		) {
+			const continuation =
+				authAccess !== undefined && !authAccess.ok
+					? authAccess.continuation
+					: {
+							next_action_id: "enroll-browser-automation-token" as const,
+							summary:
+								"Enroll managed Browser Authentication authority or authorize one bounded desktop session, then retry the same run.",
+						};
 			return await recordTaskRunOutcome(
 				input,
 				store.deps,
@@ -5827,23 +6307,33 @@ async function runRunbookRun(
 				{
 					kind: "blocked",
 					state: "awaiting-auth",
-					continuation: {
-						next_action_id: "enroll-browser-automation-token",
-						summary: "Enroll or repair the Browser Automation service-account token.",
-					},
+					continuation,
 					mutationDispatched: false,
 					failure: {
 						code: "runbook_auth_capability_absent",
-						message: "runbook authentication requires the native Token Retrieval capability.",
+						message:
+							"runbook authentication requires one bounded managed or user-present access authority.",
 						actionId: "inspect_task_run_result",
 						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 						recoverability: "repair_state",
 					},
 				},
-				{ runbookNextStep: resumeFromStep, heldClaim: dispatchClaim },
+				{
+					runbookNextStep: resumeFromStep,
+					heldClaim: dispatchClaim,
+					dataExtra: {
+						entry_mode: "reviewed-runbook",
+						auth_access_path: "unavailable",
+					},
+					plainExtra: [
+						"entry_mode=reviewed-runbook",
+						"auth_access_path=unavailable",
+					],
+				},
 			);
 		}
 		const authTransport =
+			input.runtime.authTransport?.() ??
 			input.runtime.runbookAuthTransport?.() ??
 			createWebSocketTargetTransport(
 				rawHandoffData as AgentBrowserVerifiedHandoff,
@@ -5883,10 +6373,12 @@ async function runRunbookRun(
 					store: store.deps,
 					provider: authProvider,
 					implementation_integrity_key: "agent-browser:verified-handoff-v2",
-					...(input.runtime.runbookApprovedBindingResolver === undefined
+					...(input.runtime.authApprovedBindingResolver === undefined &&
+					input.runtime.runbookApprovedBindingResolver === undefined
 						? {}
 						: {
 								resolveApprovedBinding:
+									input.runtime.authApprovedBindingResolver ??
 									input.runtime.runbookApprovedBindingResolver,
 							}),
 					...(input.runtime.runbookHumanIdentityAttestation === undefined
@@ -5903,8 +6395,13 @@ async function runRunbookRun(
 						deliver,
 						waitForPostActivation: async () =>
 							await new Promise<void>((resolve) => setTimeout(resolve, 50)),
-						...(input.runtime.runbookAuthenticatedStateProof !== undefined
-							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
+						...(input.runtime.authenticatedStateProof !== undefined ||
+						input.runtime.runbookAuthenticatedStateProof !== undefined
+							? {
+									proveAuthenticatedState:
+										input.runtime.authenticatedStateProof ??
+										input.runtime.runbookAuthenticatedStateProof,
+								}
 							: {}),
 					},
 					navigateToDeclaredTarget: async (navigation) =>
@@ -5934,7 +6431,12 @@ async function runRunbookRun(
 						command: input,
 						run: authenticated.run,
 						continuationId: authenticated.blocked.continuation.next_action_id,
-						dataExtra: { selected_lane: "agent-browser", external_effect: "none" },
+						dataExtra: {
+							entry_mode: "reviewed-runbook",
+							auth_access_path: runbookAccessLease?.access_path,
+							selected_lane: "agent-browser",
+							external_effect: "none",
+						},
 					});
 				}
 				return emitPlatformStoreFailure(
@@ -6141,11 +6643,28 @@ async function runRunbookRun(
 			runbookNextStep: nextStep,
 			heldClaim: dispatchClaim,
 			structuredResults: outcome.structured_results ?? [],
+			...(runbookAccessLease === undefined
+				? {}
+				: {
+						dataExtra: {
+							entry_mode: "reviewed-runbook",
+							auth_access_path: runbookAccessLease.access_path,
+						},
+						plainExtra: [
+							"entry_mode=reviewed-runbook",
+							`auth_access_path=${runbookAccessLease.access_path}`,
+						],
+					}),
 		},
 	);
-	} finally {
-		const currentDispatchLease = await dispatchHeartbeat.stop();
-		await releaseLease(store.deps, currentDispatchLease);
+		} finally {
+			await settleAuthCleanup("runbook-auth-access-lease", async () =>
+				await runbookAccessLease?.release(),
+			);
+			await settleAuthCleanup("runbook-auth-dispatch-lease", async () => {
+				const currentDispatchLease = await dispatchHeartbeat.stop();
+				await releaseLease(store.deps, currentDispatchLease);
+			});
 	}
 }
 

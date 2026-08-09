@@ -5,6 +5,7 @@ import {
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
 } from "./browser-use-runtime";
+import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 import type {
 	McporterCommandInput,
@@ -67,13 +68,19 @@ export function makeRuntime(
  *
  * @param overrides - Hermetic runtime ports used by the test
  * @param seam - Native admission and token-executor fixture
+ * @param authenticatedStateProofOverride - Optional stronger proof owner fixture
  * @returns Runtime with the requested hermetic authority wiring
  */
 export async function createProductionBrowserUseRuntimeForTest(
 	overrides: Partial<BrowserUseRuntime> = {},
 	seam?: BrowserUseSecuritySeam,
+	authenticatedStateProofOverride?: BrowserUseAuthenticatedStateProof,
 ): Promise<BrowserUseRuntime> {
-	return await createProductionBrowserUseRuntimeInternal(overrides, seam);
+	return await createProductionBrowserUseRuntimeInternal(
+		overrides,
+		seam,
+		authenticatedStateProofOverride,
+	);
 }
 
 export type { BrowserUseSecuritySeam } from "./browser-use-runtime";
