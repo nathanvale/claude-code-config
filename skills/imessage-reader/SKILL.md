@@ -41,7 +41,9 @@ inside this skill.
    send`.
 7. After a send, report the returned acknowledgment honestly. A `sent` result
    proves Messages accepted the request, not that the recipient read or received
-   it. If the result is unknown, inspect the same target before any retry.
+   it. If the result is unknown, inspect the same target. If that inspection is
+   inconclusive, report the result as unknown and stop. Never retry
+   automatically. Any later `imsg send` requires fresh confirmation.
 
 ## Privacy And Safety
 
