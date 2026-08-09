@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, realpath, unlink } from "node:fs/promises";
+import { chmod, lstat, readdir, realpath, unlink } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -247,6 +247,50 @@ export function createGitAdapter(
 	};
 
 	return {
+		async probeAtomicPush(remote) {
+			try {
+				assertSafeRemote(remote);
+				await assertSafeRemoteTarget(
+					runGit,
+					remote,
+					options.timeouts.localMs,
+				);
+				await assertNoConfiguredPushRefspec(
+					runGit,
+					remote,
+					options.timeouts.localMs,
+				);
+			} catch {
+				return { status: "refused", reason: "unsafe_remote_configuration" };
+			}
+			const localMain = await runGit(
+				["rev-parse", "--verify", "refs/heads/main^{commit}"],
+				options.timeouts.localMs,
+			);
+			if (localMain.timedOut) return { status: "failed", reason: "timed_out" };
+			if (localMain.exitCode !== 0) {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			const head = requireObjectId(localMain.stdout, "local main");
+			const probed = await runGit(
+				[
+					"push",
+					...VAULT_GIT_ATOMIC_PUSH_FLAGS,
+					"--dry-run",
+					remote,
+					`${head}:refs/heads/main`,
+					`${head}:refs/heads/vault-system/atomic-capability-probe`,
+				],
+				options.timeouts.pushMs,
+			);
+			if (probed.timedOut) return { status: "failed", reason: "timed_out" };
+			if (probed.exitCode === 0) return { status: "supported" };
+			if (/does not support.*atomic|atomic push is not supported/i.test(probed.stderr)) {
+				return { status: "refused", reason: "atomic_push_unsupported" };
+			}
+			return { status: "failed", reason: "remote_unavailable" };
+		},
+
 		async inspectMain(remote): Promise<VaultGitMainInspection> {
 			assertSafeRemote(remote);
 			const advertised = await runGit(
@@ -707,6 +751,38 @@ export function createGitRepositoryAdapter(
 	};
 
 	return {
+		async inspectSafety() {
+			const hooksPath = await runGit(["config", "--local", "--get", "core.hooksPath"]);
+			if (hooksPath.timedOut || (hooksPath.exitCode !== 0 && hooksPath.exitCode !== 1)) {
+				return { status: "refused", reason: "configured_hooks_path" } as const;
+			}
+			if (hooksPath.exitCode === 0 && hooksPath.stdout.trim().length > 0) {
+				return { status: "refused", reason: "configured_hooks_path" } as const;
+			}
+			const credentialHelpers = await runGit([
+				"config",
+				"--local",
+				"--get-all",
+				"credential.helper",
+			]);
+			if (
+				credentialHelpers.timedOut ||
+				(credentialHelpers.exitCode !== 0 && credentialHelpers.exitCode !== 1) ||
+				(credentialHelpers.exitCode === 0 && credentialHelpers.stdout.trim().length > 0)
+			) {
+				return { status: "refused", reason: "credential_helper" } as const;
+			}
+			const hooksDirectory = await runGit(["rev-parse", "--git-path", "hooks"]);
+			if (hooksDirectory.timedOut || hooksDirectory.exitCode !== 0) {
+				return { status: "refused", reason: "repository_hook" } as const;
+			}
+			const hookNames = await readdir(resolve(options.repositoryPath, hooksDirectory.stdout.trim()));
+			if (hookNames.some((name) => !name.endsWith(".sample"))) {
+				return { status: "refused", reason: "repository_hook" } as const;
+			}
+			return { status: "safe" } as const;
+		},
+
 		async resolveCanonicalIdentity() {
 			const [configuredRoot, discoveredRoot, main] = await Promise.all([
 				realpath(options.repositoryPath),
@@ -1559,6 +1635,31 @@ async function isSafeOwnedPath(
 		if (metadata === null) break;
 	}
 	return true;
+}
+
+async function assertSafeRemoteTarget(
+	runGit: (
+		args: readonly string[],
+		timeoutMs: number,
+	) => Promise<VaultGitProcessResult>,
+	remote: string,
+	timeoutMs: number,
+): Promise<void> {
+	const configuredUrl = /^[A-Za-z0-9._-]+$/.test(remote)
+		? await runGit(["config", "--get", `remote.${remote}.url`], timeoutMs)
+		: null;
+	if (configuredUrl?.timedOut) throw new Error("timed out while checking remote URL");
+	if (configuredUrl && configuredUrl.exitCode !== 0) {
+		throw new Error("configured remote URL is unavailable");
+	}
+	const target = configuredUrl ? configuredUrl.stdout.trim() : remote;
+	if (
+		target.startsWith("ext::") ||
+		/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(target) ||
+		/[\r\n\0]/.test(target)
+	) {
+		throw new Error("remote URL uses an unsafe transport or embedded credentials");
+	}
 }
 
 function isMissingFilesystemEntry(error: unknown): boolean {

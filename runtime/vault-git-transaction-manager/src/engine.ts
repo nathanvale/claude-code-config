@@ -281,6 +281,16 @@ export function createVaultGitTransactionEngine(
 	}
 
 	async function proveIdentity(receipt?: VaultGitReceipt): Promise<VaultGitEngineResult | { localMainHead: string }> {
+		const safety = await options.repository.inspectSafety?.();
+		if (safety?.status === "refused") {
+			return refusal(
+				"human_required",
+				receipt?.phase ?? "blocked",
+				"host_contract_breach",
+				"request_operator_review",
+				`Remove unsafe repository-local Git configuration before continuing; admission found ${safety.reason}.`,
+			);
+		}
 		const resolved = await options.repository.resolveCanonicalIdentity();
 		if (resolved.identity !== options.repositoryIdentity || (receipt && resolved.localMainHead !== receipt.localMainHead)) {
 			return refusal("human_required", receipt?.phase ?? "blocked", "vault_identity_changed", "inspect_configured_vault", "Inspect configured vault identity before continuing.");
@@ -519,6 +529,27 @@ export function createVaultGitTransactionEngine(
 			}
 			const identity = await proveIdentity();
 			if ("status" in identity) return identity;
+			const atomicCapability = await options.ledger.git.probeAtomicPush?.(
+				input.remote,
+			);
+			if (atomicCapability?.status === "refused") {
+				return refusal(
+					"absent",
+					"blocked",
+					"host_contract_breach",
+					"request_operator_review",
+					`Use a remote with admitted atomic-push behavior; probe found ${atomicCapability.reason}.`,
+				);
+			}
+			if (atomicCapability?.status === "failed") {
+				return refusal(
+					"absent",
+					"blocked",
+					"remote_unavailable",
+					"inspect_status",
+					"Inspect remote availability before admission.",
+				);
+			}
 			const main = await options.ledger.git.inspectMain(input.remote);
 			if (main.status !== "ok" || main.alignment !== "aligned" || main.localHead === null || main.localHead !== identity.localMainHead) {
 				return refusal("absent", "blocked", main.status === "failed" ? "remote_unavailable" : alignmentBlocker(main.alignment), "inspect_status", "Inspect main alignment before admission.");
