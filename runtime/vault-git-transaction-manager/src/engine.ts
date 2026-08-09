@@ -33,6 +33,16 @@ import type {
 	VaultGitCapabilityRole,
 	VaultGitReceiptStore,
 } from "./store.ts";
+import {
+	createVaultGitDoctor,
+	type VaultGitDoctorInput,
+	type VaultGitDoctorResult,
+} from "./doctor.ts";
+import {
+	createVaultGitRepair,
+	type VaultGitRepairInput,
+	type VaultGitRepairResult,
+} from "./repair.ts";
 
 /** Dependencies for the transaction state machine. */
 export interface VaultGitTransactionEngineOptions {
@@ -142,6 +152,10 @@ export interface VaultGitTransactionEngine {
 	inspect(): Promise<VaultGitEngineResult>;
 	/** Record one owner-only durable phase transition. */
 	recordPhase(input: VaultGitRecordPhaseInput): Promise<VaultGitEngineResult>;
+	/** Reconcile receipt, local, and remote evidence without canonical mutation. */
+	doctor(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
+	/** Execute only one fresh doctor-classified deterministic repair. */
+	repair(input: VaultGitRepairInput): Promise<VaultGitRepairResult>;
 }
 
 /**
@@ -165,7 +179,18 @@ export interface VaultGitTransactionEngine {
 export function createVaultGitTransactionEngine(
 	options: VaultGitTransactionEngineOptions,
 ): VaultGitTransactionEngine {
+	const doctorEngine = createVaultGitDoctor(options);
+	const repairEngine = createVaultGitRepair(options);
 	async function loadReceipt(): Promise<VaultGitReceipt | VaultGitEngineResult | null> {
+		let quarantine: Awaited<ReturnType<VaultGitReceiptStore["readQuarantine"]>>;
+		try {
+			quarantine = await options.store.readQuarantine();
+		} catch {
+			return refusal("human_required", "human_required", "receipt_corrupt", "inspect_private_receipt", "Inspect private quarantine evidence with doctor.");
+		}
+		if (quarantine?.status === "quarantined") {
+			return refusal("superseded", "human_required", "host_quarantined", "reconcile_quarantine", "Reconcile preserved local evidence before clearing quarantine.");
+		}
 		const loaded = await options.store.load();
 		if (loaded.status === "absent") return null;
 		if (loaded.status !== "loaded") {
@@ -209,6 +234,14 @@ export function createVaultGitTransactionEngine(
 	}
 
 	return {
+		async doctor(input) {
+			return doctorEngine.diagnose(input);
+		},
+
+		async repair(input) {
+			return repairEngine.run(input);
+		},
+
 		async begin(input) {
 			validateBegin(input);
 			if (input.offline) {
@@ -528,7 +561,7 @@ export function createVaultGitTransactionEngine(
 				commitId: localCommit.commitId,
 				expectedMainCommit: localCommit.commitId,
 				pushOutcome: "unknown",
-				nextSafeAction: "retry_push",
+				nextSafeAction: "run_doctor",
 				recordedAt: closedAt,
 			});
 			try {
@@ -593,7 +626,7 @@ export function createVaultGitTransactionEngine(
 				await options.store.append(breach);
 				return refusal("human_required", breach.phase, "host_contract_breach", "request_operator_review", "Ask an operator to reconcile partial or unexpected remote objects.", "partial", "operator_required");
 			}
-			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "retry_push", "Reconcile exact remote refs before the owning host retries publication.", "push_pending");
+			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "run_doctor", "Run doctor to reconcile exact remote refs before any repair.", "push_pending");
 		},
 
 		async inspect() {
@@ -682,8 +715,8 @@ function stateForPhase(phase: VaultGitReceipt["phase"]): VaultGitTransactionStat
 	return null;
 }
 
-function nextForState(state: VaultGitTransactionState): VaultGitEngineNextActionId { return state === "push_pending" ? "retry_push" : state === "repairable" ? "run_repair" : state === "human_required" ? "request_operator_review" : "none"; }
-function summaryForState(state: VaultGitTransactionState): string { return state === "push_pending" ? "Retry publication only after remote reconciliation." : state === "repairable" ? "Run the recorded deterministic repair." : state === "human_required" ? "Ask an operator to inspect conflicting evidence." : "No transaction action remains."; }
+function nextForState(state: VaultGitTransactionState): VaultGitEngineNextActionId { return state === "push_pending" ? "run_doctor" : state === "repairable" ? "run_repair" : state === "human_required" ? "request_operator_review" : "none"; }
+function summaryForState(state: VaultGitTransactionState): string { return state === "push_pending" ? "Run doctor before selecting a publication repair." : state === "repairable" ? "Run the recorded deterministic repair." : state === "human_required" ? "Ask an operator to inspect conflicting evidence." : "No transaction action remains."; }
 
 function validateBegin(input: VaultGitBeginInput): void {
 	if (input.requestedPaths.length === 0) throw new Error("begin requires owned paths");

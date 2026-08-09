@@ -911,7 +911,7 @@ describe("complete transaction", () => {
 		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
 	});
 
-	test("a pending atomic close keeps durable push expectations and advertises retry", async () => {
+	test("a pending atomic close keeps durable push expectations and routes through doctor", async () => {
 		const fixture = await engineRepositoryFixture({ atomicCloseOutcome: "push_pending" });
 		const begun = await fixture.engine.begin({
 			event: "note_created",
@@ -937,7 +937,7 @@ describe("complete transaction", () => {
 			phase: "push_pending",
 			changedState: "partial",
 			blocker: "push_pending",
-			nextAction: { id: "retry_push" },
+			nextAction: { id: "run_doctor" },
 		});
 		const localMain = git(fixture.clone, "rev-parse", "refs/heads/main");
 		expect(localMain).not.toBe(fixture.mainHead);

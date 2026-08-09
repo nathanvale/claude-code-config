@@ -44,7 +44,7 @@ export interface RemoteLease {
 	readonly state: "held" | "released";
 }
 
-/** Input shared by acquisition and explicit operator takeover. */
+/** Input for ordinary acquisition after one released generation. */
 export interface AcquireRemoteLeaseRequest {
 	/** Named remote in the current clone. */
 	readonly remote: string;
@@ -82,6 +82,9 @@ export interface ValidateRemoteLeaseRequest {
 
 /** Input for an append-only release transition. */
 export type ReleaseRemoteLeaseRequest = ValidateRemoteLeaseRequest;
+
+/** Input for the audited operator abandonment of one exact stale lease. */
+export type SupersedeRemoteLeaseRequest = ValidateRemoteLeaseRequest;
 
 /** Writer posture after a ledger decision. */
 export type RemoteHostDisposition = "authoritative" | "quarantined";
@@ -188,6 +191,11 @@ export type ReleaseRemoteLeaseResult =
 	| RemoteLeaseReleasedResult
 	| RemoteLedgerRefusal;
 
+/** Complete audited superseding-abandon outcome. */
+export type SupersedeRemoteLeaseResult =
+	| RemoteLeaseReleasedResult
+	| RemoteLedgerRefusal;
+
 /** Complete fence-validation outcome. */
 export type ValidateRemoteLeaseResult =
 	| RemoteLeaseValidResult
@@ -195,7 +203,11 @@ export type ValidateRemoteLeaseResult =
 
 interface LedgerDocument {
 	readonly schema_version: 1;
-	readonly operation: "acquire" | "operator_takeover" | "release";
+	readonly operation:
+		| "acquire"
+		| "operator_takeover"
+		| "release"
+		| "superseding_abandon";
 	readonly previous_generation: string | null;
 	readonly transitioned_at: string;
 	readonly lease: {
@@ -323,57 +335,6 @@ export async function acquireRemoteLease(
 }
 
 /**
- * Replace a lease only through an explicit operator-authorized transition.
- *
- * @param engine - Git and time boundaries
- * @param request - Replacement binding and observed generation
- * @returns New fencing generation or a deterministic refusal
- * @throws When caller-owned binding input is structurally unsafe
- *
- * @example
- * ```typescript
- * const result = await takeOverRemoteLease(engine, request)
- * ```
- */
-export async function takeOverRemoteLease(
-	engine: RemoteLedgerEngine,
-	request: AcquireRemoteLeaseRequest,
-): Promise<AcquireRemoteLeaseResult> {
-	validateAcquireRequest(request);
-	if (request.expectedGeneration === null) {
-		throw new Error("operator takeover requires one observed generation");
-	}
-	const main = await requireAlignedMain(
-		engine,
-		request.remote,
-		request.pushPending ?? false,
-	);
-	if (main.status === "refused") return main;
-	const observed = await observeRemoteLedger(engine, request);
-	if (observed.status === "refused") return observed;
-	const generationFence = requireExpectedGeneration(
-		request.expectedGeneration,
-		observed.generation,
-	);
-	if (generationFence) return generationFence;
-	if (!observed.lease || observed.lease.state !== "held") {
-		return refusal(
-			"lease_owner_unknown",
-			"operator_required",
-			"request_operator_takeover",
-			"Inspect the current ledger owner before replacing authority.",
-		);
-	}
-	return appendHeldLease(
-		engine,
-		request,
-		main.localHead,
-		main.remoteHead,
-		"operator_takeover",
-	);
-}
-
-/**
  * Revalidate generation and transaction ownership before a write-capable phase.
  *
  * @param engine - Git and time boundaries
@@ -467,12 +428,62 @@ export async function releaseRemoteLease(
 	};
 }
 
+/**
+ * Append one audited abandonment of an exact stale held generation.
+ *
+ * Token validation and the human stopped-writer attestation stay in repair;
+ * this ledger owner performs only the fenced append-only transition.
+ *
+ * @param engine - Git and time boundaries
+ * @param request - Exact stale generation and transaction binding
+ * @returns Released generation or a quarantining refusal
+ * @throws Never for transport, generation, or ownership failures
+ *
+ * @example
+ * ```typescript
+ * const abandoned = await supersedeRemoteLease(engine, {
+ *   remote: "origin", expectedGeneration: generation, transactionId,
+ * })
+ * ```
+ */
+export async function supersedeRemoteLease(
+	engine: RemoteLedgerEngine,
+	request: SupersedeRemoteLeaseRequest,
+): Promise<SupersedeRemoteLeaseResult> {
+	const validated = await validateRemoteLease(engine, request);
+	if (validated.status === "refused") return validated;
+	const timestamp = engine.clock.now().toISOString();
+	const document = toDocument(
+		{ ...validated.lease, state: "released" },
+		"superseding_abandon",
+		request.expectedGeneration,
+		timestamp,
+	);
+	const appended = await engine.git.appendLedgerCommit({
+		remote: request.remote,
+		ledgerRef: VAULT_GIT_LEDGER_REF,
+		expectedGeneration: request.expectedGeneration,
+		content: `${JSON.stringify(document, null, 2)}\n`,
+		message: `vault-ledger: superseding-abandon ${request.transactionId}`,
+		author: validated.lease.actor,
+		timestamp,
+	});
+	if (appended.status === "refused") return appendFailure(appended.reason);
+	return {
+		status: "released",
+		generation: appended.generation,
+		transactionId: request.transactionId,
+		changedState: "remote",
+		hostDisposition: "quarantined",
+	};
+}
+
 async function appendHeldLease(
 	engine: RemoteLedgerEngine,
 	request: AcquireRemoteLeaseRequest,
 	localMainHead: string,
 	remoteMainHead: string,
-	operation: "acquire" | "operator_takeover",
+	operation: "acquire",
 ): Promise<AcquireRemoteLeaseResult> {
 	const timestamp = engine.clock.now().toISOString();
 	const lease: RemoteLease = {
@@ -714,7 +725,7 @@ function parseLedgerDocument(
 		!Number.isSafeInteger(lease.lease_duration_ms) ||
 		(lease.lease_duration_ms as number) <= 0 ||
 		(lease.state !== "held" && lease.state !== "released") ||
-		(value.operation === "release"
+		(value.operation === "release" || value.operation === "superseding_abandon"
 			? lease.state !== "released"
 			: lease.state !== "held")
 	) {
@@ -782,7 +793,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isOperation(value: unknown): value is LedgerDocument["operation"] {
 	return (
-		value === "acquire" || value === "operator_takeover" || value === "release"
+		value === "acquire" ||
+		value === "operator_takeover" ||
+		value === "release" ||
+		value === "superseding_abandon"
 	);
 }
 

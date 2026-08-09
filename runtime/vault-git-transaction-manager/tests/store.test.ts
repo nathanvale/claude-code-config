@@ -218,6 +218,44 @@ describe("private receipt store", () => {
 		expect(await store.validateCapability(first.receiptId, "join", new Uint8Array([1, 2, 3]))).toBe(true);
 	});
 
+	test("issues and atomically consumes one private doctor token without recording its bytes", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+		});
+		const proof = {
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			receiptId: `receipt_${"2".repeat(32)}`,
+			receiptRevision: 3,
+			proofFingerprint: "f".repeat(64),
+			issuedAt: "2026-08-09T00:00:00.000Z",
+		} as const;
+		const token = await store.issueDoctorToken(proof);
+		expect(await store.readDoctorToken(proof.transactionId, proof.ledgerGeneration)).toEqual(token);
+		const issuedName = (await readdir(store.paths.doctorTokens)).find((name) =>
+			name.endsWith(".issued.json"),
+		);
+		if (!issuedName) throw new Error("doctor issuance record missing");
+		const issued = await readFile(join(store.paths.doctorTokens, issuedName), "utf8");
+		expect(issued).not.toContain(Buffer.from(token).toString("hex"));
+		expect(
+			await store.consumeDoctorToken(
+				proof,
+				token,
+				"2026-08-09T00:00:01.000Z",
+			),
+		).toBe(true);
+		expect(
+			await store.consumeDoctorToken(
+				proof,
+				token,
+				"2026-08-09T00:00:02.000Z",
+			),
+		).toBe(false);
+	});
+
 	test("rejects duplicate history revisions instead of silently proceeding", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });

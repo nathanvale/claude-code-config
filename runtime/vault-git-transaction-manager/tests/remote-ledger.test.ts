@@ -15,7 +15,7 @@ import {
 	acquireRemoteLease,
 	observeRemoteLedger,
 	releaseRemoteLease,
-	takeOverRemoteLease,
+	supersedeRemoteLease,
 	validateRemoteLease,
 } from "../src/remote-ledger.ts";
 
@@ -214,7 +214,7 @@ describe("remote lease ledger", () => {
 		});
 	});
 
-	test("operator takeover fences completion and release without touching local edits", async () => {
+	test("superseding abandonment fences the old writer before a new acquisition", async () => {
 		const fixture = await createFixture();
 		const oldWriter = createEngine(fixture.cloneA, "2026-08-09T00:00:00.000Z");
 		const operator = createEngine(fixture.cloneB, "2026-08-09T00:01:00.000Z");
@@ -235,19 +235,28 @@ describe("remote lease ledger", () => {
 			"preserve me\n",
 		);
 
-		const takeover = await takeOverRemoteLease(operator, {
+		const abandoned = await supersedeRemoteLease(operator, {
 			remote: "origin",
 			expectedGeneration: acquired.generation,
+			transactionId: acquired.transactionId,
+		});
+		expect(abandoned).toMatchObject({
+			status: "released",
+			changedState: "remote",
+		});
+		if (abandoned.status !== "released") {
+			throw new Error("fixture abandonment failed");
+		}
+		const replacement = await acquireRemoteLease(operator, {
+			remote: "origin",
+			expectedGeneration: abandoned.generation,
 			actor: "operator",
 			host: "mac-mini",
 			event: "document_completed",
 			ownedPaths: ["notes/recovery.md"],
 			leaseDurationMs: 60_000,
 		});
-		expect(takeover).toMatchObject({
-			status: "acquired",
-			changedState: "remote",
-		});
+		expect(replacement.status).toBe("acquired");
 
 		const completionFence = await validateRemoteLease(oldWriter, {
 			remote: "origin",
@@ -277,29 +286,30 @@ describe("remote lease ledger", () => {
 		).toBe("preserve me\n");
 	});
 
-	test("rejects operator takeover without one observed generation", async () => {
+	test("refuses superseding abandonment without exact transaction ownership", async () => {
 		const unusedGit: VaultGitRemotePort = {
 			inspectMain: () => Promise.reject(new Error("not used")),
 			readLedger: () => Promise.reject(new Error("not used")),
 			appendLedgerCommit: () => Promise.reject(new Error("not used")),
 		};
-		await expect(
-			takeOverRemoteLease(
-				{
-					git: unusedGit,
-					clock: { now: () => new Date("2026-08-09T00:00:00.000Z") },
+		const refusal = await supersedeRemoteLease(
+			{
+				git: {
+					...unusedGit,
+					readLedger: async () => ({ status: "ok", head: null }),
 				},
-				{
-					remote: "origin",
-					expectedGeneration: null,
-					actor: "operator",
-					host: "mac-mini",
-					event: "note_created",
-					ownedPaths: ["notes/recovery.md"],
-					leaseDurationMs: 60_000,
-				},
-			),
-		).rejects.toThrow("operator takeover requires one observed generation");
+				clock: { now: () => new Date("2026-08-09T00:00:00.000Z") },
+			},
+			{
+				remote: "origin",
+				expectedGeneration: "a".repeat(40),
+				transactionId: `txn_${"0".repeat(32)}`,
+			},
+		);
+		expect(refusal).toMatchObject({
+			status: "refused",
+			blocker: "lease_generation_stale",
+		});
 	});
 
 	test("refuses unavailable remotes, malformed ledgers, and unsafe destinations", async () => {

@@ -11,6 +11,7 @@ import type {
 	VaultGitLedgerAppendRequest,
 	VaultGitLedgerAppendResult,
 	VaultGitLedgerReadResult,
+	VaultGitAtomicCloseReconciliation,
 	VaultGitCheckPort,
 	VaultGitMainInspection,
 	VaultGitOwnedPathInspection,
@@ -533,6 +534,74 @@ export function createGitAdapter(
 				ledgerCommit,
 			};
 		},
+
+		async reconcileAtomicClose(request) {
+			assertSafeRemote(request.remote);
+			if (!/^txn_[0-9a-f]{32}$/.test(request.transactionId)) {
+				throw new Error("transaction id must be one opaque public id");
+			}
+			assertLedgerRef(request.ledgerRef);
+			assertObjectId(request.expectedMainHead);
+			assertObjectId(request.mainCommit);
+			assertObjectId(request.expectedLedgerGeneration);
+			assertObjectId(request.ledgerCommit);
+			const reconciled = await reconcileAtomicClose({
+				runGit,
+				fetchExactRef,
+				remote: request.remote,
+				expectedMainHead: request.expectedMainHead,
+				mainCommit: request.mainCommit,
+				expectedLedgerGeneration: request.expectedLedgerGeneration,
+				ledgerCommit: request.ledgerCommit,
+				ledgerRef: request.ledgerRef,
+				timeoutMs: options.timeouts.localMs,
+			});
+			if (reconciled === "closed") {
+				const [mainPayload, ledgerPayload] = await Promise.all([
+					runGit(
+						["show", "-s", "--format=%B", request.mainCommit],
+						options.timeouts.localMs,
+					),
+					runGit(
+						["show", `${request.ledgerCommit}:ledger.json`],
+						options.timeouts.localMs,
+					),
+				]);
+				if (mainPayload.timedOut || ledgerPayload.timedOut) {
+					return { status: "unknown", reason: "timed_out" };
+				}
+				if (mainPayload.exitCode !== 0 || ledgerPayload.exitCode !== 0) {
+					return { status: "unknown", reason: "local_probe_failed" };
+				}
+				let ledgerDocument: unknown;
+				try {
+					ledgerDocument = JSON.parse(ledgerPayload.stdout);
+				} catch {
+					return { status: "host_contract_breach" };
+				}
+				if (
+					!mainPayload.stdout
+						.split(/\r?\n/)
+						.some(
+							(line) =>
+								line === `Vault-Transaction: ${request.transactionId}`,
+						) ||
+					!isMatchingReleasePayload(
+						ledgerDocument,
+						request.transactionId,
+						request.expectedLedgerGeneration,
+					)
+				) {
+					return { status: "host_contract_breach" };
+				}
+			}
+			return reconciled === "unknown"
+				? {
+						status: "unknown",
+						reason: "local_probe_failed",
+					} satisfies VaultGitAtomicCloseReconciliation
+				: { status: reconciled };
+		},
 	};
 }
 
@@ -778,6 +847,39 @@ export function createGitRepositoryAdapter(
 		captureUnrelatedState,
 
 		hashOwnedPaths,
+
+		async inspectLocalCommit(commitId) {
+			if (!/^[0-9a-f]{40,64}$/.test(commitId)) return { status: "missing" };
+			const inspected = await runGit([
+				"show",
+				"-s",
+				"--format=%H%x00%P%x00%B",
+				commitId,
+			]);
+			if (inspected.timedOut) {
+				return { status: "failed", reason: "timed_out" };
+			}
+			if (inspected.exitCode !== 0) return { status: "missing" };
+			const first = inspected.stdout.indexOf("\0");
+			const second = inspected.stdout.indexOf("\0", first + 1);
+			if (first < 0 || second < 0) {
+				return { status: "failed", reason: "probe_failed" };
+			}
+			const resolved = inspected.stdout.slice(0, first).trim();
+			if (resolved !== commitId) {
+				return { status: "failed", reason: "probe_failed" };
+			}
+			return {
+				status: "ok",
+				commitId: resolved,
+				parents: inspected.stdout
+					.slice(first + 1, second)
+					.trim()
+					.split(/\s+/)
+					.filter(Boolean),
+				message: inspected.stdout.slice(second + 1),
+			};
+		},
 
 		async commitExact(request) {
 			const localHead = await runGit([
@@ -1047,6 +1149,14 @@ async function reconcileAtomicClose(input: {
 		input.fetchExactRef(input.remote, input.ledgerRef),
 	]);
 	if (main.status === "failed" || ledger.status === "failed") return "unknown";
+	// Prove a clean rejection before inspecting objects that may exist only in
+	// the originating clone. Exact unchanged tips are the one retryable result.
+	if (
+		main.commit === input.expectedMainHead &&
+		ledger.commit === input.expectedLedgerGeneration
+	) {
+		return "unchanged";
+	}
 	const mainAncestry =
 		main.commit === input.mainCommit
 			? ("yes" as const)
@@ -1076,13 +1186,31 @@ async function reconcileAtomicClose(input: {
 	) {
 		return "unknown";
 	}
-	if (
-		main.commit === input.expectedMainHead &&
-		ledger.commit === input.expectedLedgerGeneration
-	) {
-		return "unchanged";
-	}
 	return "host_contract_breach";
+}
+
+function isMatchingReleasePayload(
+	value: unknown,
+	transactionId: string,
+	expectedGeneration: string,
+): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		"operation" in value &&
+		value.operation === "release" &&
+		"previous_generation" in value &&
+		value.previous_generation === expectedGeneration &&
+		"lease" in value &&
+		typeof value.lease === "object" &&
+		value.lease !== null &&
+		!Array.isArray(value.lease) &&
+		"transaction_id" in value.lease &&
+		value.lease.transaction_id === transactionId &&
+		"state" in value.lease &&
+		value.lease.state === "released"
+	);
 }
 
 /**

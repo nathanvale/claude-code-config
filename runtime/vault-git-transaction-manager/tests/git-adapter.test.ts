@@ -199,6 +199,39 @@ describe("git adapter append classification", () => {
 });
 
 describe("git adapter atomic close reconciliation", () => {
+	test("proves unchanged refs before probing origin-only expected objects", async () => {
+		const temporaryRefCommits = new Map<string, string>();
+		const adapter = createFakeAdapter(({ args }) => {
+			if (args[0] === "fetch") {
+				const [source, temporaryRef] = String(args[3] ?? "").split(":");
+				temporaryRefCommits.set(
+					String(temporaryRef),
+					source === "refs/heads/main" ? EXPECTED : GENERATION,
+				);
+				return {};
+			}
+			if (args[0] === "rev-parse") {
+				const target = String(args[2] ?? "").replace("^{commit}", "");
+				return { stdout: `${temporaryRefCommits.get(target) ?? ""}\n` };
+			}
+			if (args[0] === "merge-base") {
+				throw new Error("unchanged proof must not inspect absent expected objects");
+			}
+			return {};
+		});
+		expect(
+			await adapter.reconcileAtomicClose?.({
+				remote: "origin",
+				transactionId: `txn_${"1".repeat(32)}`,
+				expectedMainHead: EXPECTED,
+				mainCommit: COMMIT,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: GENERATION,
+				ledgerCommit: "9".repeat(40),
+			}),
+		).toEqual({ status: "unchanged" });
+	});
+
 	test("unknown ancestry stays push_pending instead of host_contract_breach", async () => {
 		const remoteMainNow = "f".repeat(40);
 		const ledgerCommit = "9".repeat(40);
