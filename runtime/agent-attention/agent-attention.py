@@ -236,6 +236,7 @@ def poll(args: argparse.Namespace) -> dict[str, Any]:
 		return base_result("waiting", changed=False, open_gate_count=0)
 	inventory = read_inventory(config)
 	items_by_id = {item.get("id"): item for item in inventory}
+	open_gate_count = 0
 
 	for mapping_path in mapping_paths:
 		mapping = load_json(mapping_path)
@@ -248,16 +249,18 @@ def poll(args: argparse.Namespace) -> dict[str, Any]:
 			raise ContractError("reminder title changed; refusing semantic inference")
 		if mapping.get("required_notes_line") not in (reminder.get("notes") or "").splitlines():
 			raise ContractError("approval meaning is absent from reminder notes")
-		if not reminder.get("isCompleted"):
-			continue
-		if not reminder.get("completionDate"):
-			raise ContractError("completed reminder lacks a completion timestamp")
 
 		identifier = event_id(mapping)
 		receipt_path = state_dir / "receipts" / f"{identifier}.json"
 		claim_path = state_dir / "claims" / f"{identifier}.json"
 		if receipt_path.exists():
 			continue
+		open_gate_count += 1
+		if not reminder.get("isCompleted"):
+			continue
+		if not reminder.get("completionDate"):
+			raise ContractError("completed reminder lacks a completion timestamp")
+
 		if claim_path.exists():
 			return base_result(
 				"claimed",
@@ -288,7 +291,7 @@ def poll(args: argparse.Namespace) -> dict[str, Any]:
 			next_safe_action="deliver once with the Codex task tool, then record-delivery",
 		)
 
-	return base_result("waiting", changed=False, open_gate_count=len(mapping_paths))
+	return base_result("waiting", changed=False, open_gate_count=open_gate_count)
 
 
 def record_delivery(args: argparse.Namespace) -> dict[str, Any]:
