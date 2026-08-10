@@ -161,6 +161,45 @@ describe("vault-git CLI composition", () => {
 		);
 	});
 
+	test("dispatches janitor and tidy now through the bounded worker triggers", async () => {
+		const triggers: string[] = [];
+		const base = fakeComposition(fakeEngine());
+		const composition: VaultGitCliComposition = {
+			...base,
+			janitor: {
+				async run(input) {
+					triggers.push(input.trigger);
+					return {
+						status: "preview",
+						trigger: input.trigger === "tidy_now" ? "tidy_now" : "nightly",
+						staleReceipts: [],
+						leaseAnomalies: [],
+						pushPending: false,
+						proposedTransactionGroups: [],
+						skippedRepairs: [],
+						privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 },
+						vaultPosture: "normal",
+						foregroundNonVaultWorkAllowed: true,
+						nextAction: { id: "none", summary: "No repair pending." },
+					};
+				},
+			},
+		};
+		for (const argv of [["janitor", "--json"], ["tidy", "now", "--json"]]) {
+			const run = await runVaultGitForTest(argv, {
+				composition,
+				launchPrivate: false,
+			});
+			expect(run.exitCode).toBe(0);
+			expect(JSON.parse(run.stdout).data).toMatchObject({
+				outcome: "read_only",
+				janitor_report: { status: "preview", push_pending: false },
+				worker_eligibility: { eligible: true, requires_new_transaction: true },
+			});
+		}
+		expect(triggers).toEqual(["nightly", "tidy_now"]);
+	});
+
 	test("dispatches the exact stale takeover path with FD token proof", async () => {
 		let observedRepair: VaultGitRepairInput | undefined;
 		const engine = fakeEngine({
@@ -261,6 +300,23 @@ function fakeComposition(
 	};
 	return {
 		engine,
+		janitor: {
+			async run(input) {
+				return {
+					status: "preview",
+					trigger: input.trigger === "tidy_now" ? "tidy_now" : "nightly",
+					staleReceipts: [],
+					leaseAnomalies: [],
+					pushPending: false,
+					proposedTransactionGroups: [],
+					skippedRepairs: [],
+					privateHygiene: { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 },
+					vaultPosture: "normal",
+					foregroundNonVaultWorkAllowed: true,
+					nextAction: { id: "none", summary: "No repair pending." },
+				};
+			},
+		},
 		store: store as VaultGitReceiptStore,
 		runtime,
 		repositoryPath: "/fixture-vault",
@@ -293,6 +349,19 @@ function fakeEngine(
 		},
 		async repair() {
 			throw new Error("repair not expected");
+		},
+		async inspectJanitorPreflight() {
+			throw new Error("Janitor preflight not expected");
+		},
+		async readCheckerAdmission() {
+			return null;
+		},
+		async prunePrivateHygiene() {
+			return { capabilityFiles: 0, doctorTokenRecords: 0, janitorReports: 0 };
+		},
+		async recordJanitorReport() {},
+		async runHygieneTransaction() {
+			throw new Error("hygiene transaction not expected");
 		},
 		...overrides,
 	};

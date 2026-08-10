@@ -1,12 +1,14 @@
 import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
 	VaultGitBlockerId,
+	VaultGitCheckerAdmissionRecord,
 	VaultGitEngineNextActionId,
 	VaultGitEventType,
 	VaultGitOwnedPathReceipt,
 	VaultGitReceipt,
 	VaultGitReceiptNextAction,
 	VaultGitRetrySafety,
+	VaultGitPrivateHygieneResult,
 	VaultGitTransactionPhase,
 	VaultGitTransactionState,
 	VaultGitWritePermission,
@@ -27,6 +29,7 @@ import {
 	acquireRemoteLease,
 	buildVaultGitReleaseLedgerContent,
 	observeRemoteLedger,
+	releaseRemoteLease,
 	validateRemoteLease,
 	type RemoteLedgerEngine,
 } from "./remote-ledger.ts";
@@ -168,6 +171,31 @@ export interface VaultGitTransactionEngine {
 	doctor(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
 	/** Execute only one fresh doctor-classified deterministic repair. */
 	repair(input: VaultGitRepairInput): Promise<VaultGitRepairResult>;
+	/** Prove Janitor global gates without acquiring or mutating a lease. */
+	inspectJanitorPreflight(remote: string): Promise<
+		| { readonly status: "eligible"; readonly doctor: VaultGitDoctorResult }
+		| {
+				readonly status: "refused";
+				readonly blocker: VaultGitBlockerId;
+				readonly doctor: VaultGitDoctorResult;
+		  }
+	>;
+	/** Read checker admission through engine-owned private-state custody. */
+	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+	/** Prune deterministic private hygiene through engine-owned store custody. */
+	prunePrivateHygiene(): Promise<VaultGitPrivateHygieneResult>;
+	/** Persist one bounded Janitor report under private XDG state. */
+	recordJanitorReport(reportJson: string): Promise<void>;
+	/** Run one checker mutation only while a fresh hygiene transaction owns the lease. */
+	runHygieneTransaction(request: {
+		readonly paths: readonly string[];
+		readonly remote: string;
+		readonly leaseDurationMs: number;
+		readonly summary: string;
+		/** Observer invoked once the fresh hygiene lease is held. */
+		readonly onLeaseAcquired?: () => void;
+		readonly apply: () => Promise<boolean>;
+	}): Promise<VaultGitEngineResult>;
 }
 
 /**
@@ -248,13 +276,183 @@ export function createVaultGitTransactionEngine(
 		return null;
 	}
 
-	return {
+	const engine: VaultGitTransactionEngine = {
 		async doctor(input) {
 			return doctorEngine.diagnose(input);
 		},
 
 		async repair(input) {
 			return repairEngine.run(input);
+		},
+
+		async inspectJanitorPreflight(remote) {
+			const doctor = await doctorEngine.diagnose({ issueTakeoverToken: false });
+			if (doctor.state !== "absent" && doctor.state !== "closed") {
+				return {
+					status: "refused",
+					blocker:
+						doctor.blocker ??
+						(doctor.state === "push_pending"
+							? "push_pending"
+							: doctor.state === "expired"
+								? "lease_stale"
+								: "lease_active"),
+					doctor,
+				};
+			}
+			try {
+				const identity = await options.repository.resolveCanonicalIdentity();
+				if (identity.identity !== options.repositoryIdentity) {
+					return { status: "refused", blocker: "vault_identity_changed", doctor };
+				}
+				const main = await options.ledger.git.inspectMain(remote);
+				if (main.status !== "ok") {
+					return { status: "refused", blocker: "remote_unavailable", doctor };
+				}
+				if (
+					main.alignment !== "aligned" ||
+					main.localHead !== identity.localMainHead
+				) {
+					return {
+						status: "refused",
+						blocker: alignmentBlocker(main.alignment),
+						doctor,
+					};
+				}
+				if (!options.repository.captureUnrelatedState) {
+					return { status: "refused", blocker: "host_contract_breach", doctor };
+				}
+				const wholeTree = await options.repository.captureUnrelatedState([]);
+				if (wholeTree.statusHex.length > 0) {
+					return { status: "refused", blocker: "dirty_tree", doctor };
+				}
+				const observed = await observeRemoteLedger(options.ledger, { remote });
+				if (observed.status === "refused") {
+					return { status: "refused", blocker: observed.blocker, doctor };
+				}
+				if (observed.lease?.state === "held") {
+					const expired =
+						options.runtime.now().getTime() >=
+						Date.parse(observed.lease.acquiredAt) +
+							observed.lease.leaseDurationMs;
+					return {
+						status: "refused",
+						blocker: expired ? "lease_stale" : "lease_active",
+						doctor,
+					};
+				}
+				return { status: "eligible", doctor };
+			} catch {
+				return { status: "refused", blocker: "host_contract_breach", doctor };
+			}
+		},
+
+		async readCheckerAdmission() {
+			return options.store.readCheckerAdmission();
+		},
+
+		async prunePrivateHygiene() {
+			return options.store.prunePrivateHygiene(
+				options.runtime.now().toISOString(),
+			);
+		},
+
+		async recordJanitorReport(reportJson) {
+			await options.store.recordJanitorReport(
+				reportJson,
+				options.runtime.now().toISOString(),
+			);
+		},
+
+		async runHygieneTransaction(request) {
+			const admitted = await engine.begin({
+				event: "hygiene",
+				requestedPaths: request.paths,
+				remote: request.remote,
+				leaseDurationMs: request.leaseDurationMs,
+			});
+			if (admitted.status !== "admitted" || !admitted.transactionId) {
+				return admitted;
+			}
+			request.onLeaseAcquired?.();
+			// Every exit below this point holds the remote lease. Decision 24
+			// requires the worker to report and exit, so a refusal must hand the
+			// lease back: `recordPhase` only appends a local receipt, and an
+			// abandoned lease blocks every host until it ages into `lease_stale`
+			// and an operator runs the takeover ceremony.
+			const abandonLease = async (): Promise<void> => {
+				const current = await options.store.load().catch(() => null);
+				if (current?.status !== "loaded") return;
+				const { transactionId, leaseGeneration } = current.receipt;
+				if (!transactionId || !leaseGeneration) return;
+				try {
+					await releaseRemoteLease(options.ledger, {
+						remote: request.remote,
+						transactionId,
+						expectedGeneration: leaseGeneration,
+					});
+				} catch {
+					// A failed release leaves the lease to expire on its own; the
+					// refusal below still reports the outcome the caller must act on.
+				}
+			};
+			const loaded = await options.store.load();
+			if (loaded.status !== "loaded") {
+				await abandonLease();
+				return refusal(
+					"human_required",
+					"human_required",
+					"receipt_corrupt",
+					"inspect_private_receipt",
+					"Inspect the hygiene receipt before any checker repair.",
+				);
+			}
+			let capability: Uint8Array;
+			try {
+				capability = await options.store.readCapability(
+					loaded.receipt.receiptId,
+					"owner",
+				);
+			} catch {
+				await abandonLease();
+				return refusal(
+					"human_required",
+					"human_required",
+					"capability_invalid",
+					"reload_capability",
+					"Reload the hygiene owner capability through the internal launcher.",
+				);
+			}
+			let applied = false;
+			try {
+				// The clean-tree proof from preflight predates lease acquisition; a
+				// foreground writer may have landed in between. Re-prove the whole
+				// tree is clean under the held lease before any checker mutation.
+				const wholeTree = options.repository.captureUnrelatedState
+					? await options.repository.captureUnrelatedState([])
+					: null;
+				const stillClean = wholeTree !== null && wholeTree.statusHex.length === 0;
+				applied = stillClean && (await request.apply());
+			} catch {
+				applied = false;
+			}
+			if (!applied) {
+				const recorded = await engine.recordPhase({
+					transactionId: admitted.transactionId,
+					remote: request.remote,
+					capability,
+					phase: "repairable",
+					nextSafeAction: "run_doctor",
+				});
+				await abandonLease();
+				return recorded;
+			}
+			return engine.complete({
+				transactionId: admitted.transactionId,
+				remote: request.remote,
+				capability,
+				summary: request.summary,
+			});
 		},
 
 		async begin(input) {
@@ -696,6 +894,7 @@ export function createVaultGitTransactionEngine(
 			return result("advanced", stateForPhase(recorded.phase) ?? "active", recorded, "owner", "local", recorded.nextSafeAction, summaryForState(stateForPhase(recorded.phase) ?? "active"));
 		},
 	};
+	return engine;
 }
 
 async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, transactionId: string, role: VaultGitCapabilityRole, capability: Uint8Array): Promise<VaultGitEngineResult | null> {

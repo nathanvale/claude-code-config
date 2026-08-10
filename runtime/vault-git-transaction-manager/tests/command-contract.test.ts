@@ -443,6 +443,7 @@ describe("vault-git KTD16 boundaries", () => {
 		["model.ts", new Set<string>()],
 		["ports.ts", new Set(["model.ts"])],
 		["commit-policy.ts", new Set(["model.ts"])],
+		["worker-policy.ts", new Set(["model.ts"])],
 	]);
 	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
 		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
@@ -473,6 +474,16 @@ describe("vault-git KTD16 boundaries", () => {
 				"repair.ts",
 				"remote-ledger.ts",
 				"store.ts",
+			]),
+		],
+		[
+			"janitor.ts",
+			new Set([
+				"doctor.ts",
+				"engine.ts",
+				"model.ts",
+				"ports.ts",
+				"worker-policy.ts",
 			]),
 		],
 	]);

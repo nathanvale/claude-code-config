@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
-import { readFile, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,11 @@ import type {
 } from "./engine.ts";
 import { createVaultGitTransactionEngine } from "./engine.ts";
 import {
+	createVaultGitJanitor,
+	type VaultGitJanitor,
+	type VaultGitJanitorReport,
+} from "./janitor.ts";
+import {
 	createGitAdapter,
 	createGitRepositoryAdapter,
 	createNodeProcessPort,
@@ -51,7 +57,11 @@ import {
 	type VaultGitRepairAction,
 	type VaultGitTransactionPhase,
 } from "./model.ts";
-import type { VaultGitProcessPort, VaultGitRuntimePort } from "./ports.ts";
+import type {
+	VaultGitCheckerPort,
+	VaultGitProcessPort,
+	VaultGitRuntimePort,
+} from "./ports.ts";
 import type {
 	VaultGitDoctorResult,
 } from "./doctor.ts";
@@ -64,6 +74,7 @@ import {
 	type VaultGitCapabilityRole,
 	type VaultGitReceiptStore,
 } from "./store.ts";
+import { evaluateVaultGitWorkerPolicy } from "./worker-policy.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_REMOTE = "origin";
@@ -78,6 +89,7 @@ const DEFAULT_TIMEOUTS = {
 /** Complete live CLI composition over the U2-U5 owners. */
 export interface VaultGitCliComposition {
 	readonly engine: VaultGitTransactionEngine;
+	readonly janitor: VaultGitJanitor;
 	readonly store: VaultGitReceiptStore;
 	readonly runtime: VaultGitRuntimePort;
 	readonly repositoryPath: string;
@@ -198,8 +210,16 @@ export async function createVaultGitCliComposition(
 		repositoryIdentity: input.repositoryIdentity,
 		check,
 	});
+	const checker = createVaultCheckerPort(repositoryPath, processPort);
+	const janitor = createVaultGitJanitor({
+		engine,
+		checker,
+		remote: input.remote ?? DEFAULT_REMOTE,
+		leaseDurationMs: input.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS,
+	});
 	return {
 		engine,
+		janitor,
 		store,
 		runtime,
 		repositoryPath,
@@ -420,6 +440,158 @@ async function resolveDefaultComposition(): Promise<VaultGitCliComposition | nul
 	});
 }
 
+/**
+ * Create the shell-free process adapter for the external structured checker.
+ *
+ * @param repositoryPath - Canonical configured vault root
+ * @param processPort - Bounded scrubbed subprocess boundary
+ * @returns Fingerprint, check, registry, and exact repair operations
+ * @throws When fingerprint source files are missing or unreadable, bun.lock is
+ * absent, or the package.json check script does not name exactly one
+ * repository-relative entrypoint file
+ *
+ * @example
+ * ```typescript
+ * const checker = createVaultCheckerPort(vaultRoot, createNodeProcessPort())
+ * const result = await checker.runCheck()
+ * ```
+ */
+export function createVaultCheckerPort(
+	repositoryPath: string,
+	processPort: VaultGitProcessPort,
+): VaultGitCheckerPort {
+	const run = (args: readonly string[]) =>
+		processPort.run({
+			command: "bun",
+			args,
+			cwd: repositoryPath,
+			env: { LC_ALL: "C" },
+			timeoutMs: DEFAULT_TIMEOUTS.localMs,
+		});
+	return {
+		async fingerprint() {
+			// KTD10 admission covers the executed surface: the entrypoint is the
+			// file the package.json check script actually names, and the
+			// dependency bundle spans package.json, bun.lock (required — a
+			// missing lock refuses admission), bunfig.toml when present, and
+			// every TypeScript module under scripts/ the checker could import.
+			const manifestBytes = await readFile(join(repositoryPath, "package.json"));
+			const entrypointPath = resolveCheckEntrypoint(manifestBytes);
+			const entrypoint = await readFile(join(repositoryPath, entrypointPath));
+			const bundle: Array<{ readonly path: string; readonly bytes: Buffer }> = [
+				{ path: "package.json", bytes: manifestBytes },
+				{
+					path: "bun.lock",
+					bytes: await readFile(join(repositoryPath, "bun.lock")),
+				},
+			];
+			const bunfig = await readFile(join(repositoryPath, "bunfig.toml")).catch(
+				(error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return null;
+					throw error;
+				},
+			);
+			if (bunfig !== null) bundle.push({ path: "bunfig.toml", bytes: bunfig });
+			const scriptNames = (
+				await readdir(join(repositoryPath, "scripts"), { recursive: true }).catch(
+					(error: NodeJS.ErrnoException) => {
+						if (error.code === "ENOENT") return [] as string[];
+						throw error;
+					},
+				)
+			)
+				.map((name) => String(name).split("\\").join("/"))
+				.filter((name) => name.endsWith(".ts"))
+				.sort();
+			for (const name of scriptNames) {
+				bundle.push({
+					path: `scripts/${name}`,
+					bytes: await readFile(join(repositoryPath, "scripts", name)),
+				});
+			}
+			const dependencyHash = createHash("sha256");
+			for (const { path, bytes } of bundle) {
+				dependencyHash.update(path).update("\0").update(bytes).update("\0");
+			}
+			return {
+				entrypointHash: createHash("sha256").update(entrypoint).digest("hex"),
+				dependencyBundleHash: dependencyHash.digest("hex"),
+			};
+		},
+		runCheck() {
+			return run(["run", "check", "--json"]);
+		},
+		readRepairRegistry() {
+			return run(["run", "scripts/vault-repair-registry.ts"]);
+		},
+		applyRepair(request) {
+			return run([
+				"run",
+				"scripts/vault-repair-registry.ts",
+				"--apply",
+				request.repairId,
+				"--file",
+				request.file,
+				"--field",
+				request.field,
+				"--root",
+				repositoryPath,
+			]);
+		},
+	};
+}
+
+/**
+ * Resolve the one repository-relative script file the package.json check
+ * script executes. Admission fails closed when zero or multiple candidate
+ * files appear, so an unresolvable checker surface can never be admitted.
+ */
+function resolveCheckEntrypoint(manifestBytes: Uint8Array): string {
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
+	} catch {
+		throw new Error("vault package manifest is not valid JSON");
+	}
+	const scripts =
+		typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)
+			? (manifest as Record<string, unknown>).scripts
+			: undefined;
+	const script =
+		typeof scripts === "object" && scripts !== null && !Array.isArray(scripts)
+			? (scripts as Record<string, unknown>).check
+			: undefined;
+	if (typeof script !== "string" || script.trim().length === 0) {
+		throw new Error("vault check script is unavailable");
+	}
+	const candidates = [
+		...new Set(
+			script
+				.split(/\s+/)
+				.filter(
+					(token) =>
+						/^[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:ts|mts|cts|js|mjs|cjs)$/.test(token) &&
+						token
+							.split("/")
+							.every(
+								(segment) =>
+									segment.length > 0 &&
+									segment !== "." &&
+									segment !== ".." &&
+									segment.toLowerCase() !== ".git",
+							),
+				),
+		),
+	];
+	const entrypoint = candidates[0];
+	if (candidates.length !== 1 || !entrypoint) {
+		throw new Error(
+			"vault check script does not resolve to one repository-relative entrypoint",
+		);
+	}
+	return entrypoint;
+}
+
 async function resolveConfiguredVaultRoot(
 	explicitConfigPath?: string,
 ): Promise<string | null> {
@@ -553,7 +725,7 @@ type RuntimeResult =
 	| { readonly kind: "engine"; readonly value: VaultGitEngineResult }
 	| { readonly kind: "doctor"; readonly value: VaultGitDoctorResult }
 	| { readonly kind: "repair"; readonly value: VaultGitRepairResult }
-	| { readonly kind: "unavailable"; readonly blocker: "runtime_unavailable" };
+	| { readonly kind: "janitor"; readonly value: VaultGitJanitorReport };
 
 async function executeInvocation(
 	invocation: VaultGitRuntimeInvocation,
@@ -665,8 +837,15 @@ async function executeInvocation(
 			};
 		}
 		case "tidy":
+			return {
+				kind: "janitor",
+				value: await composition.janitor.run({ trigger: "tidy_now" }),
+			};
 		case "janitor":
-			return { kind: "unavailable", blocker: "runtime_unavailable" };
+			return {
+				kind: "janitor",
+				value: await composition.janitor.run({ trigger: "nightly" }),
+			};
 	}
 }
 
@@ -752,27 +931,20 @@ function emitRuntimeResult(input: EmitContext & {
 				? true
 				: input.result.kind === "repair"
 					? input.result.value.status === "repaired"
-					: false;
+					: input.result.value.status !== "refused";
 	const errorCode = payload.blockers[0] ?? "runtime_unavailable";
 	return emitPayload({ ...input, payload, success, errorCode });
 }
 
+type RuntimePayload = VaultGitLifecycleResultPayload & {
+	readonly janitor_report?: ReturnType<typeof projectJanitorReport>;
+	readonly worker_eligibility?: ReturnType<typeof projectWorkerEligibility>;
+};
+
 function payloadForRuntime(
 	command: VaultGitCommand,
 	result: RuntimeResult,
-): VaultGitLifecycleResultPayload {
-	if (result.kind === "unavailable") {
-		return createVaultGitLifecycleResult({
-			command,
-			outcome: "refused",
-			phase: "blocked",
-			write_permission: "denied",
-			changed_state: "none",
-			retry_safety: "same_input_unsafe",
-			blockers: [result.blocker],
-			next_action: action("wait_for_runtime"),
-		});
-	}
+): RuntimePayload {
 	if (result.kind === "engine") {
 		const value = result.value;
 		const outcome =
@@ -781,7 +953,7 @@ function payloadForRuntime(
 				: value.status === "advanced"
 					? "advanced"
 					: value.status;
-		return createVaultGitLifecycleResult({
+		const payload = createVaultGitLifecycleResult({
 			command,
 			outcome,
 			phase: value.phase,
@@ -793,6 +965,9 @@ function payloadForRuntime(
 			transaction_state: value.state,
 			next_action: action(value.nextAction.id, value.nextAction.summary),
 		});
+		return command === "complete" && value.status === "completed"
+			? { ...payload, worker_eligibility: projectWorkerEligibility() }
+			: payload;
 	}
 	if (result.kind === "doctor") {
 		const value = result.value;
@@ -811,8 +986,9 @@ function payloadForRuntime(
 			next_action: action(value.nextAction.id, value.nextAction.summary),
 		});
 	}
-	const value = result.value;
-	return createVaultGitLifecycleResult({
+	if (result.kind === "repair") {
+		const value = result.value;
+		return createVaultGitLifecycleResult({
 		command,
 		outcome: value.status,
 		phase: value.phase,
@@ -823,7 +999,102 @@ function payloadForRuntime(
 		transaction_state: value.state,
 		repair_action: value.action,
 		next_action: action(value.nextAction.id, value.nextAction.summary),
-	});
+		});
+	}
+	const value = result.value;
+	const privateChanged =
+		value.privateHygiene.capabilityFiles > 0 ||
+		value.privateHygiene.doctorTokenRecords > 0 ||
+		value.privateHygiene.janitorReports > 0;
+	// Preflight and transaction blockers take precedence; the skipped-repair
+	// scan is the fallback and picks the first mappable reason, not index 0.
+	const skippedBlocker = value.skippedRepairs
+		.map((repair) =>
+			repair.reason === "checker_unadmitted" ||
+			repair.reason === "checker_changed" ||
+			repair.reason === "checker_output_invalid"
+				? repair.reason
+				: repair.reason === "repair_refused"
+					? ("checker_repair_refused" as const)
+					: undefined,
+		)
+		.find((candidate) => candidate !== undefined);
+	const blocker = value.blocker ?? skippedBlocker;
+	return {
+		...createVaultGitLifecycleResult({
+			command,
+			outcome:
+				value.status === "repaired"
+					? "repaired"
+					: value.status === "refused"
+						? "refused"
+						: "read_only",
+			phase: value.status === "repaired" ? "closed" : "blocked",
+			write_permission: "denied",
+			changed_state:
+				value.changedState !== undefined && value.changedState !== "none"
+					? value.changedState
+					: privateChanged
+						? "local"
+						: "none",
+			retry_safety:
+				value.status === "refused"
+					? "operator_required"
+					: value.skippedRepairs.length > 0
+						? "same_input_unsafe"
+						: "same_input_safe",
+			blockers: blocker ? [blocker] : [],
+			next_action: action(value.nextAction.id, value.nextAction.summary),
+		}),
+		janitor_report: projectJanitorReport(value),
+		worker_eligibility: projectWorkerEligibility(
+			value.trigger,
+			value.vaultPosture === "read_only",
+		),
+	};
+}
+
+function projectJanitorReport(report: VaultGitJanitorReport) {
+	return {
+		status: report.status,
+		trigger: report.trigger,
+		stale_receipts: report.staleReceipts,
+		lease_anomalies: report.leaseAnomalies,
+		push_pending: report.pushPending,
+		proposed_transaction_groups: report.proposedTransactionGroups.map(
+			(group) => ({ files: group.files, repair_ids: group.repairIds }),
+		),
+		skipped_repairs: report.skippedRepairs.map((repair) => ({
+			owner: repair.owner,
+			finding_id: repair.findingId,
+			repair_id: repair.repairId,
+			reason: repair.reason,
+		})),
+		private_hygiene: {
+			capability_files: report.privateHygiene.capabilityFiles,
+			doctor_token_records: report.privateHygiene.doctorTokenRecords,
+			janitor_reports: report.privateHygiene.janitorReports,
+		},
+		vault_posture: report.vaultPosture,
+		foreground_non_vault_work_allowed:
+			report.foregroundNonVaultWorkAllowed,
+	};
+}
+
+function projectWorkerEligibility(
+	trigger: "transaction_close" | "tidy_now" | "nightly" = "transaction_close",
+	leaseHeld = false,
+) {
+	const decision = evaluateVaultGitWorkerPolicy({ trigger, leaseHeld });
+	return {
+		eligible: decision.eligible,
+		trigger: decision.trigger,
+		requires_new_transaction: decision.requiresNewTransaction,
+		vault_posture: decision.vaultPosture,
+		foreground_non_vault_work_allowed:
+			decision.foregroundNonVaultWorkAllowed,
+		next_action: decision.nextAction,
+	};
 }
 
 interface EmitContext {

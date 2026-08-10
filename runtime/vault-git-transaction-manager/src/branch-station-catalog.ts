@@ -29,8 +29,8 @@ export const VAULT_GIT_STATION_IDS = [
 	"repair.join_role_refused",
 	"repair.stale_takeover_usage",
 	"tidy.invalid_usage",
-	"tidy.unavailable",
-	"janitor.unavailable",
+	"tidy.preview",
+	"janitor.preview",
 ] as const;
 
 /** Package-owned complete-CLI Branch Station Catalog. */
@@ -49,8 +49,8 @@ export const vaultGitBranchStationCatalog = [
 	station("repair.join_role_refused", "repair", "refusal", "join capability cannot execute an admitted repair", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_repair", "capability_role_mismatch", "use_owner_capability"),
 	station("repair.stale_takeover_usage", "repair", "usage_failure", "stale takeover requires explicit prior-writer attestation", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
 	station("tidy.invalid_usage", "tidy", "usage_failure", "tidy omits the exact now subcommand", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
-	station("tidy.unavailable", "tidy", "refusal", "immediate worker remains gated on the U7 policy owner", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_worker_start", "runtime_unavailable", "wait_for_runtime"),
-	station("janitor.unavailable", "janitor", "refusal", "Janitor invocation remains gated on the U7 policy owner", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_worker_start", "runtime_unavailable", "wait_for_runtime"),
+	station("tidy.preview", "tidy", "success", "explicit worker emits a bounded preview when checker admission is absent", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "preview_only_private_hygiene", undefined, "request_operator_review"),
+	station("janitor.preview", "janitor", "success", "scheduled Janitor emits a bounded preview when checker admission is absent", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "preview_only_private_hygiene", undefined, "request_operator_review"),
 ] as const satisfies readonly BranchStation[];
 
 /** Find catalog drift against live command discovery. */

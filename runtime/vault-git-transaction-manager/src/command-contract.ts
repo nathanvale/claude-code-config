@@ -109,6 +109,7 @@ function actionSideEffects(
 		"retry_push",
 		"retry_remote",
 		"begin_transaction",
+		"run_janitor",
 	]).has(id)
 		? ["read", "check", "network", "write"]
 		: ["read", "check"];
@@ -370,7 +371,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	},
 	tidy: {
 		script: "vault-git",
-		summary: "Run the exact immediate hygiene worker surface; unavailable until worker policy lands.",
+		summary: "Run one explicit bounded hygiene worker in a fresh transaction.",
 		usage: [`vault-git tidy now [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "agent",
@@ -387,7 +388,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	},
 	janitor: {
 		script: "vault-git",
-		summary: "Invoke conservative Janitor policy; unavailable until the Janitor unit lands.",
+		summary: "Inspect and apply only admitted deterministic Janitor repairs.",
 		usage: [`vault-git janitor [--no-input] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "agent",

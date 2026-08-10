@@ -479,6 +479,98 @@ describe("private receipt store", () => {
 		});
 		expect((await readdir(store.paths.history)).length).toBe(3);
 	});
+
+	test("persists admitted checker hashes privately and prunes only closed or stale material", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		await store.admitChecker({
+			schemaVersion: 1,
+			entrypointHash: "a".repeat(64),
+			dependencyBundleHash: "b".repeat(64),
+			admittedAt: "2026-08-09T00:00:00.000Z",
+		});
+		expect(await store.readCheckerAdmission()).toMatchObject({
+			entrypointHash: "a".repeat(64),
+			dependencyBundleHash: "b".repeat(64),
+		});
+		expect((await stat(store.paths.checkerAdmission)).mode & 0o777).toBe(0o600);
+		await store.recordJanitorReport(
+			JSON.stringify({ status: "preview", skipped_repairs: ["semantic"] }),
+			"2026-08-09T00:00:00.000Z",
+		);
+		const reportNames = await readdir(store.paths.janitorReports);
+		expect(reportNames).toHaveLength(1);
+		expect(
+			(await stat(join(store.paths.janitorReports, reportNames[0] ?? "missing"))).mode &
+				0o777,
+		).toBe(0o600);
+
+		const closed = receipt();
+		await store.initialize(closed, {
+			ownerCapability: new Uint8Array([1]),
+			joinCapability: new Uint8Array([2]),
+		});
+		await store.append({ ...closed, revision: 2, phase: "closed", transition: "closed", nextSafeAction: "none" });
+		const open = receipt({
+			receiptId: "receipt_22222222222222222222222222222222",
+			diagnosticsReference: "receipt:receipt_22222222222222222222222222222222",
+		});
+		await store.initialize(open, {
+			ownerCapability: new Uint8Array([3]),
+			joinCapability: new Uint8Array([4]),
+		});
+		// The expired token binds to the CLOSED receipt: material for the open
+		// current-pointer receipt is protected from pruning until that pointer
+		// itself reads closed.
+		const proof = {
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "c".repeat(40),
+			receiptId: closed.receiptId,
+			receiptRevision: 1,
+			proofFingerprint: "d".repeat(64),
+			issuedAt: "2026-08-09T00:00:00.000Z",
+		};
+		await store.issueDoctorToken(proof);
+
+		expect(
+			await store.prunePrivateHygiene("2026-08-09T00:10:00.000Z"),
+		).toEqual({ capabilityFiles: 2, doctorTokenRecords: 1, janitorReports: 0 });
+		expect(await store.readCapability(open.receiptId, "owner")).toEqual(
+			new Uint8Array([3]),
+		);
+		await expect(store.readCapability(closed.receiptId, "owner")).rejects.toThrow();
+	});
+
+	test("retains only the newest fifty Janitor reports and counts the pruned rest", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		for (let index = 0; index < 52; index++) {
+			await store.recordJanitorReport(
+				JSON.stringify({ status: "preview", ordinal: index }),
+				new Date(Date.UTC(2026, 7, 9, 0, 0, index)).toISOString(),
+			);
+		}
+		expect(await store.prunePrivateHygiene("2026-08-09T01:00:00.000Z")).toEqual({
+			capabilityFiles: 0,
+			doctorTokenRecords: 0,
+			janitorReports: 2,
+		});
+		const names = (await readdir(store.paths.janitorReports)).filter((name) =>
+			name.endsWith(".json"),
+		);
+		expect(names).toHaveLength(50);
+		const recordedAts: string[] = [];
+		for (const name of names) {
+			const value = JSON.parse(
+				await readFile(join(store.paths.janitorReports, name), "utf8"),
+			) as { recordedAt: string };
+			recordedAts.push(value.recordedAt);
+		}
+		recordedAts.sort();
+		// The two OLDEST reports are gone; the newest fifty all survive.
+		expect(recordedAts[0]).toBe("2026-08-09T00:00:02.000Z");
+		expect(recordedAts.at(-1)).toBe("2026-08-09T00:00:51.000Z");
+	});
 });
 
 interface PortCall {
