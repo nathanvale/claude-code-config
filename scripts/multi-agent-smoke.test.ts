@@ -83,6 +83,32 @@ describe("multi-agent smoke library", () => {
 		expect(codexAssertions.every((assertion) => assertion.ok)).toBe(true);
 	});
 
+	test("context-routing probe fails an answer that blesses direct vault writes", () => {
+		// Negative control against probe theater: an agent claiming direct vault
+		// writes are fine must fail the routing probe on both harnesses. A full
+		// fixture-backed live blocked-manager scenario is deferred to U9
+		// qualification.
+		const testDef = getSmokeTest("context-routing");
+		for (const harness of ["claude", "codex"] as const) {
+			const assertions = evaluateOutput(testDef, harness, {
+				whoAmI: harness,
+				codeReposOwnImplementationTruth: true,
+				codeRepoWritesUseWorktrees: true,
+				configuredVaultOwnsDurableKnowledge: true,
+				contextAdvisorOwnsPlacementRouting: true,
+				usesStableContextPath: true,
+				vaultWritesRouteThroughVaultGitSkill: false,
+			});
+			const mismatch = assertions.find(
+				(assertion) => assertion.key === "vaultWritesRouteThroughVaultGitSkill",
+			);
+			expect(mismatch?.ok).toBe(false);
+			expect(mismatch?.expected).toBe(true);
+			expect(mismatch?.actual).toBe(false);
+			expect(assertions.every((assertion) => assertion.ok)).toBe(false);
+		}
+	});
+
 	test("failed assertions report the mismatched key and value", () => {
 		const testDef = getSmokeTest("propagation");
 		const assertions = evaluateOutput(testDef, "codex", {

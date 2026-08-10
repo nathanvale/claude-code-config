@@ -37,6 +37,7 @@ import {
 } from "../src/cli.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
+import { admitActivationForTest } from "./activation-fixture.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = join(packageRoot, "src", "cli.ts");
@@ -331,6 +332,45 @@ describe("vault-git catalog-driven process boundary", () => {
 		);
 	});
 
+	test("un-admitted runtime refuses begin, surfaces the dashboard blocker, and keeps janitor zero-commit", async () => {
+		const fixture = await createFixture({ admitActivation: false });
+		const dashboard = await fixture.run(["--json"]);
+		expect(dashboard.exitCode).toBe(0);
+		expect(parseCliProcessJson(dashboard)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "read_only",
+				blockers: ["activation_blocked"],
+				next_action: { id: "request_operator_admission" },
+			},
+		});
+		const begun = await fixture.begin("notes/a.md");
+		expect(begun.exitCode).toBe(1);
+		expect(parseCliProcessJson(begun)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked" },
+			data: {
+				outcome: "refused",
+				changed_state: "none",
+				blockers: ["activation_blocked"],
+				next_action: { id: "request_operator_admission" },
+			},
+		});
+		const before = Number(
+			fixture.gitBare(["rev-list", "--count", "refs/heads/main"]),
+		);
+		const janitor = await fixture.run(["janitor", "--json"]);
+		expect(janitor.exitCode).toBe(1);
+		expect(parseCliProcessJson(janitor)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked" },
+			data: { blockers: ["activation_blocked"] },
+		});
+		expect(
+			Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
+		).toBe(before);
+	});
+
 	test("keeps an on-disk checker entrypoint change zero-commit as a checker_changed preview", async () => {
 		const fixture = await createFixture({ checkerRepair: true });
 		const store = createReceiptStore({
@@ -421,6 +461,8 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-hygiene",
 				host: "host-hygiene",
 			});
+			await admitActivationForTest(foreground.store);
+			await admitActivationForTest(hygiene.store);
 			const countBefore = Number(
 				fixture.gitBare(["rev-list", "--count", "refs/heads/main"]),
 			);
@@ -496,6 +538,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-hygiene",
 				host: "host-hygiene",
 			});
+			await admitActivationForTest(hygiene.store);
 			const refused = await hygiene.engine.runHygieneTransaction({
 				paths: ["notes/a.md"],
 				remote: "origin",
@@ -531,6 +574,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-foreground",
 				host: "host-foreground",
 			});
+			await admitActivationForTest(foreground.store);
 			const next = await foreground.engine.begin({
 				event: "note_created",
 				requestedPaths: ["notes/a.md"],
@@ -723,6 +767,7 @@ async function createFixture(
 	options: {
 		readonly checkPasses?: boolean;
 		readonly checkerRepair?: boolean;
+		readonly admitActivation?: boolean;
 	} = {},
 ): Promise<Fixture> {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-cli-process-"));
@@ -841,6 +886,7 @@ async function createFixture(
 		stateRoot,
 		repositoryIdentity: "fixture-vault",
 	});
+	if (options.admitActivation !== false) await admitActivationForTest(store);
 	const launchWithRole = async (
 		role: "owner" | "join",
 		args: readonly string[],

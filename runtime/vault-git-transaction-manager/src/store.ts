@@ -21,6 +21,7 @@ import {
 	VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	VAULT_GIT_RECEIPT_TRANSITIONS,
 	VAULT_GIT_TRANSACTION_PHASES,
+	type VaultGitActivationRecord,
 	type VaultGitCheckerAdmissionRecord,
 	type VaultGitPrivateHygieneResult,
 	type VaultGitReceipt,
@@ -64,6 +65,7 @@ export type VaultGitDurabilityTarget =
 	| "capability"
 	| "doctor_token"
 	| "checker_admission"
+	| "activation"
 	| "janitor_report"
 	| "quarantine";
 
@@ -229,6 +231,7 @@ export interface VaultGitReceiptStore {
 		readonly capabilities: string;
 		readonly doctorTokens: string;
 		readonly checkerAdmission: string;
+		readonly activation: string;
 		readonly janitorReports: string;
 		readonly quarantine: string;
 	};
@@ -278,6 +281,10 @@ export interface VaultGitReceiptStore {
 	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
 	/** Read the current checker admission, or null before operator admission. */
 	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+	/** Persist the R34 runtime activation admission using owner-only durable storage. */
+	admitActivation(record: VaultGitActivationRecord): Promise<void>;
+	/** Read the runtime activation admission, or null before operator admission. */
+	readActivation(): Promise<VaultGitActivationRecord | null>;
 	/** Remove closed capability material, settled doctor tokens, and Janitor reports beyond the newest fifty. */
 	prunePrivateHygiene(now: string): Promise<VaultGitPrivateHygieneResult>;
 	/** Append one owner-only Janitor report outside the configured vault. */
@@ -366,6 +373,7 @@ export function createReceiptStore(
 		capabilities: join(repositoryRoot, "capabilities"),
 		doctorTokens: join(repositoryRoot, "doctor-tokens"),
 		checkerAdmission: join(repositoryRoot, "checker-admission.json"),
+		activation: join(repositoryRoot, "activation.json"),
 		janitorReports: join(repositoryRoot, "janitor-reports"),
 		quarantine: join(repositoryRoot, "quarantine"),
 	} as const;
@@ -561,6 +569,23 @@ export function createReceiptStore(
 			}
 			const value: unknown = JSON.parse(source);
 			validateCheckerAdmission(value);
+			return value;
+		},
+		async admitActivation(record) {
+			validateActivationRecord(record);
+			await prepare();
+			await durableJson(paths.activation, record, "activation", durability);
+		},
+		async readActivation() {
+			let source: string;
+			try {
+				source = await readPrivateText(paths.activation);
+			} catch (error) {
+				if (isMissing(error)) return null;
+				throw error;
+			}
+			const value: unknown = JSON.parse(source);
+			validateActivationRecord(value);
 			return value;
 		},
 		async prunePrivateHygiene(now) {
@@ -1117,6 +1142,21 @@ function sameDoctorProof(
 		record.proofFingerprint === proof.proofFingerprint &&
 		record.issuedAt === proof.issuedAt
 	);
+}
+
+function validateActivationRecord(
+	value: unknown,
+): asserts value is VaultGitActivationRecord {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, ["schemaVersion", "admittedAt", "note"]) ||
+		value.schemaVersion !== 1 ||
+		!isIso(value.admittedAt) ||
+		!isOneLine(value.note) ||
+		(value.note as string).length > 500
+	) {
+		throw new Error("activation record invalid");
+	}
 }
 
 function validateCheckerAdmission(

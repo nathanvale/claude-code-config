@@ -165,6 +165,7 @@ declare -a REGISTERED_OWNER_PATHS=(
 	"docs/agents/domain.md"
 	"skills/context-advisor/SKILL.md"
 	"skills/context-advisor/references/storage-routing.md"
+	"skills/vault-git/SKILL.md"
 )
 
 add_pass() {

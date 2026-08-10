@@ -24,6 +24,7 @@ import {
 	createNodeProcessPort,
 } from "../src/git-adapter.ts";
 import { createVaultGitTransactionEngine } from "../src/engine.ts";
+import { admitActivationForTest } from "./activation-fixture.ts";
 import type {
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
@@ -1103,6 +1104,7 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 		stateRoot: join(root, "state"),
 		repositoryIdentity: "fixture-vault",
 	});
+	await admitActivationForTest(store);
 	const runtime = new CompletionRuntime();
 	const engine = createVaultGitTransactionEngine({
 		store,

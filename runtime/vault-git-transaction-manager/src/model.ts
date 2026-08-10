@@ -244,6 +244,7 @@ export type VaultGitRetrySafety = (typeof VAULT_GIT_RETRY_SAFETIES)[number];
 /** Stable blocker vocabulary shared by status, doctor, repair, and Janitor. */
 export const VAULT_GIT_BLOCKER_IDS = [
 	"runtime_unavailable",
+	"activation_blocked",
 	"vault_unconfigured",
 	"remote_unavailable",
 	"main_behind",
@@ -305,6 +306,7 @@ export type VaultGitRepairAction = (typeof VAULT_GIT_REPAIR_ACTIONS)[number];
 
 /** Closed doctor findings safe for command output and automation. */
 export const VAULT_GIT_DOCTOR_FINDINGS = [
+	"activation_missing",
 	"no_receipt",
 	"receipt_corrupt",
 	"acquisition_not_started",
@@ -359,6 +361,7 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	"inspect_private_receipt",
 	"inspect_remote_lease",
 	"reload_capability",
+	"request_operator_admission",
 	"use_join_capability",
 	"use_owner_capability",
 ] as const;
@@ -389,6 +392,22 @@ export type VaultGitHygieneWorkerTrigger =
 
 /** Vault mutation posture while a hygiene worker changes lease state. */
 export type VaultGitHygieneVaultPosture = "normal" | "read_only";
+
+/**
+ * Private operator admission for the R34 runtime activation gate.
+ *
+ * Until this record exists in the private store, every write-capable engine
+ * command refuses with blocker `activation_blocked`; U9 qualification admits
+ * the live vault after acceptance.
+ */
+export interface VaultGitActivationRecord {
+	/** Activation record schema. */
+	readonly schemaVersion: 1;
+	/** Operator-controlled admission timestamp. */
+	readonly admittedAt: string;
+	/** Non-secret single-line admission context. */
+	readonly note: string;
+}
 
 /** Private operator admission for one exact checker implementation bundle. */
 export interface VaultGitCheckerAdmissionRecord {

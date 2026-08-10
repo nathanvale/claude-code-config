@@ -1,0 +1,8 @@
+{
+	"name": "vault-git-skill",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "bun test tests/skill-contract.test.ts"
+	}
+}

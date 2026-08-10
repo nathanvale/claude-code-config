@@ -297,16 +297,20 @@ Return a JSON object with these meanings:
 			{
 				whoAmI: { type: "string", enum: ["claude", "codex"] },
 				codeReposOwnImplementationTruth: { type: "boolean" },
+				codeRepoWritesUseWorktrees: { type: "boolean" },
 				configuredVaultOwnsDurableKnowledge: { type: "boolean" },
 				contextAdvisorOwnsPlacementRouting: { type: "boolean" },
 				usesStableContextPath: { type: "boolean" },
+				vaultWritesRouteThroughVaultGitSkill: { type: "boolean" },
 			},
 			[
 				"whoAmI",
 				"codeReposOwnImplementationTruth",
+				"codeRepoWritesUseWorktrees",
 				"configuredVaultOwnsDurableKnowledge",
 				"contextAdvisorOwnsPlacementRouting",
 				"usesStableContextPath",
+				"vaultWritesRouteThroughVaultGitSkill",
 			],
 		),
 		prompt: withGuardrails(`Context routing smoke test.
@@ -314,23 +318,29 @@ Return a JSON object with these meanings:
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
 - codeReposOwnImplementationTruth: true if code repos own implementation-bound truth
+- codeRepoWritesUseWorktrees: true if code-repo writes must use isolated worktrees instead of the main checkout
 - configuredVaultOwnsDurableKnowledge: true if the configured vault owns plans, research, synthesis, and project memory
 - contextAdvisorOwnsPlacementRouting: true if context-advisor owns unclear placement routing
-- usesStableContextPath: true if the stable user context path is ~/.config/context`),
+- usesStableContextPath: true if the stable user context path is ~/.config/context
+- vaultWritesRouteThroughVaultGitSkill: true if configured Super-vault writes route through the vault-git skill`),
 		expectations: {
 			claude: {
 				whoAmI: "claude",
 				codeReposOwnImplementationTruth: true,
+				codeRepoWritesUseWorktrees: true,
 				configuredVaultOwnsDurableKnowledge: true,
 				contextAdvisorOwnsPlacementRouting: true,
 				usesStableContextPath: true,
+				vaultWritesRouteThroughVaultGitSkill: true,
 			},
 			codex: {
 				whoAmI: "codex",
 				codeReposOwnImplementationTruth: true,
+				codeRepoWritesUseWorktrees: true,
 				configuredVaultOwnsDurableKnowledge: true,
 				contextAdvisorOwnsPlacementRouting: true,
 				usesStableContextPath: true,
+				vaultWritesRouteThroughVaultGitSkill: true,
 			},
 		},
 	},

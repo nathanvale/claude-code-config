@@ -650,6 +650,12 @@ function operatorAction(summary: string): VaultGitNextAction {
 }
 
 function actionForBlocker(blocker: VaultGitBlockerId): VaultGitNextAction {
+	if (blocker === "activation_blocked") {
+		return {
+			id: "request_operator_admission",
+			summary: "Ask an operator to admit runtime activation before Janitor writes.",
+		};
+	}
 	if (blocker === "remote_unavailable") {
 		return { id: "retry_remote", summary: "Restore remote access, then retry Janitor." };
 	}
