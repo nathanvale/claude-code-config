@@ -67,6 +67,8 @@ export type AdapterRuntime = {
 		command: string,
 	) => Promise<AdapterExecutableResolution> | AdapterExecutableResolution;
 	runCommand: (input: AdapterCommandInput) => Promise<AdapterCommandResult>;
+	/** Optional test clock for bounded settle loops; production uses real timers. */
+	wait?: (delayMs: number) => Promise<void>;
 };
 
 /**
@@ -133,6 +135,19 @@ export type AdapterProbeResult =
 			attached: false;
 			failureClass: Extract<BrowserConnectFailureClass, "attachment-failed">;
 			cause: "transient_probe_failure" | "probe_failed";
+			detail: string;
+	  };
+
+/**
+ * The result of releasing one adapter-owned named session. Release truth is
+ * separate from command exit truth: adapters may verify their own inventory
+ * before reporting success.
+ */
+export type AdapterReleaseResult =
+	| { released: true }
+	| {
+			released: false;
+			cause: "command-failed" | "invalid-response" | "still-present";
 			detail: string;
 	  };
 
@@ -235,6 +250,14 @@ export type AdapterDefinition = {
 		endpoint: BrowserConnectVerifiedEndpoint,
 		route: BrowserConnectRouteId,
 	) => Promise<AdapterProbeResult>;
+	/**
+	 * Release one named adapter session through adapter-native argv. Optional
+	 * because not every registered adapter exposes a session-release mechanic.
+	 */
+	releaseSession?: (
+		runtime: AdapterRuntime,
+		input: Readonly<{ sessionName: string }>,
+	) => Promise<AdapterReleaseResult>;
 };
 
 import { agentBrowserDefinition } from "./agent-browser.ts";
@@ -345,6 +368,9 @@ export const VERSION_READ_TIMEOUT_MS = 8000;
 
 /** Bounded read for an adapter's read-only attachment probe. Shared by both adapters. */
 export const PROBE_TIMEOUT_MS = 8000;
+
+/** Bounded outer timeout for one adapter-native release command. */
+export const RELEASE_TIMEOUT_MS = 30_000;
 
 /**
  * Extract a semantic version from adapter `--version` output. Reads the first
