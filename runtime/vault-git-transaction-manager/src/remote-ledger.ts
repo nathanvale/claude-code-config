@@ -295,13 +295,23 @@ export async function acquireRemoteLease(
 			engine.clock.now().getTime() - Date.parse(observed.lease.acquiredAt),
 		);
 		const stale = age >= observed.lease.leaseDurationMs;
-		return refusal(
-			stale ? "lease_stale" : "lease_active",
-			"operator_required",
-			"request_operator_takeover",
-			"Ask an operator to decide whether to replace the current lease.",
-			{ leaseAgeMs: age },
-		);
+		// Active contention is ordinary and retriable: the holder releases and
+		// a later acquisition succeeds. Only a stale lease needs an operator.
+		return stale
+			? refusal(
+					"lease_stale",
+					"operator_required",
+					"request_operator_takeover",
+					"Ask an operator to decide whether to replace the current lease.",
+					{ leaseAgeMs: age },
+				)
+			: refusal(
+					"lease_active",
+					"same_input_safe",
+					"retry_remote",
+					"Retry acquisition after the active lease releases.",
+					{ leaseAgeMs: age },
+				);
 	}
 	return appendHeldLease(
 		engine,
@@ -815,6 +825,7 @@ function isOwnedPath(value: unknown): value is string {
 	if (typeof value !== "string" || value.length === 0 || value.startsWith("/"))
 		return false;
 	const segments = value.split("/");
+	if (segments[0] === ".git") return false;
 	return segments.every(
 		(segment) =>
 			segment.length > 0 &&
