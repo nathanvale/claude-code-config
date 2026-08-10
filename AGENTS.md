@@ -27,8 +27,8 @@
 - Analysis-only or brainstorming request: ask before implementing.
 - Low-risk ambiguity: assume; state it.
 - High-risk ambiguity: ask one question.
-- Execute in small, reviewable steps.
-- Test meaningful changes.
+- Execute in small, reviewable, tested steps.
+- Approval blockers: for one genuine explicit yes/no decision that pauses the task, invoke `agent-attention` automatically. Keep multi-choice, disagreement, and ambiguous prose in the task.
 - Preserve unrelated user/agent changes.
 - Startup source: `$HOME/code/claude-code-config/AGENTS.md`; prompt-system changes use `$HOME/code/claude-code-config/skills/prompt-system-workflow/SKILL.md`; check delivery with `$HOME/code/claude-code-config/scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
