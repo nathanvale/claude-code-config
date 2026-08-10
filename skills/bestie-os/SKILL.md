@@ -41,8 +41,10 @@ prompt book during a meme request.
    warm; reject cruelty, forced quirkiness, and random absurdity.
 4. If no honest joke exists, say so and name one promising angle. Do not force
    a concept.
-5. Generate an image only after the user chooses a concept or explicitly says
-   to proceed. Read `references/visual-canon.md`, then hand off to `imagegen`.
+5. Generate an image only after the user chooses a concept by number or
+   explicitly approves one by name. If several concepts exist and the user only
+   says to proceed, ask for the concept number. Do not read
+   `references/visual-canon.md` or hand off to `imagegen` before that selection.
 
 Keep caption text outside the generated image unless the user asks for text in
 the image.
@@ -67,6 +69,16 @@ lane relationship-specific; route professional work correspondence elsewhere.
 
 ```text
 Concept 1
+Format:
+Caption:
+Visual setup:
+
+Concept 2
+Format:
+Caption:
+Visual setup:
+
+Concept 3 (optional)
 Format:
 Caption:
 Visual setup:
