@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
+import {
+	type AdapterReleaseResult,
+	findAdapterDefinition,
+} from "@side-quest/browser-connect/adapters";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import { TRANSPORT_STDIN_MAX_BYTES } from "@side-quest/mcporter-transport";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
@@ -24,6 +28,7 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import { deriveSessionName } from "./browser-use-adapter-session-lease";
 import {
 	projectAgentBrowserSnapshotRefs,
 	resolveUniqueSemanticRef,
@@ -359,6 +364,11 @@ export type AgentBrowserReadResult = {
 	data: unknown;
 };
 
+type AgentBrowserSessionReleaseDebt = Extract<
+	AdapterReleaseResult,
+	{ released: false }
+>;
+
 /**
  * Native Agent Browser execution result. It carries structural truth only,
  * never adapter stdout, page text, field values, endpoints, or secrets.
@@ -370,6 +380,8 @@ export type AgentBrowserExecutionResult =
 			executed_steps: number;
 			target_tab_id: string;
 			mutation_dispatched: boolean;
+			/** Non-fatal debt when the adapter session could not be released. */
+			release?: AgentBrowserSessionReleaseDebt;
 			/** Present only when a confidential delivery engaged in this task. */
 			delivery?: AgentBrowserDeliveryEvidence;
 			/**
@@ -387,6 +399,8 @@ export type AgentBrowserExecutionResult =
 			message: string;
 			executed_steps: number;
 			mutation_dispatched: boolean;
+			/** Non-fatal debt when the adapter session could not be released. */
+			release?: AgentBrowserSessionReleaseDebt;
 			/** Present only on `agent_browser_connection_unstable`. */
 			connection?: AgentBrowserConnectionDiagnostic;
 			/**
@@ -419,6 +433,31 @@ function failure(
 		executed_steps: executedSteps,
 		mutation_dispatched: mutationDispatched,
 	};
+}
+
+async function releaseAgentBrowserTaskSession(
+	runtime: AgentBrowserExecutionRuntime,
+	task: AgentBrowserTask,
+): Promise<AdapterReleaseResult> {
+	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
+	if (!releaseSession) {
+		return {
+			released: false,
+			cause: "command-failed",
+			detail: "The agent-browser adapter has no registered session release mechanic.",
+		};
+	}
+	return releaseSession(
+		{
+			env: {},
+			resolveExecutable: () => ({
+				resolved: true,
+				path: task.handoff.attachment.probe_executable,
+			}),
+			runCommand: runtime.runCommand,
+		},
+		{ sessionName: deriveSessionName(task.run_id) },
+	);
 }
 
 async function markMutationDispatch(
@@ -727,7 +766,7 @@ export async function executeAgentBrowserTask(
 		task,
 		validation.allowedOrigins,
 	);
-	if (targetFailure !== undefined) return targetFailure;
+	let taskOutcome: AgentBrowserExecutionResult | undefined = targetFailure;
 
 	let currentRefs = new Set<string>();
 	let currentRefMetadata = new Map<string, { role: string; name: string }>();
@@ -764,7 +803,7 @@ export async function executeAgentBrowserTask(
 					},
 				}
 			: result;
-	for (const step of task.steps) {
+	for (const step of taskOutcome === undefined ? task.steps : []) {
 		if (step.kind === "snapshot") {
 			const result = await runNative(runtime, task, [
 				"snapshot",
@@ -772,12 +811,13 @@ export async function executeAgentBrowserTask(
 				"--json",
 			]);
 			if (!commandSucceeded(result)) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_command_failed",
 					"not-achieved",
 					"Agent Browser could not observe fresh page structure.",
 					executedSteps,
 				));
+				break;
 			}
 			const projected = projectAgentBrowserSnapshotRefs(
 				parseSuccessData(result?.stdout ?? "")?.refs,
@@ -791,32 +831,37 @@ export async function executeAgentBrowserTask(
 
 		if (step.kind === "open") {
 			if (!agentBrowserOriginIsAllowed(step.url, validation.allowedOrigins)) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_target_origin_refused",
 					"not-achieved",
 					"Navigation is outside the task's allowed origins.",
 					executedSteps,
 				));
+				break;
 			}
 			const markerFailure = await markMutationDispatch(
 				runtime,
 				task,
 				executedSteps,
 			);
-			if (markerFailure !== undefined) return withDelivery(markerFailure);
+			if (markerFailure !== undefined) {
+				taskOutcome = withDelivery(markerFailure);
+				break;
+			}
 			mutationDispatched = true;
 			const opened = await runNative(runtime, task, ["open", step.url, "--json"]);
 			currentRefs = new Set();
 			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(opened)) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_mutation_effect_unknown",
 					"unknown",
 					"Navigation may have reached the browser; inspect before retry.",
 					executedSteps,
 					mutationDispatched,
 				));
+				break;
 			}
 			const verified = await verifyAgentBrowserPostcondition(
 				nativeCommand,
@@ -824,7 +869,7 @@ export async function executeAgentBrowserTask(
 				validation.allowedOrigins,
 			);
 			if (verified !== "confirmed") {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					verified === "unavailable"
 						? "agent_browser_mutation_effect_unknown"
 						: "agent_browser_postcondition_not_achieved",
@@ -835,27 +880,30 @@ export async function executeAgentBrowserTask(
 					executedSteps + 1,
 					mutationDispatched,
 				));
+				break;
 			}
 			executedSteps += 1;
 			continue;
 		}
 
 		if (!hasCurrentSnapshot) {
-			return withDelivery(failure(
+			taskOutcome = withDelivery(failure(
 				"agent_browser_current_snapshot_required",
 				"not-achieved",
 				"A fresh task-local snapshot is required immediately before ref mutation.",
 				executedSteps,
 			));
+			break;
 		}
 		if (step.kind === "evaluate") {
 			if (!actionIntegrityIsValid(step, validation.allowedOrigins)) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_action_integrity_refused",
 					"not-achieved",
 					"Evaluated actions require an approved hash-bound script, admitted origin, bounded input, and mutation postcondition.",
 					executedSteps,
 				));
+				break;
 			}
 			const currentUrl = await runNative(runtime, task, ["get", "url", "--json"]);
 			const observedUrl = parseSuccessData(currentUrl?.stdout ?? "")?.url;
@@ -864,12 +912,13 @@ export async function executeAgentBrowserTask(
 				typeof observedUrl !== "string" ||
 				!agentBrowserHasExactOrigin(observedUrl, step.allowed_origin)
 			) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_action_target_refused",
 					"not-achieved",
 					"The reviewed action's exact allowed origin is not freshly proven.",
 					executedSteps,
 				));
+				break;
 			}
 			if (step.effect === "mutation") {
 				const markerFailure = await markMutationDispatch(
@@ -877,7 +926,10 @@ export async function executeAgentBrowserTask(
 					task,
 					executedSteps,
 				);
-				if (markerFailure !== undefined) return withDelivery(markerFailure);
+				if (markerFailure !== undefined) {
+					taskOutcome = withDelivery(markerFailure);
+					break;
+				}
 				mutationDispatched = true;
 			}
 			const evaluated = await runNative(
@@ -903,7 +955,7 @@ export async function executeAgentBrowserTask(
 						outcome: "unknown",
 					});
 				}
-				return withDelivery(
+				taskOutcome = withDelivery(
 					step.effect === "mutation"
 						? failure(
 								"agent_browser_mutation_effect_unknown",
@@ -920,6 +972,7 @@ export async function executeAgentBrowserTask(
 								mutationDispatched,
 							),
 				);
+				break;
 			}
 			if (step.effect === "read") {
 				// Carry the raw read observation only as far as the engine, which
@@ -947,7 +1000,7 @@ export async function executeAgentBrowserTask(
 							outcome: "unknown",
 						});
 					}
-					return withDelivery(failure(
+					taskOutcome = withDelivery(failure(
 						verified === "unavailable"
 							? "agent_browser_mutation_effect_unknown"
 							: "agent_browser_postcondition_not_achieved",
@@ -958,6 +1011,7 @@ export async function executeAgentBrowserTask(
 						executedSteps + 1,
 						mutationDispatched,
 					));
+					break;
 				}
 				if (step.item_key !== undefined) {
 					const checkpointed = await checkpointItem(runtime, {
@@ -966,13 +1020,14 @@ export async function executeAgentBrowserTask(
 						outcome: "confirmed",
 					});
 					if (!checkpointed) {
-						return withDelivery(failure(
+						taskOutcome = withDelivery(failure(
 							"agent_browser_mutation_effect_unknown",
 							"unknown",
 							"The iterated mutation confirmed structurally, but its durable item checkpoint could not be recorded; inspect before retry.",
 							executedSteps + 1,
 							mutationDispatched,
 						));
+						break;
 					}
 				}
 			}
@@ -999,7 +1054,7 @@ export async function executeAgentBrowserTask(
 			!SAFE_REF.test(mutationRef) ||
 			!currentRefs.has(mutationRef)
 		) {
-			return withDelivery(failure(
+			taskOutcome = withDelivery(failure(
 				"agent_browser_ref_invalid",
 				"not-achieved",
 				semanticTarget !== undefined
@@ -1007,6 +1062,7 @@ export async function executeAgentBrowserTask(
 					: "The requested ref is absent from the current task-local snapshot.",
 				executedSteps,
 			));
+			break;
 		}
 		if (!(step.kind === "fill" && step.sensitivity === "confidential")) {
 			const originProof = await reproveAgentBrowserOrigin(
@@ -1014,7 +1070,7 @@ export async function executeAgentBrowserTask(
 				validation.allowedOrigins,
 			);
 			if (originProof !== "allowed") {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					originProof === "refused"
 						? "agent_browser_target_origin_refused"
 						: "agent_browser_target_unavailable",
@@ -1024,6 +1080,7 @@ export async function executeAgentBrowserTask(
 						: "The selected tab's exact origin could not be freshly proven before mutation.",
 					executedSteps,
 				));
+				break;
 			}
 		}
 		if (step.kind === "fill" && step.sensitivity === "confidential") {
@@ -1033,12 +1090,13 @@ export async function executeAgentBrowserTask(
 			// TokenRetrievalPort (native capability absent) means the auth wiring
 			// supplies no context, so this refusal is exactly the pre-U5 behavior.
 			if (delivery === undefined || !delivery.in_sensitive_interval) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_confidential_input_requires_auth_transaction",
 					"not-achieved",
 					"Confidential input must use the Browser Authentication Transaction.",
 					executedSteps,
 				));
+				break;
 			}
 			// The context is present and we are inside the sensitive interval: route
 			// this field through the Confidential Field Delivery choreography instead
@@ -1050,12 +1108,13 @@ export async function executeAgentBrowserTask(
 					? undefined
 					: delivery.field_by_binding_slug[step.item_binding];
 			if (field === undefined) {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					"agent_browser_confidential_delivery_blocked",
 					"not-achieved",
 					"The confidential fill binding has no mapped credential field in the auth-delivery context.",
 					executedSteps,
 				));
+				break;
 			}
 			const outcome = await deliverConfidentialFields({
 				binding: delivery.binding,
@@ -1077,15 +1136,16 @@ export async function executeAgentBrowserTask(
 				// retry — the caller inspects the blocked cause before resuming.
 				// withDelivery: an earlier fill in this task may already have
 				// delivered, so prior evidence still rides this refusal.
-				return withDelivery({
-					ok: false,
-					code: "agent_browser_confidential_delivery_blocked",
+					taskOutcome = withDelivery({
+						ok: false,
+						code: "agent_browser_confidential_delivery_blocked",
 						outcome: "not-achieved",
 						message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
 						executed_steps: executedSteps,
 						mutation_dispatched:
 							mutationDispatched || outcome.blocked.external_effect_possible,
 					});
+					break;
 				}
 			mutationDispatched = true;
 			for (const shape of outcome.resume.delivered_shapes) {
@@ -1101,7 +1161,7 @@ export async function executeAgentBrowserTask(
 				validation.allowedOrigins,
 			);
 			if (verified !== "confirmed") {
-				return withDelivery(failure(
+				taskOutcome = withDelivery(failure(
 					verified === "unavailable"
 						? "agent_browser_mutation_effect_unknown"
 						: "agent_browser_postcondition_not_achieved",
@@ -1112,6 +1172,7 @@ export async function executeAgentBrowserTask(
 					executedSteps + 1,
 					mutationDispatched,
 				));
+				break;
 			}
 			executedSteps += 1;
 			continue;
@@ -1126,20 +1187,24 @@ export async function executeAgentBrowserTask(
 			task,
 			executedSteps,
 		);
-		if (markerFailure !== undefined) return withDelivery(markerFailure);
+		if (markerFailure !== undefined) {
+			taskOutcome = withDelivery(markerFailure);
+			break;
+		}
 		mutationDispatched = true;
 		const mutated = await runNative(runtime, task, mutationArgs);
 		currentRefs = new Set();
 		currentRefMetadata = new Map();
 		hasCurrentSnapshot = false;
 		if (!commandSucceeded(mutated)) {
-			return withDelivery(failure(
+			taskOutcome = withDelivery(failure(
 				"agent_browser_mutation_effect_unknown",
 				"unknown",
 				"Agent Browser may have dispatched the mutation; inspect before retry.",
 				executedSteps,
 				mutationDispatched,
 			));
+			break;
 		}
 		const verified = await verifyAgentBrowserPostcondition(
 			nativeCommand,
@@ -1147,7 +1212,7 @@ export async function executeAgentBrowserTask(
 			validation.allowedOrigins,
 		);
 		if (verified !== "confirmed") {
-			return withDelivery(failure(
+			taskOutcome = withDelivery(failure(
 				verified === "unavailable"
 					? "agent_browser_mutation_effect_unknown"
 					: "agent_browser_postcondition_not_achieved",
@@ -1158,27 +1223,33 @@ export async function executeAgentBrowserTask(
 				executedSteps + 1,
 				mutationDispatched,
 			));
+			break;
 		}
 		executedSteps += 1;
 	}
 
-	return {
-		ok: true,
-		outcome: "confirmed",
-		executed_steps: executedSteps,
-		target_tab_id: task.target_tab_id,
-		mutation_dispatched: mutationDispatched,
-		...(lastResume !== undefined
-			? {
-					delivery: {
-						delivered_shapes: deliveredShapes,
-						method_step_events: methodStepEvents,
-						resume: lastResume,
-					},
-				}
-			: {}),
-		...(readResults.length > 0 ? { read_results: readResults } : {}),
-	};
+	if (taskOutcome === undefined) {
+		taskOutcome = {
+			ok: true,
+			outcome: "confirmed",
+			executed_steps: executedSteps,
+			target_tab_id: task.target_tab_id,
+			mutation_dispatched: mutationDispatched,
+			...(lastResume !== undefined
+				? {
+						delivery: {
+							delivered_shapes: deliveredShapes,
+							method_step_events: methodStepEvents,
+							resume: lastResume,
+						},
+					}
+				: {}),
+			...(readResults.length > 0 ? { read_results: readResults } : {}),
+		};
+	}
+
+	const release = await releaseAgentBrowserTaskSession(runtime, task);
+	return release.released ? taskOutcome : { ...taskOutcome, release };
 }
 
 // ---------------------------------------------------------------------------
