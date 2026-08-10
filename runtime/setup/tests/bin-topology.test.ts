@@ -22,7 +22,9 @@ describe("bin manifest", () => {
 		const manifest = await readBinManifest(REPO_ROOT);
 		const declaration = manifest.declarations.find(({ name }) => name === "vault-git");
 		expect(declaration).toBeDefined();
-		expect(declaration?.packageDir.endsWith("runtime/vault-git-transaction-manager")).toBe(true);
+		if (!declaration) throw new Error("vault-git bin declaration is missing");
+		expect(declaration.packageDir.endsWith("runtime/vault-git-transaction-manager")).toBe(true);
+		expect((await lstat(declaration.entry)).mode & 0o111).not.toBe(0);
 
 		const plan = await inspectBinTopology(REPO_ROOT, fixture.home, fixture.options);
 		const operation = plan.operations.find(({ name }) => name === "vault-git");
@@ -34,7 +36,7 @@ describe("bin manifest", () => {
 
 		const result = await applyBinTopology(plan);
 		expect(result.failed).toEqual([]);
-		expect(await readlink(join(fixture.binDir, "vault-git"))).toBe(declaration?.entry);
+		expect(await readlink(join(fixture.binDir, "vault-git"))).toBe(declaration.entry);
 	});
 
 	test("pathBin override beats #bin for the same package", async () => {
@@ -142,6 +144,24 @@ describe("bin manifest", () => {
 
 		expect(manifest.declarations).toEqual([]);
 		expect(manifest.findings).toContainEqual(expect.objectContaining({ id: "bin_target_unhealthy" }));
+	});
+
+	test("reports a non-executable entry as target-unhealthy", async () => {
+		const fixture = await binFixture();
+		const entry = join(fixture.source, "runtime/tool/src/cli.ts");
+		await writePackage(fixture.source, "runtime/tool", {
+			name: "tool",
+			bin: { tool: "./src/cli.ts" },
+		}, { "src/cli.ts": SHEBANG_ENTRY });
+		await chmod(entry, 0o644);
+
+		const manifest = await readBinManifest(fixture.source);
+
+		expect(manifest.declarations).toEqual([]);
+		expect(manifest.findings).toContainEqual(expect.objectContaining({
+			id: "bin_target_unhealthy",
+			path: await realpath(entry),
+		}));
 	});
 
 	test("rejects an entry that escapes its package through a symlink", async () => {
@@ -445,7 +465,9 @@ async function writePackage(
 	await writeFile(join(packageDir, "package.json"), JSON.stringify(pkg));
 	for (const [relative, content] of Object.entries(entries)) {
 		await mkdir(join(packageDir, dirname(relative)), { recursive: true });
-		await writeFile(join(packageDir, relative), content);
+		const entry = join(packageDir, relative);
+		await writeFile(entry, content);
+		if (content.startsWith("#!")) await chmod(entry, 0o755);
 	}
 }
 
