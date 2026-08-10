@@ -22,6 +22,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	type AdapterReleaseResult,
+	type AdapterSessionReleaseDebt,
 	findAdapterDefinition,
 } from "@side-quest/browser-connect/adapters";
 import {
@@ -907,11 +908,6 @@ type OperationLaneResult =
 			focus: boolean;
 			release?: AdapterSessionReleaseDebt;
 	  };
-
-type AdapterSessionReleaseDebt = Extract<
-	AdapterReleaseResult,
-	{ released: false }
->;
 
 async function releaseAgentBrowserOperationSession(
 	runtime: BrowserUseRuntime,

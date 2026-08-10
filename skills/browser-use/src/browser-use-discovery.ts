@@ -39,6 +39,7 @@ import type {
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
 	type AdapterReleaseResult,
+	type AdapterSessionReleaseDebt,
 	findAdapterDefinition,
 } from "@side-quest/browser-connect/adapters";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
@@ -653,11 +654,6 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 // --- Live target listing through the attached adapter -----------------------
-
-type AdapterSessionReleaseDebt = Extract<
-	AdapterReleaseResult,
-	{ released: false }
->;
 
 type DiscoverResult =
 	| { ok: true; pages: RawPage[]; release?: AdapterSessionReleaseDebt }

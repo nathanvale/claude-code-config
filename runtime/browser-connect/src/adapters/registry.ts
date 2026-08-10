@@ -151,6 +151,12 @@ export type AdapterReleaseResult =
 			detail: string;
 	  };
 
+/** The failed arm of a release result — the release debt a consumer records. */
+export type AdapterSessionReleaseDebt = Extract<
+	AdapterReleaseResult,
+	{ released: false }
+>;
+
 /**
  * One exact, maintainer-authored safe upgrade transition (R21/R22): the ONLY
  * way an observed version may automatically move to the pin. Never derived

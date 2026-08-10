@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import {
 	type AdapterReleaseResult,
+	type AdapterSessionReleaseDebt,
 	findAdapterDefinition,
 } from "@side-quest/browser-connect/adapters";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
@@ -364,10 +365,6 @@ export type AgentBrowserReadResult = {
 	data: unknown;
 };
 
-type AgentBrowserSessionReleaseDebt = Extract<
-	AdapterReleaseResult,
-	{ released: false }
->;
 
 /**
  * Native Agent Browser execution result. It carries structural truth only,
@@ -381,7 +378,7 @@ export type AgentBrowserExecutionResult =
 			target_tab_id: string;
 			mutation_dispatched: boolean;
 			/** Non-fatal debt when the adapter session could not be released. */
-			release?: AgentBrowserSessionReleaseDebt;
+			release?: AdapterSessionReleaseDebt;
 			/** Present only when a confidential delivery engaged in this task. */
 			delivery?: AgentBrowserDeliveryEvidence;
 			/**
@@ -400,7 +397,7 @@ export type AgentBrowserExecutionResult =
 			executed_steps: number;
 			mutation_dispatched: boolean;
 			/** Non-fatal debt when the adapter session could not be released. */
-			release?: AgentBrowserSessionReleaseDebt;
+			release?: AdapterSessionReleaseDebt;
 			/** Present only on `agent_browser_connection_unstable`. */
 			connection?: AgentBrowserConnectionDiagnostic;
 			/**
@@ -1136,17 +1133,17 @@ export async function executeAgentBrowserTask(
 				// retry — the caller inspects the blocked cause before resuming.
 				// withDelivery: an earlier fill in this task may already have
 				// delivered, so prior evidence still rides this refusal.
-					taskOutcome = withDelivery({
-						ok: false,
-						code: "agent_browser_confidential_delivery_blocked",
-						outcome: "not-achieved",
-						message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
-						executed_steps: executedSteps,
-						mutation_dispatched:
-							mutationDispatched || outcome.blocked.external_effect_possible,
-					});
-					break;
-				}
+				taskOutcome = withDelivery({
+					ok: false,
+					code: "agent_browser_confidential_delivery_blocked",
+					outcome: "not-achieved",
+					message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
+					executed_steps: executedSteps,
+					mutation_dispatched:
+						mutationDispatched || outcome.blocked.external_effect_possible,
+				});
+				break;
+			}
 			mutationDispatched = true;
 			for (const shape of outcome.resume.delivered_shapes) {
 				deliveredShapes.push(shape);
