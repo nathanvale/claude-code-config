@@ -549,7 +549,7 @@ function baseArgs(task: AgentBrowserCommandContext): string[] {
 		"--cdp",
 		task.handoff.endpoint.ws,
 		"--session",
-		`browser-use-${task.run_id}`,
+		deriveSessionName(task.run_id),
 	];
 }
 

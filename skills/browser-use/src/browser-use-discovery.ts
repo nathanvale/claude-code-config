@@ -817,7 +817,7 @@ async function discoverAgentBrowserPages(
 				"--cdp",
 				facts.endpointWs,
 				"--session",
-				`browser-use-${facts.runId}`,
+				deriveSessionName(facts.runId),
 				"tab",
 				"list",
 				"--json",

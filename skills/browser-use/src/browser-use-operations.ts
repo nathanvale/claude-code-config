@@ -992,7 +992,7 @@ async function runAgentBrowserOperationSession(
 		"--cdp",
 		input.handoff.endpointWs,
 		"--session",
-		`browser-use-${input.handoff.runId}`,
+		deriveSessionName(input.handoff.runId),
 	];
 	const call = async (
 		args: string[],
