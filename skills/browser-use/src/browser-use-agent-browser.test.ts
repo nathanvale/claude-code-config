@@ -199,6 +199,65 @@ function argvAndDecodedArguments(calls: readonly (readonly string[])[]): string 
 }
 
 describe("Agent Browser native task lane", () => {
+	test("releases the adapter session after a terminal task", async () => {
+		const activeSessions = new Set<string>();
+		const runtime: AgentBrowserExecutionRuntime = {
+			runCommand: async (input) => {
+				const sessionFlagIndex = input.args.indexOf("--session");
+				const sessionName = input.args[sessionFlagIndex + 1];
+				if (sessionName === undefined) throw new Error("missing session");
+				if (input.args.includes("close")) {
+					activeSessions.delete(sessionName);
+					return {
+						exitCode: 0,
+						stdout: json({}),
+						stderr: "",
+					};
+				}
+				activeSessions.add(sessionName);
+				if (input.args.includes("list")) {
+					return {
+						exitCode: 0,
+						stdout: json({
+							tabs: [
+								{
+									tabId: "t1",
+									active: true,
+									type: "page",
+									url: "https://example.test/",
+								},
+							],
+						}),
+						stderr: "",
+					};
+				}
+				if (input.args.includes("url")) {
+					return {
+						exitCode: 0,
+						stdout: json({ url: "https://example.test/" }),
+						stderr: "",
+					};
+				}
+				return {
+					exitCode: 0,
+					stdout: json({ snapshot: "page", refs: {} }),
+					stderr: "",
+				};
+			},
+		};
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-terminal-release",
+			target_tab_id: "t1",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(activeSessions).toEqual(new Set());
+	});
+
 	test("selects one proven tab, observes, mutates, and freshly verifies structure", async () => {
 		const runtime = runtimeFor([
 			{

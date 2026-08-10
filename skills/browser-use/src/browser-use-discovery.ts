@@ -37,6 +37,7 @@ import type {
 	TargetDiscoveryMode,
 } from "./discovery-model";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
+import { releaseAgentBrowserSession } from "@side-quest/browser-connect/agent-browser-session";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
@@ -798,6 +799,10 @@ async function discoverAgentBrowserPages(
 	if (result === undefined) {
 		return transportFailure("The agent-browser tab list call failed.");
 	}
+	const released = await releaseAgentBrowserSession(runtime, {
+		executablePath: facts.probeExecutable,
+		sessionName: `browser-use-${facts.runId}`,
+	});
 	// A timeout has its own taxonomy so the operator can distinguish a slow
 	// endpoint from a hard failure, mirroring the chrome-devtools timeout path.
 	if (result.timedOut === true) {
@@ -834,6 +839,11 @@ async function discoverAgentBrowserPages(
 	if (!agentBrowserEnvelopeSucceeded(parsed)) {
 		return transportFailure(
 			"The agent-browser tab list call reported a failure response.",
+		);
+	}
+	if (!released.released) {
+		return transportFailure(
+			"The agent-browser tab list call ended without releasing its adapter session.",
 		);
 	}
 	return { ok: true, pages: extractAgentBrowserPages(parsed) };

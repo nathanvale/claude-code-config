@@ -853,10 +853,10 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		const json = parseJson(result.stdout);
 		expect(json.status).toBe("ok");
 		expect(json.data).toMatchObject({ operation_ready: true });
-		// The spawn is the agent-browser tab-list subcommand argv, verbatim from
-		// the envelope's ws endpoint and inherited run id.
-		expect(calls).toHaveLength(1);
-		expect(commandVector(calls[0])).toEqual([
+			// Discovery lists through the verified endpoint, then releases only its
+			// owned adapter session without carrying CDP into the close invocation.
+			expect(calls).toHaveLength(2);
+			expect(commandVector(calls[0])).toEqual([
 			FIXTURE_ENVELOPE.data.attachment.probe_executable,
 			"--cdp",
 			wsEndpoint,
@@ -864,8 +864,15 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 			`browser-use-${fixtureRunId}`,
 			"tab",
 			"list",
-			"--json",
-		]);
+				"--json",
+			]);
+			expect(commandVector(calls[1])).toEqual([
+				FIXTURE_ENVELOPE.data.attachment.probe_executable,
+				"--session",
+				`browser-use-${fixtureRunId}`,
+				"close",
+				"--json",
+			]);
 	});
 });
 
@@ -909,7 +916,7 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 		expect(discovery.pages).toEqual([
 			{ id: "T-1", url: "http://127.0.0.1:8912/", title: "Fixture" },
 		]);
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(commandVector(calls[0])).toEqual([
 			AGENT_BROWSER_FACTS.probeExecutable,
 			"--cdp",
@@ -920,6 +927,51 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 			"list",
 			"--json",
 		]);
+		expect(commandVector(calls[1])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"--session",
+			"browser-use-run-42",
+			"close",
+			"--json",
+		]);
+	});
+
+	test("releases the adapter session after discovery", async () => {
+		const activeSessions = new Set<string>();
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				const sessionFlagIndex = call.args.indexOf("--session");
+				const sessionName = call.args[sessionFlagIndex + 1];
+				if (sessionName === undefined) throw new Error("missing session");
+				if (call.args.includes("close")) {
+					activeSessions.delete(sessionName);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({ success: true, data: {} }),
+						stderr: "",
+						timedOut: false,
+					};
+				}
+				activeSessions.add(sessionName);
+				return {
+					exitCode: 0,
+					stdout: tabListStdout([
+						{
+							tabId: "T-1",
+							url: "http://127.0.0.1:8912/",
+							active: true,
+						},
+					]),
+					stderr: "",
+					timedOut: false,
+				};
+			},
+		});
+
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+
+		expect(discovery.ok).toBe(true);
+		expect(activeSessions).toEqual(new Set());
 	});
 
 	test("an empty tab set is an empty page list, never a failure", async () => {
