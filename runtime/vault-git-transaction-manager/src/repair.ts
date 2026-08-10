@@ -293,6 +293,20 @@ async function publishPrepared(
 	if (!receipt.transactionId || !receipt.leaseGeneration || !receipt.leaseAcquiredAt || !receipt.expectedMainCommit || !options.ledger.git.atomicClose) {
 		return refused(action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
 	}
+	// Retry publication is a remote write: the same fail-closed safety proof
+	// that gates foreground writes gates the repair push (host_contract_breach
+	// when the proof is absent, refused, or unavailable).
+	let safety: Awaited<ReturnType<NonNullable<VaultGitDoctorOptions["repository"]["inspectSafety"]>>>;
+	try {
+		safety = options.repository.inspectSafety
+			? await options.repository.inspectSafety()
+			: { status: "refused", reason: "repository_hook" };
+	} catch {
+		safety = { status: "refused", reason: "repository_hook" };
+	}
+	if (safety.status === "refused") {
+		return refused(action, "human_required", receipt.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics);
+	}
 	const preparedAt =
 		history.find((entry) => entry.expectedMainCommit === receipt.expectedMainCommit)
 			?.recordedAt ?? receipt.recordedAt;

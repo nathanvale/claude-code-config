@@ -282,6 +282,31 @@ export function createVaultGitTransactionEngine(
 	}
 
 	async function proveIdentity(receipt?: VaultGitReceipt): Promise<VaultGitEngineResult | { localMainHead: string }> {
+		// Fail closed like captureUnrelatedState: a composed port that cannot
+		// prove repository safety must never let a write-capable phase proceed.
+		if (!options.repository.inspectSafety) {
+			return refusal(
+				"human_required",
+				receipt?.phase ?? "blocked",
+				"host_contract_breach",
+				"request_operator_review",
+				"Compose a repository port with inspectSafety; write-capable phases refuse without a repository-safety proof.",
+			);
+		}
+		const safety = await options.repository.inspectSafety();
+		if (safety.status === "refused") {
+			return refusal(
+				"human_required",
+				receipt?.phase ?? "blocked",
+				"host_contract_breach",
+				"request_operator_review",
+				// Free text here crosses the facade's runtime-text-safety gate, so
+				// the summary must not interpolate reasons (credential_helper trips
+				// the credential pattern) or name the tool ("Git <word>" reads as a
+				// command example); the blocker id carries the classification.
+				"Remove the unsafe repository-local configuration flagged by safety inspection before continuing.",
+			);
+		}
 		const resolved = await options.repository.resolveCanonicalIdentity();
 		if (resolved.identity !== options.repositoryIdentity || (receipt && resolved.localMainHead !== receipt.localMainHead)) {
 			return refusal("human_required", receipt?.phase ?? "blocked", "vault_identity_changed", "inspect_configured_vault", "Inspect configured vault identity before continuing.");
@@ -364,6 +389,15 @@ export function createVaultGitTransactionEngine(
 				};
 			}
 			try {
+				// Janitor write eligibility fails closed exactly like foreground
+				// writes: no safety proof, no hygiene transaction.
+				if (!options.repository.inspectSafety) {
+					return { status: "refused", blocker: "host_contract_breach", doctor };
+				}
+				const safety = await options.repository.inspectSafety();
+				if (safety.status === "refused") {
+					return { status: "refused", blocker: "host_contract_breach", doctor };
+				}
 				const identity = await options.repository.resolveCanonicalIdentity();
 				if (identity.identity !== options.repositoryIdentity) {
 					return { status: "refused", blocker: "vault_identity_changed", doctor };
@@ -556,6 +590,38 @@ export function createVaultGitTransactionEngine(
 			}
 			const identity = await proveIdentity();
 			if ("status" in identity) return identity;
+			// Fail closed: without the read-only capability probe, admission
+			// cannot prove the remote honors the two-ref atomic close (KTD4).
+			if (!options.ledger.git.probeAtomicPush) {
+				return refusal(
+					"absent",
+					"blocked",
+					"host_contract_breach",
+					"request_operator_review",
+					"Compose a remote port with probeAtomicPush; admission refuses without an atomic-capability proof.",
+				);
+			}
+			const atomicCapability = await options.ledger.git.probeAtomicPush(
+				input.remote,
+			);
+			if (atomicCapability.status === "refused") {
+				return refusal(
+					"absent",
+					"blocked",
+					"host_contract_breach",
+					"request_operator_review",
+					`Use a remote with admitted atomic-push behavior; probe found ${atomicCapability.reason}.`,
+				);
+			}
+			if (atomicCapability.status === "failed") {
+				return refusal(
+					"absent",
+					"blocked",
+					"remote_unavailable",
+					"inspect_status",
+					"Inspect remote availability before admission.",
+				);
+			}
 			const main = await options.ledger.git.inspectMain(input.remote);
 			if (main.status !== "ok" || main.alignment !== "aligned" || main.localHead === null || main.localHead !== identity.localMainHead) {
 				return refusal("absent", "blocked", main.status === "failed" ? "remote_unavailable" : alignmentBlocker(main.alignment), "inspect_status", "Inspect main alignment before admission.");
@@ -689,10 +755,16 @@ export function createVaultGitTransactionEngine(
 			if (input.remote !== loaded.remote) {
 				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
 			}
-			// Interrupted completions may retry from checking or committing; the
-			// identity, alignment, and lease fences below re-prove safety, and an
-			// already-advanced local main refuses through the identity fence.
-			if (loaded.phase !== "writing" && loaded.phase !== "checking" && loaded.phase !== "committing") {
+			// A durable checking phase means a prior completion died mid-check
+			// with an unknown check outcome; resumption is owned by doctor and
+			// repair, never by a direct completion replay. Committing may retry:
+			// its candidate evidence is frozen and the fences below re-prove
+			// safety, and an already-advanced local main refuses through the
+			// identity fence.
+			if (loaded.phase === "checking") {
+				return refusal("active", loaded.phase, "completion_interrupted", "run_doctor", "Run doctor to resume the interrupted completion check.");
+			}
+			if (loaded.phase !== "writing" && loaded.phase !== "committing") {
 				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Completion requires the writing phase; inspect current status.");
 			}
 			const exactClose = Boolean(options.repository.commitExact && options.check && options.ledger.git.atomicClose);
@@ -737,7 +809,9 @@ export function createVaultGitTransactionEngine(
 						checking.ownedPaths.map((path) => path.path),
 					);
 				} catch {
-					return refusal("active", checking.phase, "completion_interrupted", "complete_transaction", "Retry completion; owned-path content capture did not complete.", "local", "same_input_safe");
+					// The durable phase is now checking, and direct completion
+					// replays refuse from that phase; doctor and repair own resume.
+					return refusal("active", checking.phase, "completion_interrupted", "run_doctor", "Run doctor to resume completion; owned-path content capture did not complete.", "local", "same_input_safe");
 				}
 			}
 			const checked = await options.check.run();

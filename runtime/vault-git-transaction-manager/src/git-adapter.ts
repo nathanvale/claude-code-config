@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, realpath, unlink } from "node:fs/promises";
+import { chmod, lstat, readdir, realpath, unlink } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -267,6 +267,59 @@ export function createGitAdapter(
 	};
 
 	return {
+		async probeAtomicPush(remote) {
+			try {
+				assertSafeRemote(remote);
+				await assertSafeRemoteTarget(
+					runGit,
+					remote,
+					options.timeouts.localMs,
+					allowedRemoteHosts,
+				);
+				await assertNoConfiguredPushRefspec(
+					runGit,
+					remote,
+					options.timeouts.localMs,
+				);
+			} catch {
+				return { status: "refused", reason: "unsafe_remote_configuration" };
+			}
+			const localMain = await runGit(
+				["rev-parse", "--verify", "refs/heads/main^{commit}"],
+				options.timeouts.localMs,
+			);
+			if (localMain.timedOut) return { status: "failed", reason: "timed_out" };
+			if (localMain.exitCode !== 0) {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			const head = requireObjectId(localMain.stdout, "local main");
+			// Dry-run only: two collision-resistant synthetic refs shaped like the
+			// real contract (a main-like ref plus a ledger-like ref) exercise the
+			// two-ref atomic capability and vault-system namespace permissions.
+			// refs/heads/main itself is deliberately absent so a behind or
+			// diverged main is classified by inspectMain, never mislabeled as
+			// remote_unavailable by a non-fast-forward dry-run rejection; a fresh
+			// per-call suffix keeps a pre-existing remote ref from colliding.
+			const probeNamespace = `refs/heads/vault-system/probe-${randomUUID().replaceAll("-", "")}`;
+			const probed = await runGit(
+				[
+					"push",
+					...VAULT_GIT_ATOMIC_PUSH_FLAGS,
+					"--dry-run",
+					remote,
+					`${head}:${probeNamespace}/main`,
+					`${head}:${probeNamespace}/transaction-ledger`,
+				],
+				options.timeouts.pushMs,
+			);
+			if (probed.timedOut) return { status: "failed", reason: "timed_out" };
+			if (probed.exitCode === 0) return { status: "supported" };
+			if (/does not support.*atomic|atomic push is not supported/i.test(probed.stderr)) {
+				return { status: "refused", reason: "atomic_push_unsupported" };
+			}
+			return { status: "failed", reason: "remote_unavailable" };
+		},
+
 		async inspectMain(remote): Promise<VaultGitMainInspection> {
 			assertSafeRemote(remote);
 			await assertSafeRemoteTarget(
@@ -767,6 +820,73 @@ export function createGitRepositoryAdapter(
 	};
 
 	return {
+		async inspectSafety() {
+			const hooksPath = await runGit(["config", "--local", "--get", "core.hooksPath"]);
+			if (hooksPath.timedOut || (hooksPath.exitCode !== 0 && hooksPath.exitCode !== 1)) {
+				return { status: "refused", reason: "configured_hooks_path" } as const;
+			}
+			if (hooksPath.exitCode === 0 && hooksPath.stdout.trim().length > 0) {
+				return { status: "refused", reason: "configured_hooks_path" } as const;
+			}
+			const credentialHelpers = await runGit([
+				"config",
+				"--local",
+				"--get-all",
+				"credential.helper",
+			]);
+			if (
+				credentialHelpers.timedOut ||
+				(credentialHelpers.exitCode !== 0 && credentialHelpers.exitCode !== 1) ||
+				(credentialHelpers.exitCode === 0 && credentialHelpers.stdout.trim().length > 0)
+			) {
+				return { status: "refused", reason: "credential_helper" } as const;
+			}
+			// Repository-local transport-command configuration executes attacker
+			// text: core.sshCommand and remote-level sshCommand variants replace
+			// the transport binary, core.fsmonitor runs on nearly every status,
+			// and protocol.ext.allow re-enables the ext:: command transport.
+			for (const pattern of [
+				"sshcommand$",
+				"^core\\.fsmonitor$",
+				"^protocol\\.ext\\.allow$",
+			]) {
+				const configured = await runGit([
+					"config",
+					"--local",
+					"--get-regexp",
+					pattern,
+				]);
+				if (
+					configured.timedOut ||
+					(configured.exitCode !== 0 && configured.exitCode !== 1) ||
+					(configured.exitCode === 0 && configured.stdout.trim().length > 0)
+				) {
+					return { status: "refused", reason: "transport_command" } as const;
+				}
+			}
+			const hooksDirectory = await runGit(["rev-parse", "--git-path", "hooks"]);
+			if (hooksDirectory.timedOut || hooksDirectory.exitCode !== 0) {
+				return { status: "refused", reason: "repository_hook" } as const;
+			}
+			// A missing hooks directory proves no hook can run; any other read
+			// failure proves nothing, so it refuses instead of failing open.
+			let hookNames: string[];
+			try {
+				hookNames = await readdir(
+					resolve(options.repositoryPath, hooksDirectory.stdout.trim()),
+				);
+			} catch (error) {
+				if (!isMissingFilesystemEntry(error)) {
+					return { status: "refused", reason: "repository_hook" } as const;
+				}
+				hookNames = [];
+			}
+			if (hookNames.some((name) => !name.endsWith(".sample"))) {
+				return { status: "refused", reason: "repository_hook" } as const;
+			}
+			return { status: "safe" } as const;
+		},
+
 		async resolveCanonicalIdentity() {
 			const [configuredRoot, discoveredRoot, main] = await Promise.all([
 				realpath(options.repositoryPath),
@@ -1459,6 +1579,14 @@ async function assertNoConfiguredPushRefspec(
 		runGit,
 		["config", "--get-regexp", "^url\\..*\\.pushinsteadof$"],
 		"configured pushInsteadOf rewrites are not accepted for ledger writes",
+		timeoutMs,
+	);
+	// url.<base>.insteadOf silently retargets every transport at connect time,
+	// so the URL this adapter validated is not the URL git would contact.
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get-regexp", "^url\\..*\\.insteadof$"],
+		"configured insteadOf rewrites are not accepted for ledger writes",
 		timeoutMs,
 	);
 	// URL-form remotes cannot carry remote.<name>.* configuration; the explicit

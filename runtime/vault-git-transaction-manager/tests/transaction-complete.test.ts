@@ -1077,6 +1077,9 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 	});
 	const ledgerGit: VaultGitRemotePort = options.atomicCloseOutcome
 		? {
+				// begin fails closed without the capability probe, so the partial
+				// port must delegate it to the real adapter.
+				probeAtomicPush: remote.probeAtomicPush,
 				inspectMain: (remoteName) => remote.inspectMain(remoteName),
 				readLedger: (remoteName, ledgerRef) => remote.readLedger(remoteName, ledgerRef),
 				appendLedgerCommit: (request) => remote.appendLedgerCommit(request),

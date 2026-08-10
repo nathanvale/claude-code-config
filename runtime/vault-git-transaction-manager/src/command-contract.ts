@@ -557,6 +557,14 @@ export function parseVaultGitInvocation(
 			case "--path": {
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
+				// An option-shaped value is always a caller mistake, never a real
+				// owned path; refusing here keeps flag-lookalike bytes out of the
+				// admission pipeline entirely.
+				if (parsed.startsWith("-")) {
+					throw usageError(
+						"--path requires a repository-relative path, not an option-shaped value",
+					);
+				}
 				paths.push(parsed);
 				break;
 			}

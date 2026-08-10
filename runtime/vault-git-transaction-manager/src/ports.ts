@@ -158,6 +158,18 @@ export type VaultGitMainInspection =
 	| VaultGitMainInspectionSuccess
 	| VaultGitMainInspectionFailure;
 
+/** Read-only atomic-push admission result before transaction state exists. */
+export type VaultGitAtomicPushCapability =
+	| { readonly status: "supported" }
+	| {
+			readonly status: "refused";
+			readonly reason: "atomic_push_unsupported" | "unsafe_remote_configuration";
+	  }
+	| {
+			readonly status: "failed";
+			readonly reason: "remote_unavailable" | "timed_out";
+	  };
+
 /** Raw fetched ledger commit for engine-owned schema validation. */
 export interface VaultGitLedgerHead {
 	/** Commit object id used as the fencing generation. */
@@ -293,6 +305,10 @@ export type VaultGitLedgerAppendResult =
  * and the object database remain repository-wide shared state.
  */
 export interface VaultGitRemotePort {
+	/** Prove a two-ref atomic push is admitted without moving either ref. */
+	readonly probeAtomicPush?: (
+		remote: string,
+	) => Promise<VaultGitAtomicPushCapability>;
 	/** Fetch and compare exact local and upstream main refs. */
 	inspectMain(remote: string): Promise<VaultGitMainInspection>;
 	/** Fetch the exact ledger branch without updating a local branch. */
@@ -423,6 +439,18 @@ export type VaultGitLocalCommitInspection =
 
 /** Repository filesystem facts consumed by transaction policy. */
 export interface VaultGitRepositoryPort {
+	/** Refuse repository-local Git execution redirects before any write. */
+	readonly inspectSafety?: () => Promise<
+		| { readonly status: "safe" }
+		| {
+				readonly status: "refused";
+				readonly reason:
+					| "configured_hooks_path"
+					| "credential_helper"
+					| "repository_hook"
+					| "transport_command";
+		  }
+	>;
 	/** Resolve and canonicalize configured repository identity. */
 	resolveCanonicalIdentity(): Promise<VaultGitRepositoryIdentity>;
 	/** Expand directories and inspect the frozen leaf set without mutation. */
