@@ -669,6 +669,18 @@ export function createVaultGitTransactionEngine(
 			if (input.remote !== loaded.remote) {
 				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
 			}
+			// Closure is evidence-gated: the plan admits only
+			// `Committing -> Closed: atomic main + ledger release verified` and
+			// `Repairable -> Closed: deterministic restore + release`. This
+			// transition owns no commit evidence (see below), so it cannot supply
+			// that proof. Recording `closed` here would leave the remote lease
+			// held while the local receipt reads terminal, which blocks every
+			// later writer and stops doctor and repair from reconciling.
+			// Refuse before fencing so an unreachable remote cannot mask an
+			// unsupported transition behind a lease or transport blocker.
+			if (input.phase === "closed") {
+				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Closure requires verified atomic close; complete or repair the transaction instead of recording closed.");
+			}
 			const fenced = await fence(loaded, input.remote);
 			if (fenced) return fenced;
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
@@ -701,7 +713,10 @@ async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, 
 function copyPaths(paths: readonly VaultGitOwnedPathReceipt[]): VaultGitOwnedPathReceipt[] { return paths.map((path) => ({ ...path })); }
 
 function result(status: VaultGitEngineResult["status"], state: VaultGitTransactionState, receipt: VaultGitReceipt, writePermission: VaultGitWritePermission, changedState: VaultGitEngineResult["changedState"], actionId: VaultGitEngineNextActionId, summary: string, blocker?: VaultGitBlockerId): VaultGitEngineResult {
-	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety: state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : "same_input_safe", nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
+	// Decision 19: a push_pending commit is never automatically retried or
+	// reclaimed, so it must not advertise the same input as safe to resend.
+	const retrySafety: VaultGitRetrySafety = state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : state === "push_pending" ? "same_input_unsafe" : "same_input_safe";
+	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety, nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
 }
 
 function refusal(state: VaultGitTransactionState, phase: VaultGitTransactionPhase, blocker: VaultGitBlockerId, actionId: VaultGitEngineNextActionId, summary: string, changedState: VaultGitEngineResult["changedState"] = "none", retrySafety?: VaultGitRetrySafety): VaultGitEngineResult {

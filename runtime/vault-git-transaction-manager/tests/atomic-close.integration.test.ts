@@ -76,7 +76,7 @@ describe("atomic remote close", () => {
 		git(fixture.clone, "add", "--", "merge.md");
 		const mergeTree = git(fixture.clone, "write-tree");
 		const merge = git(fixture.clone, "commit-tree", mergeTree, "-p", fixture.mainHead, "-p", orphan, "-m", "merge");
-		expect(
+		await expect(
 			fixture.adapter.atomicClose?.({
 				remote: "origin",
 				expectedMainHead: fixture.mainHead,
@@ -90,6 +90,9 @@ describe("atomic remote close", () => {
 				onPrepared() {},
 			}),
 		).rejects.toThrow("main commit does not descend from the admitted head");
+		// The descent guard runs before the push, so neither ref may move.
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(fixture.ledgerHead);
 	});
 
 	test("remote main movement rejects both ref updates", async () => {
