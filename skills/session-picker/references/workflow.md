@@ -1,21 +1,27 @@
 # Session Picker Workflow
 
-Use this reference for source merging, previews, and explicit register refresh.
+Use this reference for source merging, previews, snapshots, and explicit
+register refresh.
 Command flags, result fields, and error categories remain owned by
-`../scripts/archived-sessions.ts` and its `--help` output.
+`skills/session-picker/scripts/archived-sessions.ts` and its `--help` output.
 
 ## Source Merge
 
-1. Read visible tasks from the Codex app task-list owner. Request enough results
-   to cover filtering before applying the default top 30.
-2. Read archived Codex task-list metadata through the bundled adapter. Keep raw
+1. Query and, when missing or stale, refresh the private snapshot in the parent
+   before reading sessions.
+2. For exact IDs, skip search and open through the native owner.
+3. Read visible tasks from the Codex app task-list owner in the parent only when
+   that source can change the answer. Filter inside tool orchestration and expose
+   at most eight matches instead of the raw list.
+4. Read local Codex task-list metadata directly through the bundled adapter.
+   Keep raw
    history parsing with `runtime/session-corpus/` and recovery classification
    with `skills/session-recovery/`.
-3. Map both sources to session ID, title, summary, source, archive state, last
+5. Map both sources to session ID, title, summary, source, archive state, last
    activity, project or working directory, and host ID when supplied.
-4. Deduplicate by session ID. Preserve the app's host ID and current metadata.
-5. Drop the current task and entries identified as internal workers.
-6. Sort once after the merge. Apply filters, then limit.
+6. Deduplicate by session ID. Preserve the app's host ID and current metadata.
+7. Drop the current task and entries identified as internal workers.
+8. Sort once after the merge. Apply filters, then limit to 12.
 
 Source availability is part of the result:
 
@@ -26,6 +32,18 @@ Source availability is part of the result:
   write or copy the database.
 - Archived ChatGPT absent from the app list: label it unavailable. Local Codex
   state is not proof of ChatGPT archive completeness.
+
+## Snapshot Lifecycle
+
+- Owner: `skills/session-picker/scripts/archived-sessions.ts` and its `--help`
+  output.
+- Default owner path: `$XDG_STATE_HOME/session-picker/session-index.json`, with
+  `~/.local/state` as the XDG fallback.
+- Refresh from local task-list metadata during a user-requested list or search.
+- Search the snapshot without opening Codex's database or reading transcripts.
+- Treat `stale: true` as a candidate-narrowing result. Verify selected metadata
+  through the live app owner before preview or open.
+- Replace the snapshot atomically. Never accumulate raw histories or query logs.
 
 ## Preview And Open
 

@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Session Picker Efficiency Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18201d;
+      --muted: #60706a;
+      --paper: #f6f8f4;
+      --panel: #ffffff;
+      --line: #dce3dd;
+      --accent: #176b52;
+      --accent-soft: #e2f1eb;
+      --warn: #9b5b13;
+      --warn-soft: #fff1d9;
+      --bad: #9e3d36;
+      --bad-soft: #fce9e7;
+      --shadow: 0 10px 30px rgba(24, 32, 29, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 40px auto 80px;
+    }
+
+    header { max-width: 820px; margin-bottom: 28px; }
+    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3.7rem); line-height: 1; letter-spacing: -0.045em; }
+    h2 { margin: 0 0 16px; font-size: 1.15rem; }
+    p { margin: 0 0 12px; }
+    .eyebrow { color: var(--accent); font-size: 0.76rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
+    .question { font-size: 1.16rem; color: #33413c; }
+    .prototype-note { color: var(--muted); font-size: 0.9rem; }
+
+    .verdict {
+      margin: 24px 0;
+      padding: 20px;
+      border: 1px solid #edcf9d;
+      border-radius: 16px;
+      background: var(--warn-soft);
+    }
+
+    .verdict strong { display: block; margin-bottom: 4px; color: #68400f; }
+
+    .grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 18px; align-items: start; }
+    .stack { display: grid; gap: 18px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px; box-shadow: var(--shadow); }
+
+    .state-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .metric { min-height: 90px; padding: 13px; border-radius: 12px; background: #f1f4f1; }
+    .metric span { display: block; color: var(--muted); font-size: 0.76rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+    .metric strong { display: block; margin-top: 6px; font-size: 1.28rem; overflow-wrap: anywhere; }
+    .metric.good { background: var(--accent-soft); }
+    .metric.warn { background: var(--warn-soft); }
+    .metric.bad { background: var(--bad-soft); }
+
+    .last-change { margin-top: 12px; padding: 12px 14px; border-left: 4px solid var(--accent); background: #f5faf7; color: #33413c; }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 9px; }
+    button { border: 1px solid #b9c7c0; border-radius: 999px; padding: 9px 13px; background: white; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    button.danger { background: var(--bad-soft); border-color: #efbdb9; color: var(--bad); }
+    button:disabled { cursor: default; opacity: 0.42; }
+
+    .receipts { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .receipts th, .receipts td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+    .receipts th:first-child, .receipts td:first-child { text-align: left; }
+    .receipts th { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; }
+
+    .tabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 3px; }
+    .tabs button[aria-selected="true"] { background: var(--accent); color: white; border-color: var(--accent); }
+    .scenario-copy { min-height: 72px; color: #3f4c47; }
+    .steps { display: grid; gap: 9px; }
+    .step { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; width: 100%; border-radius: 12px; text-align: left; }
+    .step .number { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #edf1ee; color: var(--muted); }
+    .step.done { color: var(--accent); border-color: #9bcab8; background: var(--accent-soft); }
+    .step.done .number { background: var(--accent); color: white; }
+
+    .event-log { margin: 0; padding-left: 21px; max-height: 230px; overflow: auto; color: #3f4c47; }
+    .event-log li { margin: 7px 0; }
+    .empty { color: var(--muted); }
+
+    code { padding: 2px 5px; border-radius: 5px; background: #edf1ee; }
+
+    @media (max-width: 820px) {
+      .grid { grid-template-columns: 1fr; }
+      .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 520px) {
+      main { width: min(100% - 20px, 1120px); margin-top: 24px; }
+      .state-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Throwaway logic prototype</p>
+      <h1>Does snapshot-first search earn its complexity?</h1>
+      <p class="question">This demo tests whether parent-filtered snapshot and app tools beat context-free agents without hiding useful session candidates.</p>
+      <p class="prototype-note">Measured locally on 11 Aug 2026. No transcripts or session identifiers are embedded. Warm, frozen cold, and parent app-source lanes were exercised.</p>
+    </header>
+
+    <section class="verdict">
+      <strong>Current verdict: keep every session-search lane in the parent.</strong>
+      Parent snapshot search matched agent candidates with fewer calls. Parent cold refresh completed in 129 ms while the agent failed twice. Parent app filtering exposed a 110-token summary; isolated agents lacked the app tool.
+    </section>
+
+    <div class="grid">
+      <div class="stack">
+        <section class="panel">
+          <h2>Current search state</h2>
+          <div id="state" class="state-grid"></div>
+          <div id="lastChange" class="last-change"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Free play</h2>
+          <div class="controls">
+            <button data-action="RESET">Reset</button>
+            <button data-action="EXACT_QUERY">Use exact session ID</button>
+            <button data-action="BROAD_QUERY">Use broad search</button>
+            <button data-action="SNAPSHOT_FRESH">Mark snapshot fresh</button>
+            <button data-action="SNAPSHOT_MISSING">Remove snapshot</button>
+            <button data-action="APP_AVAILABLE">App tools available</button>
+            <button data-action="APP_UNAVAILABLE">App tools unavailable</button>
+            <button class="primary" data-action="RUN_SNAPSHOT">Run snapshot search</button>
+            <button data-action="REFRESH_SNAPSHOT">Refresh snapshot</button>
+            <button data-action="RUN_APP_PARENT">Filter app metadata in parent</button>
+            <button class="danger" data-action="SPAWN_APP_BLIND">Spawn app agent blindly</button>
+            <button class="danger" data-action="RUN_OLD">Run old broad flow</button>
+            <button data-action="OPEN_SELECTED">Open selected candidate</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Measured receipts</h2>
+          <table class="receipts">
+            <thead><tr><th>Path</th><th>Tool calls</th><th>Rows exposed</th><th>Output token proxy</th><th>Elapsed</th><th>Candidates</th></tr></thead>
+            <tbody>
+              <tr><td>Old broad agent</td><td>11</td><td>200</td><td>25,453</td><td>120 s, interrupted</td><td>0</td></tr>
+              <tr><td>Parent cold refresh</td><td>1</td><td>0 to model</td><td>76</td><td>129 ms</td><td>200 indexed</td></tr>
+              <tr><td>Parent warm search</td><td>1</td><td>2</td><td>279</td><td>18 ms median</td><td>2</td></tr>
+              <tr><td>Warm Terra agent</td><td>3</td><td>2</td><td>not billed</td><td>2 repairs</td><td>2, same fingerprint</td></tr>
+              <tr><td>Cold Terra agent</td><td>2</td><td>0</td><td>not measured</td><td>blocked</td><td>0</td></tr>
+              <tr><td>Parent app filter</td><td>1</td><td>52 scanned</td><td>110 filtered</td><td>bounded</td><td>3</td></tr>
+              <tr><td>Blind app agent</td><td>8</td><td>0</td><td>not measured</td><td>blocked</td><td>0</td></tr>
+            </tbody>
+          </table>
+          <p class="prototype-note" style="margin-top: 12px">Token proxy is output bytes divided by four. It measures context pressure, not billed model tokens. The old and new source coverage differed because app metadata tools were unavailable.</p>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2>Guided walkthroughs</h2>
+          <div id="tabs" class="tabs"></div>
+          <div id="scenarioCopy" class="scenario-copy"></div>
+          <div id="steps" class="steps"></div>
+        </section>
+
+        <section class="panel">
+          <h2>What happened</h2>
+          <ol id="eventLog" class="event-log"></ol>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // Pure prototype module. No DOM access.
+    const SearchEfficiency = (() => {
+      const initialState = () => ({
+        query: "none",
+        snapshot: "unknown",
+        appCapability: "unknown",
+        phase: "idle",
+        agentsSpawned: 0,
+        toolCalls: 0,
+        rowsExposed: 0,
+        tokenProxy: 0,
+        elapsedMs: 0,
+        candidates: 0,
+        selected: false,
+        blockedSources: [],
+        lastChange: "Choose a walkthrough or press any free-play action.",
+        events: []
+      });
+
+      const addEvent = (state, message) => ({
+        ...state,
+        lastChange: message,
+        events: [...state.events, message]
+      });
+
+      function reduce(state, action) {
+        switch (action.type) {
+          case "RESET": return initialState();
+          case "EXACT_QUERY": return addEvent({ ...state, query: "exact ID", phase: "ready" }, "Exact ID selected. Delegation is unnecessary.");
+          case "BROAD_QUERY": return addEvent({ ...state, query: "session picker", phase: "ready" }, "Broad search selected. Snapshot should narrow first.");
+          case "SNAPSHOT_FRESH": return addEvent({ ...state, snapshot: "fresh" }, "Private metadata snapshot marked fresh.");
+          case "SNAPSHOT_MISSING": return addEvent({ ...state, snapshot: "missing" }, "No snapshot exists. A local refresh is needed.");
+          case "APP_AVAILABLE": return addEvent({ ...state, appCapability: "available" }, "App task-list capability is available.");
+          case "APP_UNAVAILABLE": return addEvent({ ...state, appCapability: "unavailable" }, "App task-list capability is unavailable.");
+          case "REFRESH_SNAPSHOT": {
+            if (state.query === "exact ID") return addEvent(state, "Skipped refresh. Exact IDs do not need an index.");
+            return addEvent({ ...state, snapshot: "fresh", phase: "indexed", toolCalls: state.toolCalls + 1, tokenProxy: state.tokenProxy + 76, elapsedMs: state.elapsedMs + 129 }, "Parent refreshed 200 sanitized rows; only the 76-token receipt reached the driver.");
+          }
+          case "RUN_SNAPSHOT": {
+            if (state.query === "exact ID") return addEvent({ ...state, phase: "selected", candidates: 1, selected: true }, "Resolved exact ID directly with zero agents.");
+            if (state.snapshot !== "fresh") return addEvent({ ...state, phase: "blocked", blockedSources: [...state.blockedSources, "snapshot"] }, "Snapshot search blocked. Refresh the private index first.");
+            return addEvent({ ...state, phase: "candidates", toolCalls: state.toolCalls + 1, rowsExposed: state.rowsExposed + 2, tokenProxy: state.tokenProxy + 279, elapsedMs: state.elapsedMs + 18, candidates: 2, selected: true }, "Parent snapshot search returned two candidates in one bounded call.");
+          }
+          case "RUN_APP_PARENT": {
+            if (state.appCapability !== "available") return addEvent({ ...state, appCapability: "unavailable", phase: state.candidates ? state.phase : "degraded", blockedSources: [...new Set([...state.blockedSources, "app metadata"])] }, "Parent app tool is unavailable. Skip the source and label coverage incomplete.");
+            return addEvent({ ...state, phase: "candidates", toolCalls: state.toolCalls + 1, rowsExposed: state.rowsExposed + 3, tokenProxy: state.tokenProxy + 110, candidates: Math.max(state.candidates, 3), selected: true }, "Parent filtered 52 visible rows and exposed three bounded matches.");
+          }
+          case "SPAWN_APP_BLIND": return addEvent({ ...state, phase: "degraded", agentsSpawned: state.agentsSpawned + 1, toolCalls: state.toolCalls + 8, blockedSources: [...new Set([...state.blockedSources, "app metadata"])] }, "Blind app agent spent eight discovery calls and returned no rows. This is avoidable waste.");
+          case "RUN_OLD": return addEvent({ ...state, phase: "blocked", agentsSpawned: state.agentsSpawned + 1, toolCalls: state.toolCalls + 11, rowsExposed: state.rowsExposed + 200, tokenProxy: state.tokenProxy + 25453, elapsedMs: state.elapsedMs + 120000, candidates: 0, blockedSources: [...new Set([...state.blockedSources, "live metadata timeout"])] }, "Old broad agent exposed 200 rows, ran for 120 seconds, and was interrupted without a candidate.");
+          case "OPEN_SELECTED": {
+            if (!state.selected) return addEvent(state, "Open blocked. Select one candidate first.");
+            return addEvent({ ...state, phase: "opened" }, "Selected candidate opened through the native owner. No search agent needed.");
+          }
+          default: return state;
+        }
+      }
+
+      return { initialState, reduce };
+    })();
+
+    const scenarios = [
+      {
+        id: "warm",
+        label: "Warm search",
+        copy: "The common case. Parent tools filter both the fresh snapshot and available app metadata before results reach the driver.",
+        actions: [
+          ["BROAD_QUERY", "Ask for sessions about the picker"],
+          ["SNAPSHOT_FRESH", "Use the fresh private snapshot"],
+          ["RUN_SNAPSHOT", "Run the bounded parent snapshot search"],
+          ["APP_AVAILABLE", "Use the parent-owned app capability"],
+          ["RUN_APP_PARENT", "Filter app metadata before handback"],
+          ["OPEN_SELECTED", "Open the selected candidate"]
+        ]
+      },
+      {
+        id: "cold",
+        label: "Cold search",
+        copy: "No index exists yet. The parent refreshes once, then keeps the model-facing result bounded.",
+        actions: [
+          ["BROAD_QUERY", "Start a broad search"],
+          ["SNAPSHOT_MISSING", "Confirm the snapshot is missing"],
+          ["REFRESH_SNAPSHOT", "Build the private snapshot"],
+          ["RUN_SNAPSHOT", "Search the new snapshot"]
+        ]
+      },
+      {
+        id: "exact",
+        label: "Exact ID",
+        copy: "An exact identifier already resolves the target. Any search fan-out is wasted work.",
+        actions: [
+          ["EXACT_QUERY", "Provide an exact session ID"],
+          ["RUN_SNAPSHOT", "Resolve without delegation"],
+          ["OPEN_SELECTED", "Open directly"]
+        ]
+      },
+      {
+        id: "waste",
+        label: "Blind fan-out",
+        copy: "The measured failure. Spawning the app lane before checking capability adds cost and no coverage.",
+        actions: [
+          ["BROAD_QUERY", "Start a broad search"],
+          ["SNAPSHOT_FRESH", "Use the snapshot"],
+          ["RUN_SNAPSHOT", "Find two local candidates"],
+          ["SPAWN_APP_BLIND", "Spawn the unavailable app lane anyway"]
+        ]
+      },
+      {
+        id: "baseline",
+        label: "Old broad flow",
+        copy: "Replay the old broad approach. Compare its exposed rows, output proxy, and incomplete result with the warm path.",
+        actions: [
+          ["BROAD_QUERY", "Start the same query"],
+          ["RUN_OLD", "Run the old broad agent"]
+        ]
+      }
+    ];
+
+    let state = SearchEfficiency.initialState();
+    let activeScenario = scenarios[0];
+    let completedSteps = 0;
+
+    const stateElement = document.querySelector("#state");
+    const lastChangeElement = document.querySelector("#lastChange");
+    const eventLogElement = document.querySelector("#eventLog");
+    const tabsElement = document.querySelector("#tabs");
+    const scenarioCopyElement = document.querySelector("#scenarioCopy");
+    const stepsElement = document.querySelector("#steps");
+
+    const metric = (label, value, tone = "") => `<div class="metric ${tone}"><span>${label}</span><strong>${value}</strong></div>`;
+
+    function renderState() {
+      const blocked = state.blockedSources.length ? state.blockedSources.join(", ") : "none";
+      stateElement.innerHTML = [
+        metric("Phase", state.phase, state.phase === "blocked" ? "bad" : state.phase === "opened" ? "good" : ""),
+        metric("Query", state.query),
+        metric("Snapshot", state.snapshot, state.snapshot === "fresh" ? "good" : state.snapshot === "missing" ? "warn" : ""),
+        metric("App capability", state.appCapability, state.appCapability === "unavailable" ? "warn" : ""),
+        metric("Agents spawned", state.agentsSpawned, state.agentsSpawned > 2 ? "bad" : ""),
+        metric("Tool calls", state.toolCalls, state.toolCalls > 3 ? "bad" : ""),
+        metric("Rows exposed", state.rowsExposed, state.rowsExposed > 12 ? "bad" : "good"),
+        metric("Output token proxy", state.tokenProxy.toLocaleString(), state.tokenProxy > 1000 ? "bad" : "good"),
+        metric("Elapsed", state.elapsedMs >= 1000 ? `${(state.elapsedMs / 1000).toFixed(1)} s` : `${state.elapsedMs} ms`, state.elapsedMs > 5000 ? "bad" : ""),
+        metric("Candidates", state.candidates, state.candidates ? "good" : ""),
+        metric("Blocked sources", blocked, state.blockedSources.length ? "warn" : ""),
+        metric("Selected", state.selected ? "yes" : "no")
+      ].join("");
+      lastChangeElement.textContent = state.lastChange;
+      eventLogElement.innerHTML = state.events.length ? state.events.map(event => `<li>${event}</li>`).join("") : '<li class="empty">No actions yet.</li>';
+    }
+
+    function renderScenario() {
+      tabsElement.innerHTML = scenarios.map(scenario => `<button data-scenario="${scenario.id}" aria-selected="${scenario.id === activeScenario.id}">${scenario.label}</button>`).join("");
+      scenarioCopyElement.textContent = activeScenario.copy;
+      stepsElement.innerHTML = activeScenario.actions.map(([type, label], index) => `<button class="step ${index < completedSteps ? "done" : ""}" data-step="${index}" ${index > completedSteps ? "disabled" : ""}><span class="number">${index + 1}</span><span>${label}</span></button>`).join("");
+    }
+
+    function dispatch(type) {
+      state = SearchEfficiency.reduce(state, { type });
+      renderState();
+    }
+
+    document.addEventListener("click", event => {
+      const actionButton = event.target.closest("[data-action]");
+      if (actionButton) dispatch(actionButton.dataset.action);
+
+      const scenarioButton = event.target.closest("[data-scenario]");
+      if (scenarioButton) {
+        activeScenario = scenarios.find(scenario => scenario.id === scenarioButton.dataset.scenario);
+        completedSteps = 0;
+        state = SearchEfficiency.initialState();
+        renderState();
+        renderScenario();
+      }
+
+      const stepButton = event.target.closest("[data-step]");
+      if (stepButton) {
+        const step = Number(stepButton.dataset.step);
+        if (step !== completedSteps) return;
+        dispatch(activeScenario.actions[step][0]);
+        completedSteps += 1;
+        renderScenario();
+      }
+    });
+
+    renderState();
+    renderScenario();
+  </script>
+</body>
+</html>

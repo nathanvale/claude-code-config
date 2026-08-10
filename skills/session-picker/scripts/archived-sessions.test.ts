@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdtempSync, rmSync } from "node:fs"
+import {
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 
@@ -148,6 +155,12 @@ function createIncompatibleStateDatabase(): string {
 	return path
 }
 
+function createSnapshotPath(): string {
+	const directory = mkdtempSync(resolve(tmpdir(), "session-picker-state-test-"))
+	temporaryDirectories.push(directory)
+	return resolve(directory, "private", "session-index.json")
+}
+
 function runCommand(
 	arguments_: string[],
 	environment: Record<string, string> = {},
@@ -157,6 +170,19 @@ function runCommand(
 		stderr: "pipe",
 		env: { ...process.env, ...environment },
 	})
+}
+
+function runSnapshot(databasePath: string, statePath: string, limit = 5) {
+	return runCommand([
+		"snapshot",
+		"--database",
+		databasePath,
+		"--state",
+		statePath,
+		"--limit",
+		String(limit),
+		"--json",
+	])
 }
 
 function expectErrorEnvelope(
@@ -173,6 +199,10 @@ function expectErrorEnvelope(
 	return envelope
 }
 
+function expectSessionIds(envelope: { data: { sessions: Array<{ id: string }> } }, ids: string[]) {
+	expect(envelope.data.sessions.map((session) => session.id)).toEqual(ids)
+}
+
 describe("session-picker archived discovery", () => {
 	test("renders discoverable read-only help", () => {
 		const result = runCommand(["--help"])
@@ -182,7 +212,9 @@ describe("session-picker archived discovery", () => {
 		expect(help).toContain("archived --json")
 		expect(help).toContain("--limit")
 		expect(help).toContain("--database")
-		expect(help).toContain("Read-only")
+		expect(help).toContain("snapshot --json")
+		expect(help).toContain("search --query")
+		expect(help).toContain("private local state")
 	})
 
 	test("lists user-facing archived Codex tasks newest first", () => {
@@ -262,9 +294,7 @@ describe("session-picker archived discovery", () => {
 
 		expect(result.exitCode).toBe(0)
 		const envelope = JSON.parse(new TextDecoder().decode(result.stdout))
-		expect(
-			envelope.data.sessions.map((session: { id: string }) => session.id),
-		).toEqual(["archived-newer"])
+		expectSessionIds(envelope, ["archived-newer"])
 	})
 
 	test("rejects an invalid result limit with structured repair guidance", () => {
@@ -327,5 +357,99 @@ describe("session-picker archived discovery", () => {
 		const envelope = expectErrorEnvelope(result, 4, "source_incompatible")
 		expect(envelope.error.retry_safe).toBe(false)
 		expect(envelope.error.next_action).toContain("Codex Desktop")
+	})
+
+	test("writes a bounded private metadata snapshot", () => {
+		const databasePath = createStateDatabase()
+		const statePath = createSnapshotPath()
+		const result = runSnapshot(databasePath, statePath, 2)
+
+		expect(result.exitCode).toBe(0)
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout))
+		expect(envelope.side_effects).toBe("local_private_state")
+		expect(envelope.data.changed_state).toBe("created")
+		expect(envelope.data.session_count).toBe(2)
+		expect(statSync(statePath).mode & 0o777).toBe(0o600)
+		expect(statSync(resolve(statePath, "..")).mode & 0o777).toBe(0o700)
+		const snapshot = JSON.parse(readFileSync(statePath, "utf8"))
+		expect(snapshot.schema_version).toBe(1)
+		expect(snapshot.sessions.map((session: { id: string }) => session.id)).toEqual([
+			"active-task",
+			"archived-newer",
+		])
+	})
+
+	test("searches the private snapshot without opening the Codex database", () => {
+		const databasePath = createStateDatabase()
+		const statePath = createSnapshotPath()
+		const snapshotResult = runSnapshot(databasePath, statePath)
+		expect(snapshotResult.exitCode).toBe(0)
+
+		const result = runCommand([
+			"search",
+			"--query",
+			"archived repo/cli",
+			"--state",
+			statePath,
+			"--json",
+		])
+		expect(result.exitCode).toBe(0)
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout))
+		expect(envelope.side_effects).toBe("none")
+		expect(envelope.data.stale).toBe(false)
+		expectSessionIds(envelope, ["archived-cli"])
+	})
+
+	test("returns newest snapshot rows for an empty query", () => {
+		const databasePath = createStateDatabase()
+		const statePath = createSnapshotPath()
+		runSnapshot(databasePath, statePath, 3)
+
+		const result = runCommand([
+			"search",
+			"--query",
+			"",
+			"--state",
+			statePath,
+			"--limit",
+			"2",
+			"--json",
+		])
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout))
+		expectSessionIds(envelope, ["active-task", "archived-newer"])
+	})
+
+	test("reports missing snapshots as repairable", () => {
+		const result = runCommand([
+			"search",
+			"--query",
+			"anything",
+			"--state",
+			createSnapshotPath(),
+			"--json",
+		])
+		const envelope = expectErrorEnvelope(result, 3, "snapshot_unavailable")
+		expect(envelope.error.next_action).toContain("snapshot --json")
+	})
+
+	test("labels an old snapshot stale", () => {
+		const databasePath = createStateDatabase()
+		const statePath = createSnapshotPath()
+		runSnapshot(databasePath, statePath)
+		const snapshot = JSON.parse(readFileSync(statePath, "utf8"))
+		snapshot.generated_at = "2000-01-01T00:00:00.000Z"
+		writeFileSync(statePath, `${JSON.stringify(snapshot)}\n`)
+		utimesSync(statePath, new Date(), new Date())
+
+		const result = runCommand([
+			"search",
+			"--query",
+			"task",
+			"--state",
+			statePath,
+			"--json",
+		])
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout))
+		expect(envelope.data.stale).toBe(true)
 	})
 })
