@@ -121,12 +121,13 @@ export function main(
 		});
 	}
 
-	const nextAction = vaultGitMutatingCommands.has(invocation.command)
+	const mutating = vaultGitMutatingCommands.has(invocation.command);
+	const nextAction = mutating
 		? "inspect_status"
 		: invocation.command === "commands"
 			? "inspect_commands"
 			: "wait_for_runtime";
-	const outcome = vaultGitMutatingCommands.has(invocation.command)
+	const outcome = mutating
 		? "unavailable"
 		: invocation.command === "commands"
 			? "discovered"
@@ -137,7 +138,7 @@ export function main(
 				...payload,
 				commands: projectVaultGitCommandDiscoveryTree().commands,
 			})
-		: createCommandResultData(vaultGitContracts.status, payload);
+		: createCommandResultData(vaultGitContracts[invocation.command], payload);
 	const action = runtimeActions.find(({ id }) => id === nextAction);
 	if (!action) throw new Error(`Missing runtime action: ${nextAction}`);
 	const envelopeOptions = {
@@ -147,7 +148,7 @@ export function main(
 		continuation: { next_action_id: nextAction },
 	} as const;
 
-	if (vaultGitMutatingCommands.has(invocation.command)) {
+	if (mutating) {
 		const envelope = createCliRuntimeErrorEnvelope({
 			...envelopeOptions,
 			process_exit_code: 1,
@@ -224,6 +225,7 @@ function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
 		`write_permission: ${result.write_permission}`,
 		`changed_state: ${result.changed_state}`,
 		`retry_safety: ${result.retry_safety}`,
+		`blockers: ${result.blockers.join(", ")}`,
 		`next: ${result.next_action.id}`,
 		"",
 	].join("\n");
@@ -242,8 +244,9 @@ function emitUsageFailure(input: {
 		input.error instanceof CliUsageError || input.error instanceof Error
 			? input.error.message
 			: String(input.error);
+	const command = commandFromArgv(input.argv);
 	const payload = createVaultGitLifecycleResult({
-		command: commandFromArgv(input.argv),
+		command,
 		outcome: "invalid_usage",
 		phase: "unavailable",
 		write_permission: "denied",
@@ -255,8 +258,11 @@ function emitUsageFailure(input: {
 			summary: "Correct the command arguments and retry parsing.",
 		},
 	});
-	const data = createCommandResultData(vaultGitContracts.status, payload);
-	if (input.argv.includes("--json")) {
+	// Invalid `commands` usage emits lifecycle data, not discovery metadata.
+	const resultContract =
+		command === "commands" ? vaultGitContracts.status : vaultGitContracts[command];
+	const data = createCommandResultData(resultContract, payload);
+	if (input.argv.some((arg) => arg === "--json" || arg.startsWith("--json="))) {
 		const action = runtimeActions.find(({ id }) => id === "change_input");
 		if (!action) throw new Error("Missing change_input action");
 		writeJsonEnvelope(
@@ -317,4 +323,11 @@ class BufferWriter implements CliWriter {
 	}
 }
 
-if (import.meta.main) process.exit(main(Bun.argv.slice(2)));
+if (import.meta.main) {
+	try {
+		process.exit(main(Bun.argv.slice(2)));
+	} catch {
+		console.error("vault-git: unexpected runtime failure; run doctor for diagnostics");
+		process.exit(1);
+	}
+}
