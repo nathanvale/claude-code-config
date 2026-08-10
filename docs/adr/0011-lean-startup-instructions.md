@@ -1,9 +1,17 @@
 ---
-status: accepted
+status: superseded
 date: 2026-06-02
+superseded: 2026-08-09
 ---
 
 # Lean Startup Instructions
+
+> **Clean-slate replacement (2026-08-09):** Dotfiles now owns global Claude and
+> Codex instruction sources plus the exact three-target link manager. The
+> manual-only `agent-instructions` skill owns audit, preview, apply routing, and
+> fresh native proof. Setup retains first-party skills, declared PATH bins,
+> copied hooks, locks, and runbook health; it no longer owns startup topology or
+> instruction health. The decision below remains historical context.
 
 > **Setup amendment (2026-07-13):** Root `setup` and `runtime/setup/` now own
 > startup topology, hook installation, instruction-health composition, and

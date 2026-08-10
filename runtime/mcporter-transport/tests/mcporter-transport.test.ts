@@ -242,6 +242,41 @@ describe("dependency-missing mapping", () => {
 });
 
 describe("spawnTransportCommand", () => {
+	test("awaits the caller dispatch checkpoint immediately before spawn", async () => {
+		const events: string[] = [];
+		const emptyStream = () =>
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.close();
+				},
+			});
+		const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+			events.push("spawn");
+			return {
+				pid: 42_425,
+				stdin: undefined,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: Promise.resolve(0),
+				kill() {},
+			} as never;
+		});
+
+		try {
+			await spawnTransportCommand({
+				command: "fake-transport",
+				args: [],
+				timeoutMs: 5000,
+				beforeSpawn: async () => {
+					events.push("dispatched-receipt");
+				},
+			});
+			expect(events).toEqual(["dispatched-receipt", "spawn"]);
+		} finally {
+			spawn.mockRestore();
+		}
+	});
+
 	test("an unresolvable binary surfaces as an exit-127 result, not a throw", async () => {
 		const result = await spawnTransportCommand({
 			command: "definitely-not-a-real-binary-b7c2e",
@@ -276,6 +311,24 @@ describe("spawnTransportCommand", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout.trim()).toBe("$(rm -rf /); `whoami`");
+	});
+
+	test("bounds combined provider output and kills the process at the ceiling", async () => {
+		const maxOutputBytes = 1024;
+		const result = await spawnTransportCommand({
+			command: process.execPath,
+			args: [
+				"-e",
+				"process.stdout.write('x'.repeat(4096)); setTimeout(() => {}, 30000)",
+			],
+			detached: true,
+			maxOutputBytes,
+			timeoutMs: 5_000,
+		});
+
+		expect(result.outputLimitExceeded).toBe(true);
+		expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(maxOutputBytes);
+		expect(result.timedOut).toBeUndefined();
 	});
 
 	test("keeps stdin ignored by default", async () => {

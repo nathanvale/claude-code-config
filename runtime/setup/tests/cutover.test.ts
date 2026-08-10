@@ -48,9 +48,9 @@ describe("setup owner cutover", () => {
 			external_acquisition: "external",
 		});
 		expect(INSTALL_SH_FEATURE_DISPOSITION).toEqual({
-			startup_links: "keep",
+			startup_links: "external_dotfiles_owner",
 			hook_installation: "keep_stronger_safety",
-			instruction_health: "keep",
+			instruction_health: "replace_with_manual_skill",
 			runbook_artifact: "keep",
 			status: "keep",
 			unlink: "keep_narrower_proof",
@@ -76,6 +76,7 @@ describe("setup owner cutover", () => {
 			.decode(tracked.stdout)
 			.split("\0")
 			.filter((file) => file !== "")
+			.filter((file) => existsSync(join(repoRoot, file)))
 			.filter((file) => !historicalRouteFiles.has(file))
 			.filter((file) => historicalRoutePrefixes.every((prefix) => !file.startsWith(prefix)))
 			.filter((file) => !file.includes("/tests/"))
@@ -102,7 +103,19 @@ describe("setup owner cutover", () => {
 		expect(startup).toContain("setup sync --check --json");
 		expect(startup).toContain("$HOME/code/claude-code-config/");
 		expect(startup).not.toMatch(/`(?:\.\/setup|skills\/|context\/|docs\/git\/|scripts\/agent-instructions\.sh)/u);
-		expect(startup).toContain("bunx skills add");
+		expect(startup).toContain("$HOME/code/dotfiles/config/agent-instructions/");
+		expect(startup).toContain("skills/agent-instructions/SKILL.md");
+	});
+
+	test("retires broad instruction owners while preserving the manual replacement", () => {
+		for (const path of [
+			"runtime/setup/src/startup-topology.ts",
+			"runtime/setup/src/instruction-health.ts",
+			"skills/prompt-system-router/SKILL.md",
+			"skills/prompt-system-workflow/SKILL.md",
+			"scripts/agent-instructions.sh",
+		]) expect(existsSync(join(repoRoot, path))).toBe(false);
+		expect(existsSync(join(repoRoot, "skills/agent-instructions/SKILL.md"))).toBe(true);
 	});
 
 	test("keeps every third-party package mutation outside Setup", () => {
@@ -119,7 +132,7 @@ describe("setup owner cutover", () => {
 		expect(guidance).toContain("bunx skills");
 	});
 
-	test("pins both migration predecessors while the released hook delegates staged health", () => {
+	test("pins both migration predecessors while the released hook retires staged instruction health", () => {
 		const fixtures = [
 			["pre-commit-setup-v1", "462ff0f88ce44e72474d8aea4a0bbf567962d1604d6b43b955e949d59652eede"],
 			["pre-commit-legacy-installer", "c58eb459e043374bf66e5da2a65fe4f9e4d8ce3aca1daeb9127087e296fe517f"],
@@ -130,7 +143,8 @@ describe("setup owner cutover", () => {
 		}
 
 		const hook = readFileSync(join(repoRoot, "scripts/hooks/pre-commit"), "utf8");
-		expect(hook).toMatch(/AGENT_INSTRUCTIONS_CHECK_STAGED=1 bash "\$\{CHECK_SCRIPT\}" check/u);
+		expect(hook).not.toContain("agent-instructions.sh");
+		expect(hook).toContain("Instruction maintenance is manual-only");
 		expect(hook).not.toContain("PROMPT_SYSTEM_PATHS");
 		expect(hook).not.toMatch(/git\s+diff\s+--cached/u);
 	});

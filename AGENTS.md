@@ -30,7 +30,7 @@
 - Execute in small, reviewable steps.
 - Test meaningful changes.
 - Preserve unrelated user/agent changes.
-- Startup source: `$HOME/code/claude-code-config/AGENTS.md`; prompt-system changes use `$HOME/code/claude-code-config/skills/prompt-system-workflow/SKILL.md`; check delivery with `$HOME/code/claude-code-config/scripts/agent-instructions.sh`.
+- Global instructions live in `$HOME/code/dotfiles/config/agent-instructions/`; this file is repo-local. Invoke `$HOME/code/claude-code-config/skills/agent-instructions/SKILL.md` manually for audit, preview, apply, or native proof.
 - No secrets, tokens, or API keys in source.
 
 ## Agent-Native Work

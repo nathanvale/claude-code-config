@@ -133,7 +133,7 @@ async function spawnSetupStatus(input: {
 			// Only HOME + PATH: the child inherits nothing else. HOME fixes the
 			// owned bin destination (<HOME>/.bun/bin). The fixture paths retain
 			// precedence (shadow -> binDir) while the appended system PATH keeps
-			// setup's git/bash dependencies (scope.ts, instruction-health.ts)
+			// setup's git/bash dependency in scope.ts
 			// resolvable in a bare CI PATH.
 			env: {
 				HOME: input.home,

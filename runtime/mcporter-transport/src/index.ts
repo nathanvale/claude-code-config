@@ -82,6 +82,11 @@ export type TransportCommandInput = {
 	command: string;
 	args: readonly string[];
 	/**
+	 * Optional durable dispatch checkpoint. Awaited after local input validation
+	 * and immediately before the runtime attempts to spawn the child.
+	 */
+	beforeSpawn?: () => void | Promise<void>;
+	/**
 	 * Optional UTF-8 text delivered through a private pipe. Absent by default,
 	 * so commands cannot inherit or wait on the parent's stdin.
 	 */
@@ -100,6 +105,8 @@ export type TransportCommandInput = {
 	 * Default false: the timeout kills only the direct child.
 	 */
 	detached?: boolean;
+	/** Maximum combined stdout and stderr bytes retained before killing the child. */
+	maxOutputBytes?: number;
 	timeoutMs: number;
 };
 
@@ -115,6 +122,7 @@ export type TransportCommandResult = {
 	stdout: string;
 	stderr: string;
 	timedOut?: boolean;
+	outputLimitExceeded?: boolean;
 };
 
 // Structural minimum every consuming surface's runtime already satisfies.
@@ -308,6 +316,13 @@ export async function spawnTransportCommand(
 			"spawnTransportCommand: exactEnv requires an explicit env allowlist",
 		);
 	}
+	if (
+		input.maxOutputBytes !== undefined &&
+		(!Number.isInteger(input.maxOutputBytes) || input.maxOutputBytes < 1)
+	) {
+		throw new Error("spawnTransportCommand: maxOutputBytes must be a positive integer");
+	}
+	await input.beforeSpawn?.();
 	let proc: ReturnType<typeof Bun.spawn>;
 	try {
 		proc = Bun.spawn([input.command, ...input.args], {
@@ -370,11 +385,33 @@ export async function spawnTransportCommand(
 			stderr: `${input.command}: could not start: ${message}`,
 		};
 	}
+	const outputBudget = {
+		remaining: input.maxOutputBytes ?? Number.POSITIVE_INFINITY,
+		exceeded: false,
+	};
+	const onOutputLimit = () => {
+		if (outputBudget.exceeded) return;
+		outputBudget.exceeded = true;
+		killTransportProcess(proc, input.detached === true);
+	};
 	const completion = Promise.all([
-		new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-		new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+		readBoundedOutput(
+			proc.stdout as ReadableStream<Uint8Array>,
+			outputBudget,
+			onOutputLimit,
+		),
+		readBoundedOutput(
+			proc.stderr as ReadableStream<Uint8Array>,
+			outputBudget,
+			onOutputLimit,
+		),
 		proc.exited,
-	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
+	]).then(([stdout, stderr, exitCode]) => ({
+		exitCode,
+		stdout,
+		stderr,
+		...(outputBudget.exceeded ? { outputLimitExceeded: true } : {}),
+	}));
 	if (input.stdinText !== undefined) {
 		try {
 			const stdin = proc.stdin;
@@ -435,6 +472,36 @@ export async function spawnTransportCommand(
 		if (timeout) clearTimeout(timeout);
 		completion.catch(() => undefined);
 	}
+}
+
+async function readBoundedOutput(
+	stream: ReadableStream<Uint8Array>,
+	budget: { remaining: number; exceeded: boolean },
+	onLimit: () => void,
+): Promise<string> {
+	const chunks: Uint8Array[] = [];
+	const reader = stream.getReader();
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value.byteLength <= budget.remaining) {
+				chunks.push(value);
+				budget.remaining -= value.byteLength;
+				continue;
+			}
+			if (budget.remaining > 0) {
+				chunks.push(value.slice(0, budget.remaining));
+				budget.remaining = 0;
+			}
+			onLimit();
+		}
+	} catch {
+		if (!budget.exceeded) throw new Error("Provider output stream failed.");
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
 // Bounded post-SIGKILL wait for the child's confirmed exit before the timeout

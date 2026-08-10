@@ -110,6 +110,21 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/tool-execution": {
+      "name": "@side-quest/tool-execution",
+      "version": "0.1.0",
+      "bin": {
+        "tool-execution": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+        "@side-quest/mcporter-transport": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/warm-chrome": {
       "name": "@side-quest/warm-chrome",
       "version": "0.1.0",
@@ -314,6 +329,8 @@
     "@side-quest/session-corpus": ["@side-quest/session-corpus@workspace:runtime/session-corpus"],
 
     "@side-quest/setup": ["@side-quest/setup@workspace:runtime/setup"],
+
+    "@side-quest/tool-execution": ["@side-quest/tool-execution@workspace:runtime/tool-execution"],
 
     "@side-quest/warm-chrome": ["@side-quest/warm-chrome@workspace:runtime/warm-chrome"],
 

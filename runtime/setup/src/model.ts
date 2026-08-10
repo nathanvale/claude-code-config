@@ -62,7 +62,6 @@ export const SETUP_FINDING_IDS = [
 	"dependency_unhealthy",
 	"hook_unhealthy",
 	"hook_ownership_unproven",
-	"instruction_unhealthy",
 	"runbook_artifact_unhealthy",
 	"bin_declaration_invalid",
 	"bin_target_unhealthy",
@@ -96,7 +95,6 @@ export const SETUP_ACTION_IDS = [
 	"setup_healthy",
 	"rerun_check",
 	"repair_hooks",
-	"repair_instructions",
 	"repair_runbook",
 	"run_unlink",
 	"clean_state",
@@ -226,9 +224,9 @@ export const AGENT_SKILLS_FEATURE_DISPOSITION = {
 
 /** Explicit migration disposition for superseded installer behavior. */
 export const INSTALL_SH_FEATURE_DISPOSITION = {
-	startup_links: "keep",
+	startup_links: "external_dotfiles_owner",
 	hook_installation: "keep_stronger_safety",
-	instruction_health: "keep",
+	instruction_health: "replace_with_manual_skill",
 	runbook_artifact: "keep",
 	status: "keep",
 	unlink: "keep_narrower_proof",

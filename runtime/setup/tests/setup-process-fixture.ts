@@ -26,9 +26,6 @@ const runtime: Partial<SetupCliRuntime> = {
 			if (fault === "hook") throw new Error("fixture hook failure");
 			return hookRoot;
 		},
-		instructionRunner: async () => fault === "instruction"
-			? { exitCode: 1, stdout: "", stderr: "fixture instruction failure\n" }
-			: { exitCode: 0, stdout: "", stderr: "" },
 	}),
 	apply: async (input) => {
 		if (fault === "runtime") throw new Error("fixture apply failure");
@@ -38,9 +35,6 @@ const runtime: Partial<SetupCliRuntime> = {
 				if (fault === "hook") throw new Error("fixture hook failure");
 				return hookRoot;
 			},
-			instructionRunner: async () => fault === "instruction"
-				? { exitCode: 1, stdout: "", stderr: "fixture instruction failure\n" }
-				: { exitCode: 0, stdout: "", stderr: "" },
 			beforeSymlink: async (_source, destination) => {
 				if (fault === "apply_failure") throw new Error("fixture syscall failure");
 				if (fault === "concurrent") await writeFile(destination, "foreign\n");

@@ -1,0 +1,28 @@
+{
+	"name": "@side-quest/tool-execution",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"sideQuest": {
+		"sourceLinkedBin": true
+	},
+	"bin": {
+		"tool-execution": "./src/cli.ts"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"tool-execution": "bun run src/cli.ts",
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*",
+		"@side-quest/mcporter-transport": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

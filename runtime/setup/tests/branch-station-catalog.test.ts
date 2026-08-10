@@ -22,7 +22,7 @@ const EXPECTED_STATION_IDS = [
 	"sync.check_clean", "sync.check_changes", "sync.check_blocked", "sync.check_invalid_target",
 	"sync.applied", "sync.noop", "sync.partial", "sync.blocked", "sync.concurrent_change",
 	"sync.operation_busy", "sync.invalid_target", "sync.apply_failure", "sync.hook_failure",
-	"sync.instruction_failure", "sync.runbook_failure", "sync.invalid_usage", "sync.runtime_failure",
+		"sync.runbook_failure", "sync.invalid_usage", "sync.runtime_failure",
 	"unlink.check_removable", "unlink.check_noop", "unlink.check_blocked", "unlink.check_invalid_target",
 	"unlink.removed", "unlink.noop", "unlink.concurrent_change", "unlink.operation_busy",
 	"unlink.invalid_target", "unlink.partial_failure", "unlink.invalid_usage", "unlink.runtime_failure",

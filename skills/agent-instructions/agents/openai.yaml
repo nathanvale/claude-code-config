@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Instructions"
+  short_description: "Maintain global Claude and Codex instructions"
+  default_prompt: "Use $agent-instructions to audit global instruction delivery without writing."
+policy:
+  allow_implicit_invocation: false

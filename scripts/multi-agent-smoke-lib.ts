@@ -791,31 +791,31 @@ Return a JSON object with these meanings:
 	}),
 	createBooleanSmokeTest({
 		id: "agents-md-not-editable",
-		title: "Generated startup outputs are not source",
+		title: "Global instruction source and projections stay separated",
 		fields: [
-			"agentsMdIsStartupSource",
+			"dotfilesOwnsGlobalInstructionSource",
 			"generatedOutputsAreSource",
-			"checksDeliveryWithAgentInstructionsScript",
+			"agentInstructionsSkillOwnsMaintenanceRoute",
 		],
-		prompt: `Startup source editability smoke test.
+		prompt: `Global instruction ownership smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- agentsMdIsStartupSource: true if AGENTS.md is the startup source
+- dotfilesOwnsGlobalInstructionSource: true if dotfiles owns the global AGENTS.md source and Claude adapter
 - generatedOutputsAreSource: true only if generated prompt outputs are source files to edit directly
-- checksDeliveryWithAgentInstructionsScript: true if delivery is checked with scripts/agent-instructions.sh`,
+- agentInstructionsSkillOwnsMaintenanceRoute: true if the manual agent-instructions skill owns audit, preview, apply routing, and proof`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				agentsMdIsStartupSource: true,
+				dotfilesOwnsGlobalInstructionSource: true,
 				generatedOutputsAreSource: false,
-				checksDeliveryWithAgentInstructionsScript: true,
+				agentInstructionsSkillOwnsMaintenanceRoute: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				agentsMdIsStartupSource: true,
+				dotfilesOwnsGlobalInstructionSource: true,
 				generatedOutputsAreSource: false,
-				checksDeliveryWithAgentInstructionsScript: true,
+				agentInstructionsSkillOwnsMaintenanceRoute: true,
 			},
 		},
 	}),
@@ -881,151 +881,151 @@ Return a JSON object with these meanings:
 	}),
 	createBooleanSmokeTest({
 		id: "workflow-trigger",
-		title: "Prompt workflow trigger is known",
+		title: "Instruction maintenance is manual-only",
 		fields: [
-			"promptSystemWorkflowIsRouteForStartupChanges",
-			"workflowShouldRunForRulesOrContextChanges",
-			"manualGuessingPlacementIsAllowed",
+			"agentInstructionsIsManualRoute",
+			"implicitInvocationIsDisabled",
+			"setupOwnsGlobalInstructionDelivery",
 		],
-		prompt: `Prompt workflow trigger smoke test.
+		prompt: `Instruction maintenance trigger smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- promptSystemWorkflowIsRouteForStartupChanges: true if prompt-system-workflow is the route for startup instruction changes
-- workflowShouldRunForRulesOrContextChanges: true if rules/ or context/ startup-instruction changes should route through the workflow
-- manualGuessingPlacementIsAllowed: true only if manual placement guessing is allowed`,
+- agentInstructionsIsManualRoute: true if agent-instructions is the explicit maintenance route
+- implicitInvocationIsDisabled: true if the skill must not auto-trigger
+- setupOwnsGlobalInstructionDelivery: true only if Setup owns global instruction links`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				promptSystemWorkflowIsRouteForStartupChanges: true,
-				workflowShouldRunForRulesOrContextChanges: true,
-				manualGuessingPlacementIsAllowed: false,
+				agentInstructionsIsManualRoute: true,
+				implicitInvocationIsDisabled: true,
+				setupOwnsGlobalInstructionDelivery: false,
 			},
 			codex: {
 				whoAmI: "codex",
-				promptSystemWorkflowIsRouteForStartupChanges: true,
-				workflowShouldRunForRulesOrContextChanges: true,
-				manualGuessingPlacementIsAllowed: false,
+				agentInstructionsIsManualRoute: true,
+				implicitInvocationIsDisabled: true,
+				setupOwnsGlobalInstructionDelivery: false,
 			},
 		},
 	}),
 	createBooleanSmokeTest({
 		id: "router-classification",
-		title: "Prompt router classification is known",
+		title: "Instruction owners stay separated",
 		fields: [
-			"routerClassifiesStartupInstructionChanges",
-			"routerOwnsDeterministicChecks",
-			"routerSaysWorkflowMechanicsBelongInAgentsMd",
+			"dotfilesManagerOwnsGlobalLinks",
+			"setupOwnsSkillProjection",
+			"skillCopiesOwnerContracts",
 		],
-		prompt: `Prompt router classification smoke test.
+		prompt: `Instruction owner classification smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- routerClassifiesStartupInstructionChanges: true if prompt-system-router classifies startup-instruction changes
-- routerOwnsDeterministicChecks: true if the router points deterministic contracts to code, CLI help, generated docs, or checks
-- routerSaysWorkflowMechanicsBelongInAgentsMd: true only if workflow mechanics should be copied into AGENTS.md`,
+- dotfilesManagerOwnsGlobalLinks: true if the dotfiles manager owns global link mechanics
+- setupOwnsSkillProjection: true if Setup owns first-party skill projection
+- skillCopiesOwnerContracts: true only if the skill repeats target lists or schemas`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				routerClassifiesStartupInstructionChanges: true,
-				routerOwnsDeterministicChecks: true,
-				routerSaysWorkflowMechanicsBelongInAgentsMd: false,
+				dotfilesManagerOwnsGlobalLinks: true,
+				setupOwnsSkillProjection: true,
+				skillCopiesOwnerContracts: false,
 			},
 			codex: {
 				whoAmI: "codex",
-				routerClassifiesStartupInstructionChanges: true,
-				routerOwnsDeterministicChecks: true,
-				routerSaysWorkflowMechanicsBelongInAgentsMd: false,
+				dotfilesManagerOwnsGlobalLinks: true,
+				setupOwnsSkillProjection: true,
+				skillCopiesOwnerContracts: false,
 			},
 		},
 	}),
 	createBooleanSmokeTest({
 		id: "workflow-rule-claude-only",
-		title: "Workflow rule auto-application is Claude-only",
+		title: "Legacy prompt routes are retired",
 		fields: [
-			"promptWorkflowRuleAutoAppliesInThisHarness",
-			"workflowSkillExistsAsOwner",
-			"ruleOnlyChangeReachesCodex",
+			"legacyPromptRuleIsActive",
+			"legacyPromptSkillsExist",
+			"agentInstructionsSkillIsManual",
 		],
-		prompt: `Prompt workflow rule smoke test.
+		prompt: `Legacy prompt route retirement smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- promptWorkflowRuleAutoAppliesInThisHarness: true if rules/prompt-system-workflow.md auto-applies in this harness
-- workflowSkillExistsAsOwner: true if skills/prompt-system-workflow/SKILL.md is the workflow owner
-- ruleOnlyChangeReachesCodex: true only if changing the Claude rule alone reaches Codex`,
+- legacyPromptRuleIsActive: true only if a prompt-system workflow rule remains active
+- legacyPromptSkillsExist: true only if either legacy prompt-system skill remains
+- agentInstructionsSkillIsManual: true if the replacement skill requires explicit invocation`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				promptWorkflowRuleAutoAppliesInThisHarness: true,
-				workflowSkillExistsAsOwner: true,
-				ruleOnlyChangeReachesCodex: false,
+				legacyPromptRuleIsActive: false,
+				legacyPromptSkillsExist: false,
+				agentInstructionsSkillIsManual: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				promptWorkflowRuleAutoAppliesInThisHarness: false,
-				workflowSkillExistsAsOwner: true,
-				ruleOnlyChangeReachesCodex: false,
+				legacyPromptRuleIsActive: false,
+				legacyPromptSkillsExist: false,
+				agentInstructionsSkillIsManual: true,
 			},
 		},
 	}),
 	createBooleanSmokeTest({
 		id: "contract-auditor-router-skill",
-		title: "Contract auditor carries router skill",
+		title: "Audit mode is read-only",
 		fields: [
-			"promptContractAuditorIsReadOnly",
-			"promptContractAuditorHasRouterSkill",
-			"auditorModifiesFilesDirectly",
+			"agentInstructionsDefaultsToAudit",
+			"auditUsesOwnerReadback",
+			"auditModifiesFiles",
 		],
-		prompt: `Prompt contract auditor smoke test.
+		prompt: `Instruction audit smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- promptContractAuditorIsReadOnly: true if the prompt-contract-auditor is read-only
-- promptContractAuditorHasRouterSkill: true if the auditor declares prompt-system-router as a skill
-- auditorModifiesFilesDirectly: true only if the auditor is allowed to modify files directly`,
+- agentInstructionsDefaultsToAudit: true if missing arguments select audit
+- auditUsesOwnerReadback: true if audit calls the dotfiles manager and Setup read-only routes
+- auditModifiesFiles: true only if audit can write`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				promptContractAuditorIsReadOnly: true,
-				promptContractAuditorHasRouterSkill: true,
-				auditorModifiesFilesDirectly: false,
+				agentInstructionsDefaultsToAudit: true,
+				auditUsesOwnerReadback: true,
+				auditModifiesFiles: false,
 			},
 			codex: {
 				whoAmI: "codex",
-				promptContractAuditorIsReadOnly: true,
-				promptContractAuditorHasRouterSkill: true,
-				auditorModifiesFilesDirectly: false,
+				agentInstructionsDefaultsToAudit: true,
+				auditUsesOwnerReadback: true,
+				auditModifiesFiles: false,
 			},
 		},
 	}),
 	createBooleanSmokeTest({
 		id: "smoke-runner-executes",
-		title: "Prompt smoke runner execution path is known",
+		title: "Native loading proof escalates safely",
 		fields: [
-			"promptSmokeRunnerRunsAgentInstructionsCheck",
-			"promptSmokeRunnerCanRunMultiAgentSmoke",
-			"smokeRunnerWritesFiles",
+			"freshNativeSessionIsPrimaryProof",
+			"temporaryMarkerIsEscalationOnly",
+			"temporaryEvidenceMustBeRemoved",
 		],
-		prompt: `Prompt smoke runner smoke test.
+		prompt: `Instruction loading proof smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- promptSmokeRunnerRunsAgentInstructionsCheck: true if prompt-smoke-runner runs scripts/agent-instructions.sh check
-- promptSmokeRunnerCanRunMultiAgentSmoke: true if prompt-smoke-runner can run bun scripts/multi-agent-smoke.ts when requested
-- smokeRunnerWritesFiles: true only if prompt-smoke-runner is allowed to write files`,
+- freshNativeSessionIsPrimaryProof: true if fresh native Claude and Codex sessions are tried first
+- temporaryMarkerIsEscalationOnly: true if a marker is allowed only after native inspection is inconclusive
+- temporaryEvidenceMustBeRemoved: true if all temporary evidence is removed before fresh proof repeats`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				promptSmokeRunnerRunsAgentInstructionsCheck: true,
-				promptSmokeRunnerCanRunMultiAgentSmoke: true,
-				smokeRunnerWritesFiles: false,
+				freshNativeSessionIsPrimaryProof: true,
+				temporaryMarkerIsEscalationOnly: true,
+				temporaryEvidenceMustBeRemoved: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				promptSmokeRunnerRunsAgentInstructionsCheck: true,
-				promptSmokeRunnerCanRunMultiAgentSmoke: true,
-				smokeRunnerWritesFiles: false,
+				freshNativeSessionIsPrimaryProof: true,
+				temporaryMarkerIsEscalationOnly: true,
+				temporaryEvidenceMustBeRemoved: true,
 			},
 		},
 	}),

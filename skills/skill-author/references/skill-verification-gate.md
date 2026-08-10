@@ -8,7 +8,8 @@ Use when choosing checks, handoff evidence, or post-edit verification for skill 
 - Frontmatter changes: YAML parse the edited `SKILL.md`.
 - Owner-path changes: `bun run skills/skill-author/scripts/check-owner-paths.ts --json`.
 - Gotcha decision artifacts: `bun run skills/skill-author/scripts/check-gotcha-decision.ts --json <artifact>`.
-- Startup route changes: `scripts/agent-instructions.sh check --json`.
+- Skill route changes: `./setup sync --check --json`.
+- Global instruction route changes: invoke `agent-instructions` manually and prove fresh native loading.
 
 ## Handoff
 

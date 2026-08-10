@@ -1,14 +1,13 @@
 # Context Map
 
-This repo has multiple bounded contexts. Each owns the durable language for its area. Resolve a term in the nearest scoped context first; fall back to the root context for cross-cutting agent-config, startup, governance, and CLI-design vocabulary.
+This repo has multiple bounded contexts. Each owns the durable language for its area. Resolve a term in the nearest scoped context first; fall back to the root context for cross-cutting agent-config, governance, and CLI-design vocabulary.
 
 ## Contexts
 
-- [Root — Claude Code Config](./CONTEXT.md) — cross-cutting agent-config, startup, governance, and CLI-design vocabulary only.
+- [Root — Claude Code Config](./CONTEXT.md) — cross-cutting agent-config, governance, and CLI-design vocabulary only.
 - [Browser Use](./skills/browser-use/CONTEXT.md) — Warm Chrome, Browser Adapters, the browser-connect handoff, durable browser knowledge, playback modes.
 - [Browser Connect](./runtime/browser-connect/CONTEXT.md) — environment × route × adapter connection model: Agent Chrome, Human Chrome, Browser Adapter (canonical), Verified Handoff Envelope, proof-gated attachment.
 - [One Password](./skills/one-password/CONTEXT.md) — safe `op` secret access: service-account paths, secret reference mappings, materialized adapters.
-- [Prompt System Workflow](./skills/prompt-system-workflow/CONTEXT.md) — startup-instruction authoring shape, topology helper, setup CLI, install artifacts.
 - [Issue to PR](./runbooks/issue-to-pr-v2/CONTEXT.md) — helper contract, ledger lifecycle, workflow-learning scan, scaffold pointers.
 - [Skill Author](./skills/skill-author/CONTEXT.md) — portable skill authoring, cleanup, capability ownership, agent-native helper handoff.
 - [Storybook](./skills/archive/use-storybook/CONTEXT.md) — Storybook MCP workflows, readiness proof, previews, tests, and taxonomy language.

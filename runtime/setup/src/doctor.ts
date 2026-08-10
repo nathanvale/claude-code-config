@@ -16,7 +16,7 @@ const REPAIRABLE = new Set<SetupFindingId>([
 	"missing_link", "wrong_link", "broken_managed_link",
 ]);
 const DEPENDENCY = new Set<SetupFindingId>([
-	"dependency_unhealthy", "hook_unhealthy", "instruction_unhealthy", "runbook_artifact_unhealthy",
+	"dependency_unhealthy", "hook_unhealthy", "runbook_artifact_unhealthy",
 ]);
 
 /** Enrich inspection findings with package-owned impact and repair semantics. */
@@ -57,7 +57,6 @@ function repairFor(id: SetupFindingId, fallback: SetupActionId): SetupActionId {
 		case "dependency_unhealthy": return "repair_dependency";
 		case "hook_unhealthy": return "repair_hooks";
 		case "hook_ownership_unproven": return "human_repair";
-		case "instruction_unhealthy": return "repair_instructions";
 		case "runbook_artifact_unhealthy": return "repair_runbook";
 		case "stale_operation_lock": return "inspect_lock";
 		case "operation_busy": return "retry";

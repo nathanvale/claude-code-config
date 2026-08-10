@@ -1,0 +1,6 @@
+interface:
+  display_name: "Web Research"
+  short_description: "Route current and recent public-web research"
+  default_prompt: "Use $web-research to choose a qualified route for this current public-web research task."
+policy:
+  allow_implicit_invocation: true

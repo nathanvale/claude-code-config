@@ -4,7 +4,7 @@ description: "Rewrite a file to match work-style rules: terse, telegraph density
 role: tool-workflow
 argument-hint: <file-path>
 disable-model-invocation: true
-allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/agent-instructions.sh *)
+allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./setup sync --check --json)
 ---
 
 # Work Style Convert
@@ -57,8 +57,8 @@ allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/agent
 
 - Run `wc -l "$target"`; compare with matching budget.
 - Run banned filler grep again; fix remaining authored hits.
-- If target is startup instruction or owner doc, run `./scripts/agent-instructions.sh check`.
-- If instruction check fails, fix or stop with failure details.
+- If target is a skill route, run `./setup sync --check --json`.
+- If target is a global instruction owner, invoke `agent-instructions` manually for proof.
 - If target is `SKILL.md`, YAML-parse frontmatter before done.
 
 ## Report

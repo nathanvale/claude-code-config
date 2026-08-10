@@ -26,7 +26,6 @@ import {
 	hookProvenanceIdentity,
 	readHookProvenance,
 } from "../src/hook-provenance.ts";
-import { STARTUP_LINKS } from "../src/startup-topology.ts";
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI_PATH = join(PACKAGE_ROOT, "src/cli.ts");
@@ -282,20 +281,19 @@ async function prepareScenario(
 		case "doctor.repairable": return { argv: project };
 		case "doctor.blocked": await blockedProject(fixture); return { argv: project };
 		case "doctor.duplicate_scope": await duplicateScope(fixture); return { argv: project };
-		case "doctor.setup_dependency_unhealthy": await healthyUser(fixture); return { argv: user, fault: "instruction" };
+		case "doctor.setup_dependency_unhealthy": await healthyUser(fixture); return { argv: user, fault: "hook" };
 		case "doctor.stale_operation_lock": await operationLock(fixture, false); return { argv: project };
 		case "sync.check_clean": await projectLinks(fixture); return { argv: [...project.slice(0, 1), "--check", ...project.slice(1)] };
 		case "sync.check_changes": return { argv: [...project.slice(0, 1), "--check", ...project.slice(1)] };
 		case "sync.check_blocked": await blockedProject(fixture); return { argv: [...project.slice(0, 1), "--check", ...project.slice(1)] };
 		case "sync.applied": return { argv: project };
 		case "sync.noop": await projectLinks(fixture); return { argv: project };
-		case "sync.partial": await userSource(fixture, false); return { argv: user };
+		case "sync.partial": await partialUser(fixture); return { argv: user };
 		case "sync.blocked": await blockedProject(fixture); return { argv: project };
 		case "sync.concurrent_change": return { argv: project, fault: "concurrent" };
 		case "sync.operation_busy": await operationLock(fixture, true); return { argv: project };
 		case "sync.apply_failure": return { argv: project, fault: "apply_failure" };
 		case "sync.hook_failure": await healthyUser(fixture); return { argv: user, fault: "hook" };
-		case "sync.instruction_failure": await healthyUser(fixture); return { argv: user, fault: "instruction" };
 		case "sync.runbook_failure": await healthyUser(fixture); await rm(join(fixture.source, "runbooks/issue-to-pr-v2/cli.ts")); return { argv: user };
 		case "unlink.check_removable": await projectLinks(fixture); return { argv: [...project.slice(0, 1), "--check", ...project.slice(1)] };
 		case "unlink.check_noop": return { argv: [...project.slice(0, 1), "--check", ...project.slice(1)] };
@@ -404,17 +402,7 @@ async function duplicateScope(fixture: Fixture): Promise<void> {
 	await symlink(join(fixture.source, "skills/alpha"), join(fixture.home, ".claude/skills/alpha"));
 }
 
-async function userSource(fixture: Fixture, includeContext: boolean): Promise<void> {
-	for (const entry of STARTUP_LINKS) {
-		if (!includeContext && entry.source === "context") continue;
-		const source = join(fixture.source, entry.source);
-		if (entry.source.includes(".")) {
-			await mkdir(dirname(source), { recursive: true });
-			await writeFile(source, "fixture\n");
-		} else {
-			await mkdir(source, { recursive: true });
-		}
-	}
+async function userSource(fixture: Fixture): Promise<void> {
 	await mkdir(join(fixture.source, "scripts/hooks"), { recursive: true });
 	await writeFile(join(fixture.source, "scripts/hooks/pre-commit"), "hook\n");
 	for (const directory of ["references", "templates", "lib"]) {
@@ -428,7 +416,7 @@ async function prepareHookMigration(
 	fixture: Fixture,
 	fixtureName: "pre-commit-setup-v1" | "pre-commit-legacy-installer",
 ) {
-	await userSource(fixture, true);
+	await userSource(fixture);
 	const source = join(fixture.source, "scripts/hooks/pre-commit");
 	const destination = join(fixture.hooks, "pre-commit");
 	const sourceBytes = await readFile(join(PACKAGE_ROOT, "../../scripts/hooks/pre-commit"));
@@ -446,19 +434,21 @@ async function prepareHookMigration(
 }
 
 async function healthyUser(fixture: Fixture): Promise<void> {
-	await userSource(fixture, true);
+	await userSource(fixture);
 	for (const root of [".agents/skills", ".claude/skills"]) {
 		const directory = join(fixture.home, root);
 		await mkdir(directory, { recursive: true });
 		await symlink(join(fixture.source, "skills/alpha"), join(directory, "alpha"));
 	}
-	for (const entry of STARTUP_LINKS) {
-		const destination = join(fixture.home, entry.destination);
-		await mkdir(dirname(destination), { recursive: true });
-		await symlink(join(fixture.source, entry.source), destination);
-	}
 	await writeFile(join(fixture.hooks, "pre-commit"), "hook\n");
 	await chmod(join(fixture.hooks, "pre-commit"), 0o755);
+}
+
+async function partialUser(fixture: Fixture): Promise<void> {
+	await userSource(fixture);
+	const occupied = join(fixture.home, ".claude/skills/alpha");
+	await mkdir(dirname(occupied), { recursive: true });
+	await writeFile(occupied, "foreign\n");
 }
 
 async function operationLock(fixture: Fixture, busy: boolean): Promise<void> {

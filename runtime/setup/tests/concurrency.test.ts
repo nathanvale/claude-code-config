@@ -271,7 +271,6 @@ describe("setup operation lock", () => {
 		const first = applySetupDomains(input, {
 			stateRoot,
 			hookPath: async () => hooks,
-			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 			beforeHookMutation: async (phase) => {
 				if (phase !== "pending_receipt") return;
 				mutationEntered();
@@ -283,7 +282,6 @@ describe("setup operation lock", () => {
 		const second = await applySetupDomains(input, {
 			stateRoot,
 			hookPath: async () => { throw new Error("hook inspection must remain behind the lock"); },
-			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		});
 		expect(second).toMatchObject({ state: "blocked", station: "sync.operation_busy" });
 		releaseMutation();

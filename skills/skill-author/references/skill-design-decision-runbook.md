@@ -50,7 +50,7 @@ Open only the branch needed for the current step.
 | Shape `SKILL.md`, headings, no-args behavior, run card, examples, or branch-hidden references | `references/skill-body-shape-gate.md`; `references/skill-io-shape-examples.md` only when heading shape is unclear |
 | Name or repair owner paths, references, contracts, or path authority | `references/skill-owner-path-gate.md` |
 | Add or review safety gate, gotcha, private data boundary, destructive action, or side effect | `references/skill-safety-gate.md` |
-| Choose verification, handoff, YAML parse, description audit, owner-path check, or startup check | `references/skill-verification-gate.md` |
+| Choose verification, handoff, YAML parse, description audit, owner-path check, or instruction-route proof | `references/skill-verification-gate.md` |
 | Add runtime behavior, CLI surface, helper command, machine output, durable write, external side effect, or repair envelope to an existing skill or runtime owner | `references/skill-safety-gate.md`; `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/cli-author/SKILL.md` |
 | Add MC Porter skill guidance | `references/mcporter-skill-design.md` |
 | Choose dependency behavior | `references/skill-dependency-rules.md` |

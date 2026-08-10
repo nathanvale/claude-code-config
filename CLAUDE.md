@@ -1,5 +1,7 @@
 @AGENTS.md
 
+This file is the repo-local Claude overlay. Dotfiles owns the global Claude adapter.
+
 ## Claude Runtime
 
 - MCP output: pass `response_format: "json"` unless output goes directly to Nathan.

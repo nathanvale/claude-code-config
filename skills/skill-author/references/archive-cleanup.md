@@ -26,7 +26,7 @@ Use before moving skills into `skills/archive/`.
    - archive
    - investigate
 6. Move archive skills only after the active list is accepted.
-7. Run description and startup checks after any move.
+7. Run description checks and a Setup preview after any move.
 
 ## Protected Boundary
 
@@ -57,6 +57,6 @@ Use before moving skills into `skills/archive/`.
 ## Validation
 
 - Run `bun run skills/skill-author/scripts/skill-description-audit.ts`.
-- Run `scripts/agent-instructions.sh check --json`.
+- Run `./setup sync --check --json`.
 - Run `git diff --check`.
 - YAML-parse edited `SKILL.md` frontmatter.

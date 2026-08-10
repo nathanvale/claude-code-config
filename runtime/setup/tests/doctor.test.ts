@@ -10,7 +10,6 @@ describe("setup doctor", () => {
 		["dependency_unhealthy", "repair_dependency"],
 		["hook_unhealthy", "repair_hooks"],
 		["hook_ownership_unproven", "human_repair"],
-		["instruction_unhealthy", "repair_instructions"],
 	] as const)("explains %s with ownership, impact, and repair", (id, repair) => {
 		const diagnosis = diagnoseFindings([finding(id)]);
 
