@@ -266,4 +266,5 @@ async function writeTool(source: string, name: string) {
 	const entry = join(packageDir, "src/cli.ts");
 	await mkdir(dirname(entry), { recursive: true });
 	await writeFile(entry, SHEBANG_ENTRY);
+	await chmod(entry, 0o755);
 }
