@@ -750,7 +750,8 @@ async function launchPrivateBytesProcess(
 	// owner-only unlinked temp file. Bun's socket-backed extra "pipe" stdio
 	// entries intermittently fail (spawn ENOENT) or hang; a regular-file
 	// descriptor has neither failure mode, and the bytes never appear in
-	// argv, environment, or ordinary output.
+	// argv, environment, or ordinary output. Intermediate slots stay "ignore"
+	// so an unread pipe cannot block a child that writes to them.
 	const privateDir = mkdtempSync(join(tmpdir(), "vault-git-cap-"));
 	const privatePath = join(privateDir, "material");
 	let capabilityFd: number | undefined;
@@ -1432,10 +1433,9 @@ function isHex(value: unknown): value is string {
 }
 
 function isOwnedPath(value: unknown): value is string {
-	if (typeof value !== "string" || value.startsWith("/")) return false;
+	if (typeof value !== "string" || value.length === 0 || value.startsWith("/")) return false;
 	const segments = value.split("/");
-	if (segments[0] === ".git") return false;
-	return segments.every((part) => part.length > 0 && part !== "." && part !== "..");
+	return segments.every((part) => part.length > 0 && part !== "." && part !== ".." && part.toLowerCase() !== ".git");
 }
 
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
