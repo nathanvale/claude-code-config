@@ -88,8 +88,10 @@ export const VAULT_GIT_RECEIPT_NEXT_ACTIONS = [
 	"continue_outer_transaction",
 	"run_owned_path_checks",
 	"retry_push",
+	"run_doctor",
 	"run_repair",
 	"request_operator_review",
+	"reconcile_quarantine",
 	"none",
 ] as const;
 
@@ -176,6 +178,40 @@ export interface VaultGitReceipt {
 	readonly diagnosticsReference: string;
 }
 
+/**
+ * Build the next append-only receipt revision from the previous one.
+ *
+ * Shared by the engine and repair flows so revision advancement, schema
+ * pinning, and receipt-id preservation cannot drift between call sites.
+ *
+ * @param previous - Latest durable receipt revision
+ * @param changes - Field changes recorded by the next revision
+ * @returns New receipt with the same receipt id and an incremented revision
+ * @throws Never
+ *
+ * @example
+ * ```typescript
+ * const closed = nextVaultGitReceipt(receipt, {
+ *   phase: "closed",
+ *   transition: "closed",
+ *   nextSafeAction: "none",
+ *   recordedAt: now,
+ * })
+ * ```
+ */
+export function nextVaultGitReceipt(
+	previous: VaultGitReceipt,
+	changes: Partial<VaultGitReceipt>,
+): VaultGitReceipt {
+	return {
+		...previous,
+		...changes,
+		schemaVersion: 2,
+		receiptId: previous.receiptId,
+		revision: previous.revision + 1,
+	};
+}
+
 /** Authority granted to the current caller. */
 export const VAULT_GIT_WRITE_PERMISSIONS = ["denied", "join", "owner"] as const;
 
@@ -238,6 +274,11 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"empty_event",
 	"vault_check_failed",
 	"transaction_mismatch",
+	"doctor_proof_stale",
+	"doctor_token_invalid",
+	"host_quarantined",
+	"deterministic_repair_mismatch",
+	"repair_action_required",
 ] as const;
 
 /** Stable transaction blocker id. */
@@ -256,6 +297,33 @@ export const VAULT_GIT_REPAIR_ACTIONS = [
 
 /** One package-owned deterministic repair action. */
 export type VaultGitRepairAction = (typeof VAULT_GIT_REPAIR_ACTIONS)[number];
+
+/** Closed doctor findings safe for command output and automation. */
+export const VAULT_GIT_DOCTOR_FINDINGS = [
+	"no_receipt",
+	"receipt_corrupt",
+	"acquisition_not_started",
+	"lease_acknowledgement_missing",
+	"lease_acquired",
+	"writes_in_progress",
+	"checks_interrupted",
+	"commit_interrupted",
+	"local_commit_recovered",
+	"publication_pending",
+	"publication_already_closed",
+	"remote_outcome_unknown",
+	"remote_contract_breach",
+	"deterministic_failure",
+	"operator_intervention_recorded",
+	"transaction_closed",
+	"lease_expired",
+	"lease_superseded",
+	"host_quarantined",
+] as const;
+
+/** One evidence-backed doctor classification. */
+export type VaultGitDoctorFinding =
+	(typeof VAULT_GIT_DOCTOR_FINDINGS)[number];
 
 /** Stable lifecycle result outcomes. */
 export const VAULT_GIT_RESULT_OUTCOMES = [

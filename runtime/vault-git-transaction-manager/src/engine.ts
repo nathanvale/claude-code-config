@@ -1,4 +1,4 @@
-import { VAULT_GIT_LEDGER_REF } from "./model.ts";
+import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
 	VaultGitBlockerId,
 	VaultGitEngineNextActionId,
@@ -25,6 +25,7 @@ import {
 } from "./commit-policy.ts";
 import {
 	acquireRemoteLease,
+	buildVaultGitReleaseLedgerContent,
 	observeRemoteLedger,
 	validateRemoteLease,
 	type RemoteLedgerEngine,
@@ -33,6 +34,16 @@ import type {
 	VaultGitCapabilityRole,
 	VaultGitReceiptStore,
 } from "./store.ts";
+import {
+	createVaultGitDoctor,
+	type VaultGitDoctorInput,
+	type VaultGitDoctorResult,
+} from "./doctor.ts";
+import {
+	createVaultGitRepair,
+	type VaultGitRepairInput,
+	type VaultGitRepairResult,
+} from "./repair.ts";
 
 /** Dependencies for the transaction state machine. */
 export interface VaultGitTransactionEngineOptions {
@@ -142,6 +153,10 @@ export interface VaultGitTransactionEngine {
 	inspect(): Promise<VaultGitEngineResult>;
 	/** Record one owner-only durable phase transition. */
 	recordPhase(input: VaultGitRecordPhaseInput): Promise<VaultGitEngineResult>;
+	/** Reconcile receipt, local, and remote evidence without canonical mutation. */
+	doctor(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
+	/** Execute only one fresh doctor-classified deterministic repair. */
+	repair(input: VaultGitRepairInput): Promise<VaultGitRepairResult>;
 }
 
 /**
@@ -165,7 +180,21 @@ export interface VaultGitTransactionEngine {
 export function createVaultGitTransactionEngine(
 	options: VaultGitTransactionEngineOptions,
 ): VaultGitTransactionEngine {
+	const doctorEngine = createVaultGitDoctor(options);
+	const repairEngine = createVaultGitRepair(options);
 	async function loadReceipt(): Promise<VaultGitReceipt | VaultGitEngineResult | null> {
+		let quarantine: Awaited<ReturnType<VaultGitReceiptStore["readQuarantine"]>>;
+		try {
+			quarantine = await options.store.readQuarantine();
+		} catch {
+			return refusal("human_required", "human_required", "receipt_corrupt", "inspect_private_receipt", "Inspect private quarantine evidence with doctor.");
+		}
+		if (quarantine?.status === "takeover_pending") {
+			return refusal("superseded", "human_required", "host_quarantined", "run_doctor", "Run doctor to reconcile the interrupted stale-lease takeover.");
+		}
+		if (quarantine?.status === "quarantined") {
+			return refusal("superseded", "human_required", "host_quarantined", "reconcile_quarantine", "Reconcile preserved local evidence before clearing quarantine.");
+		}
 		const loaded = await options.store.load();
 		if (loaded.status === "absent") return null;
 		if (loaded.status !== "loaded") {
@@ -209,6 +238,14 @@ export function createVaultGitTransactionEngine(
 	}
 
 	return {
+		async doctor(input) {
+			return doctorEngine.diagnose(input);
+		},
+
+		async repair(input) {
+			return repairEngine.run(input);
+		},
+
 		async begin(input) {
 			validateBegin(input);
 			if (input.offline) {
@@ -236,7 +273,7 @@ export function createVaultGitTransactionEngine(
 					if (!refusedAcquisition) {
 						return refusal("active", existing.phase, "receipt_conflict", "inspect_status", "Inspect the active transaction before beginning another.");
 					}
-					await options.store.append(nextReceipt(existing, {
+					await options.store.append(nextVaultGitReceipt(existing, {
 						phase: "closed",
 						transition: "superseded",
 						nextSafeAction: "none",
@@ -299,7 +336,7 @@ export function createVaultGitTransactionEngine(
 			});
 			if (acquired.status === "refused") {
 				const phase = acquired.retrySafety === "operator_required" ? "human_required" : "blocked";
-				await options.store.append(nextReceipt(receipt, {
+				await options.store.append(nextVaultGitReceipt(receipt, {
 					phase,
 					transition: phase === "human_required" ? "human_intervention_required" : "deterministic_repair_available",
 					nextSafeAction: acquired.nextAction.id,
@@ -310,7 +347,7 @@ export function createVaultGitTransactionEngine(
 				return refusal(phase === "human_required" ? "human_required" : "unknown", phase, acquired.blocker, acquired.nextAction.id, acquired.nextAction.summary, acquired.changedState === "none" ? "local" : acquired.changedState, acquired.retrySafety);
 			}
 			options.runtime.interrupt("after_remote_cas");
-			const leased = nextReceipt(receipt, {
+			const leased = nextVaultGitReceipt(receipt, {
 				transactionId: acquired.transactionId,
 				phase: "leased",
 				transition: "lease_won",
@@ -321,7 +358,7 @@ export function createVaultGitTransactionEngine(
 			});
 			await options.store.append(leased);
 			options.runtime.interrupt("before_won_generation_acknowledgement");
-			const writing = nextReceipt(leased, {
+			const writing = nextVaultGitReceipt(leased, {
 				phase: "writing",
 				transition: "write_authority_granted",
 				nextSafeAction: "complete_transaction",
@@ -354,7 +391,7 @@ export function createVaultGitTransactionEngine(
 			const additions = admission.paths.filter((path) => !existing.has(path.path));
 			if (additions.length === 0) return result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
 			const joinedPaths = [...loaded.ownedPaths, ...copyPaths(additions)];
-			const joined = nextReceipt(loaded, {
+			const joined = nextVaultGitReceipt(loaded, {
 				transition: "paths_joined",
 				ownedPaths: joinedPaths,
 				unrelatedState: options.repository.captureUnrelatedState
@@ -404,7 +441,7 @@ export function createVaultGitTransactionEngine(
 			}
 			const fenced = await fence(loaded, input.remote);
 			if (fenced) return fenced;
-			const checking = nextReceipt(loaded, {
+			const checking = nextVaultGitReceipt(loaded, {
 				phase: "checking",
 				transition: "completion_requested",
 				nextSafeAction: "run_owned_path_checks",
@@ -416,7 +453,6 @@ export function createVaultGitTransactionEngine(
 			}
 			const transactionId = loaded.transactionId;
 			const leaseGeneration = loaded.leaseGeneration;
-			const leaseAcquiredAt = loaded.leaseAcquiredAt;
 			// Bind checked bytes to committed blobs: hash owned content immediately
 			// before the check so a writer racing the check window is refused.
 			let expectedContentHashes: readonly VaultGitOwnedPathContentHash[] | undefined;
@@ -431,7 +467,7 @@ export function createVaultGitTransactionEngine(
 			}
 			const checked = await options.check.run();
 			if (checked.status === "failed") {
-				const repairable = nextReceipt(checking, {
+				const repairable = nextVaultGitReceipt(checking, {
 					phase: "repairable",
 					transition: "deterministic_repair_available",
 					nextSafeAction: "run_repair",
@@ -440,7 +476,7 @@ export function createVaultGitTransactionEngine(
 				await options.store.append(repairable);
 				return refusal("repairable", repairable.phase, "vault_check_failed", "run_repair", "Repair the vault-owned check failure before replaying completion.", "local", "same_input_unsafe");
 			}
-			const committing = nextReceipt(checking, {
+			const committing = nextVaultGitReceipt(checking, {
 				phase: "committing",
 				transition: "commit_candidate_frozen",
 				nextSafeAction: "preserve_local_edits",
@@ -479,7 +515,7 @@ export function createVaultGitTransactionEngine(
 								? "owned_path_changed"
 								: "host_contract_breach";
 				const phase = blocker === "host_contract_breach" ? "human_required" : "repairable";
-				const failed = nextReceipt(committing, {
+				const failed = nextVaultGitReceipt(committing, {
 					phase,
 					transition: phase === "human_required" ? "human_intervention_required" : "deterministic_repair_available",
 					nextSafeAction: phase === "human_required" ? "request_operator_review" : "run_repair",
@@ -489,7 +525,7 @@ export function createVaultGitTransactionEngine(
 				return refusal(phase, phase, blocker, failed.nextSafeAction, phase === "human_required" ? "Ask an operator to inspect local commit evidence." : "Repair the changed transaction state, then replay in a new transaction.", "local", phase === "human_required" ? "operator_required" : "same_input_unsafe");
 			}
 			if (localCommit.status === "committed_incomplete") {
-				const stranded = nextReceipt(committing, {
+				const stranded = nextVaultGitReceipt(committing, {
 					phase: "human_required",
 					transition: "human_intervention_required",
 					commitId: localCommit.commitId,
@@ -502,33 +538,19 @@ export function createVaultGitTransactionEngine(
 				return refusal("human_required", "human_required", "host_contract_breach", "request_operator_review", "Ask an operator to reconcile the advanced local main and stale owned index; commit evidence is preserved.", "committed", "operator_required");
 			}
 			const closedAt = options.runtime.now().toISOString();
-			const releaseContent = `${JSON.stringify({
-				schema_version: 1,
-				operation: "release",
-				previous_generation: leaseGeneration,
-				transitioned_at: closedAt,
-				lease: {
-					transaction_id: transactionId,
-					actor: committing.actor,
-					host: committing.host,
-					event: committing.event,
-					owned_paths: committing.ownedPaths.map((path) => path.path),
-					local_main_head: committing.localMainHead,
-					remote_main_head: committing.remoteMainHead,
-					acquired_at: leaseAcquiredAt,
-					lease_duration_ms: committing.leaseDurationMs,
-					state: "released",
-				},
-			})}\n`;
+			// One shared serialization with the repair retry path: publishPrepared
+			// refuses when regenerated release bytes differ from the recorded
+			// object, so this content must never drift from repair's.
+			const releaseContent = buildVaultGitReleaseLedgerContent(committing, closedAt);
 			// Persist commit evidence durably before any push can begin; a crash
 			// between the local-main advance and the push must never lose it.
-			let publicationReceipt = nextReceipt(committing, {
+			let publicationReceipt = nextVaultGitReceipt(committing, {
 				phase: "push_pending",
 				transition: "push_outcome_unknown",
 				commitId: localCommit.commitId,
 				expectedMainCommit: localCommit.commitId,
 				pushOutcome: "unknown",
-				nextSafeAction: "retry_push",
+				nextSafeAction: "run_doctor",
 				recordedAt: closedAt,
 			});
 			try {
@@ -551,7 +573,7 @@ export function createVaultGitTransactionEngine(
 					author: committing.actor,
 					timestamp: closedAt,
 					async onPrepared(evidence) {
-						publicationReceipt = nextReceipt(publicationReceipt, {
+						publicationReceipt = nextVaultGitReceipt(publicationReceipt, {
 							transition: "push_outcome_unknown",
 							ledgerReleaseId: evidence.ledgerCommit,
 							recordedAt: options.runtime.now().toISOString(),
@@ -562,7 +584,7 @@ export function createVaultGitTransactionEngine(
 			} catch {
 				// An adapter throw after the local commit must surface as a
 				// structured refusal that preserves the durable commit evidence.
-				const stranded = nextReceipt(publicationReceipt, {
+				const stranded = nextVaultGitReceipt(publicationReceipt, {
 					phase: "human_required",
 					transition: "human_intervention_required",
 					nextSafeAction: "request_operator_review",
@@ -572,7 +594,7 @@ export function createVaultGitTransactionEngine(
 				return refusal("human_required", "human_required", "host_contract_breach", "request_operator_review", "Ask an operator to inspect the interrupted atomic close; local commit evidence is preserved.", "committed", "operator_required");
 			}
 			if (publication.status === "closed") {
-				const closed = nextReceipt(publicationReceipt, {
+				const closed = nextVaultGitReceipt(publicationReceipt, {
 					phase: "closed",
 					transition: "closed",
 					pushOutcome: "closed",
@@ -583,7 +605,7 @@ export function createVaultGitTransactionEngine(
 				return result("completed", "closed", closed, "owner", "remote", "none", "The exact event commit and lease release are remote and closed.");
 			}
 			if (publication.status === "host_contract_breach") {
-				const breach = nextReceipt(publicationReceipt, {
+				const breach = nextVaultGitReceipt(publicationReceipt, {
 					phase: "human_required",
 					transition: "human_intervention_required",
 					pushOutcome: "host_contract_breach",
@@ -593,7 +615,7 @@ export function createVaultGitTransactionEngine(
 				await options.store.append(breach);
 				return refusal("human_required", breach.phase, "host_contract_breach", "request_operator_review", "Ask an operator to reconcile partial or unexpected remote objects.", "partial", "operator_required");
 			}
-			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "retry_push", "Reconcile exact remote refs before the owning host retries publication.", "push_pending");
+			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "run_doctor", "Run doctor to reconcile exact remote refs before any repair.", "push_pending");
 		},
 
 		async inspect() {
@@ -646,7 +668,7 @@ export function createVaultGitTransactionEngine(
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
 			// Commit evidence fields are owned by completion and repair flows (U5);
 			// a phase transition must never introduce or mutate them.
-			const recorded = nextReceipt(loaded, {
+			const recorded = nextVaultGitReceipt(loaded, {
 				phase: input.phase,
 				transition,
 				nextSafeAction: input.nextSafeAction,
@@ -668,10 +690,6 @@ async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, 
 	} catch {
 		return refusal("human_required", receipt.phase, "capability_invalid", "inspect_private_receipt", "Inspect private capability state with doctor.");
 	}
-}
-
-function nextReceipt(previous: VaultGitReceipt, changes: Partial<VaultGitReceipt>): VaultGitReceipt {
-	return { ...previous, ...changes, schemaVersion: 2, receiptId: previous.receiptId, revision: previous.revision + 1 };
 }
 
 function copyPaths(paths: readonly VaultGitOwnedPathReceipt[]): VaultGitOwnedPathReceipt[] { return paths.map((path) => ({ ...path })); }
@@ -697,8 +715,8 @@ function stateForPhase(phase: VaultGitReceipt["phase"]): VaultGitTransactionStat
 	return null;
 }
 
-function nextForState(state: VaultGitTransactionState): VaultGitEngineNextActionId { return state === "push_pending" ? "retry_push" : state === "repairable" ? "run_repair" : state === "human_required" ? "request_operator_review" : "none"; }
-function summaryForState(state: VaultGitTransactionState): string { return state === "push_pending" ? "Retry publication only after remote reconciliation." : state === "repairable" ? "Run the recorded deterministic repair." : state === "human_required" ? "Ask an operator to inspect conflicting evidence." : "No transaction action remains."; }
+function nextForState(state: VaultGitTransactionState): VaultGitEngineNextActionId { return state === "push_pending" ? "run_doctor" : state === "repairable" ? "run_repair" : state === "human_required" ? "request_operator_review" : "none"; }
+function summaryForState(state: VaultGitTransactionState): string { return state === "push_pending" ? "Run doctor before selecting a publication repair." : state === "repairable" ? "Run the recorded deterministic repair." : state === "human_required" ? "Ask an operator to inspect conflicting evidence." : "No transaction action remains."; }
 
 function validateBegin(input: VaultGitBeginInput): void {
 	if (input.requestedPaths.length === 0) throw new Error("begin requires owned paths");

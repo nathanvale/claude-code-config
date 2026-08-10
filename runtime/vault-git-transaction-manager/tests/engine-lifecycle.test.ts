@@ -321,6 +321,33 @@ describe("transaction engine lifecycle", () => {
 		expect(fixture.remote.lastObservedRemote).toBe("backup");
 	});
 
+	test("begin refuses while quarantine or takeover-pending markers fence the host", async () => {
+		const fixture = await engineFixture();
+		const marker = {
+			transactionId: `txn_${"9".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			recordedAt: "2026-08-09T00:00:00.000Z",
+		} as const;
+		await fixture.store.recordQuarantine({ ...marker, status: "quarantined" });
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			state: "superseded",
+			phase: "human_required",
+			blocker: "host_quarantined",
+			nextAction: { id: "reconcile_quarantine" },
+		});
+		await fixture.store.recordQuarantine({ ...marker, status: "takeover_pending", recordedAt: "2026-08-09T00:00:01.000Z" });
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			state: "superseded",
+			phase: "human_required",
+			blocker: "host_quarantined",
+			nextAction: { id: "run_doctor" },
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+	});
+
 	test("classifies terminal phases from local facts while the remote is down", async () => {
 		const fixture = await engineFixture();
 		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });

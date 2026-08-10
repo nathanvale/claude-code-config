@@ -75,17 +75,14 @@ describe("private receipt store", () => {
 		const first = receipt();
 		await store.initialize(first, { ownerCapability: new Uint8Array([1]), joinCapability: new Uint8Array([2]) });
 		expect(calls).toEqual([
-			...renamedFile("history"),
+			...linkedFile("history"),
 			...renamedFile("capability"),
 			...renamedFile("capability"),
-			{ method: "writeTemp", target: "current" },
-			{ method: "syncFile", target: "current" },
-			{ method: "linkExclusive", target: "current" },
-			{ method: "syncDirectory", target: "current" },
+			...linkedFile("current"),
 		]);
 		calls.length = 0;
 		await store.append({ ...first, revision: 2, phase: "writing", leaseGeneration: "a".repeat(40) });
-		expect(calls).toEqual([...renamedFile("history"), ...renamedFile("current")]);
+		expect(calls).toEqual([...linkedFile("history"), ...renamedFile("current")]);
 	});
 
 	test("initialize interrupted before any durability phase leaves absent or readable state", async () => {
@@ -216,6 +213,90 @@ describe("private receipt store", () => {
 		expect(await store.validateCapability(first.receiptId, "owner", new Uint8Array([7, 8, 0]))).toBe(false);
 		expect(await store.validateCapability(first.receiptId, "owner", new Uint8Array([7, 8]))).toBe(false);
 		expect(await store.validateCapability(first.receiptId, "join", new Uint8Array([1, 2, 3]))).toBe(true);
+	});
+
+	test("issues and atomically consumes one private doctor token without recording its bytes", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+		});
+		const proof = {
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			receiptId: `receipt_${"2".repeat(32)}`,
+			receiptRevision: 3,
+			proofFingerprint: "f".repeat(64),
+			issuedAt: "2026-08-09T00:00:00.000Z",
+		} as const;
+		const token = await store.issueDoctorToken(proof);
+		expect(await store.readDoctorToken(proof.transactionId, proof.ledgerGeneration)).toEqual(token);
+		const issuedName = (await readdir(store.paths.doctorTokens)).find((name) =>
+			name.endsWith(".issued.json"),
+		);
+		if (!issuedName) throw new Error("doctor issuance record missing");
+		const issued = await readFile(join(store.paths.doctorTokens, issuedName), "utf8");
+		expect(issued).not.toContain(Buffer.from(token).toString("hex"));
+		expect(
+			await store.consumeDoctorToken(
+				proof,
+				token,
+				"2026-08-09T00:00:01.000Z",
+			),
+		).toBe(true);
+		expect(
+			await store.consumeDoctorToken(
+				proof,
+				token,
+				"2026-08-09T00:00:02.000Z",
+			),
+		).toBe(false);
+	});
+
+	test("consumes a doctor token at exactly the five-minute boundary and refuses past it", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+		});
+		const boundaryProof = {
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			receiptId: `receipt_${"2".repeat(32)}`,
+			receiptRevision: 3,
+			proofFingerprint: "f".repeat(64),
+			issuedAt: "2026-08-09T00:00:00.000Z",
+		} as const;
+		const boundaryToken = await store.issueDoctorToken(boundaryProof);
+		// The implemented window is inclusive: elapsed strictly greater than
+		// five minutes refuses, so exactly five minutes still consumes.
+		expect(
+			await store.consumeDoctorToken(
+				boundaryProof,
+				boundaryToken,
+				"2026-08-09T00:05:00.000Z",
+			),
+		).toBe(true);
+
+		const lateProof = {
+			...boundaryProof,
+			issuedAt: "2026-08-09T01:00:00.000Z",
+		} as const;
+		const lateToken = await store.issueDoctorToken(lateProof);
+		expect(
+			await store.consumeDoctorToken(
+				lateProof,
+				lateToken,
+				"2026-08-09T01:05:00.001Z",
+			),
+		).toBe(false);
+		expect(
+			await store.consumeDoctorToken(
+				lateProof,
+				lateToken,
+				"2026-08-09T01:06:00.000Z",
+			),
+		).toBe(false);
 	});
 
 	test("rejects duplicate history revisions instead of silently proceeding", async () => {
@@ -411,6 +492,16 @@ function renamedFile(target: string): PortCall[] {
 		{ method: "writeTemp", target },
 		{ method: "syncFile", target },
 		{ method: "rename", target },
+		{ method: "syncDirectory", target },
+	];
+}
+
+/** Expected port sequence for one exclusively link-published durable file. */
+function linkedFile(target: string): PortCall[] {
+	return [
+		{ method: "writeTemp", target },
+		{ method: "syncFile", target },
+		{ method: "linkExclusive", target },
 		{ method: "syncDirectory", target },
 	];
 }

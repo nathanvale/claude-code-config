@@ -5,6 +5,7 @@ import {
 	VAULT_GIT_LEDGER_REF,
 	type VaultGitBlockerId,
 	type VaultGitEventType,
+	type VaultGitReceipt,
 	type VaultGitRetrySafety,
 } from "./model.ts";
 import type { VaultGitClockPort, VaultGitRemotePort } from "./ports.ts";
@@ -44,7 +45,7 @@ export interface RemoteLease {
 	readonly state: "held" | "released";
 }
 
-/** Input shared by acquisition and explicit operator takeover. */
+/** Input for ordinary acquisition after one released generation. */
 export interface AcquireRemoteLeaseRequest {
 	/** Named remote in the current clone. */
 	readonly remote: string;
@@ -83,6 +84,12 @@ export interface ValidateRemoteLeaseRequest {
 /** Input for an append-only release transition. */
 export type ReleaseRemoteLeaseRequest = ValidateRemoteLeaseRequest;
 
+/** Input for the audited operator abandonment of one exact stale lease. */
+export interface SupersedeRemoteLeaseRequest extends ValidateRemoteLeaseRequest {
+	/** Non-secret actor recording the superseding abandonment. */
+	readonly supersedingActor: string;
+}
+
 /** Writer posture after a ledger decision. */
 export type RemoteHostDisposition = "authoritative" | "quarantined";
 
@@ -101,6 +108,13 @@ export interface RemoteLedgerNextAction {
 	readonly summary: string;
 }
 
+/** One append-only ledger transition operation. */
+export type RemoteLedgerOperation =
+	| "acquire"
+	| "operator_takeover"
+	| "release"
+	| "superseding_abandon";
+
 /** Successful fetched ledger observation. */
 export interface RemoteLedgerObservedResult {
 	/** Read success marker. */
@@ -109,6 +123,10 @@ export interface RemoteLedgerObservedResult {
 	readonly generation: string | null;
 	/** Current lease state, or null before bootstrap. */
 	readonly lease: RemoteLease | null;
+	/** Operation recorded by the current document, or null before bootstrap. */
+	readonly operation: RemoteLedgerOperation | null;
+	/** Parent generation named by the current document, or null. */
+	readonly previousGeneration: string | null;
 }
 
 /** Deterministic refusal shared by ledger operations. */
@@ -188,6 +206,11 @@ export type ReleaseRemoteLeaseResult =
 	| RemoteLeaseReleasedResult
 	| RemoteLedgerRefusal;
 
+/** Complete audited superseding-abandon outcome. */
+export type SupersedeRemoteLeaseResult =
+	| RemoteLeaseReleasedResult
+	| RemoteLedgerRefusal;
+
 /** Complete fence-validation outcome. */
 export type ValidateRemoteLeaseResult =
 	| RemoteLeaseValidResult
@@ -195,9 +218,11 @@ export type ValidateRemoteLeaseResult =
 
 interface LedgerDocument {
 	readonly schema_version: 1;
-	readonly operation: "acquire" | "operator_takeover" | "release";
+	readonly operation: RemoteLedgerOperation;
 	readonly previous_generation: string | null;
 	readonly transitioned_at: string;
+	/** Actor performing a superseding abandonment; absent for other operations. */
+	readonly superseding_actor?: string;
 	readonly lease: {
 		readonly transaction_id: string;
 		readonly actor: string;
@@ -234,7 +259,15 @@ export async function observeRemoteLedger(
 		VAULT_GIT_LEDGER_REF,
 	);
 	if (read.status === "failed") return remoteFailure(read.reason);
-	if (!read.head) return { status: "observed", generation: null, lease: null };
+	if (!read.head) {
+		return {
+			status: "observed",
+			generation: null,
+			lease: null,
+			operation: null,
+			previousGeneration: null,
+		};
+	}
 	const document = parseLedgerDocument(
 		read.head.content,
 		read.head.parents,
@@ -252,6 +285,8 @@ export async function observeRemoteLedger(
 		status: "observed",
 		generation: read.head.generation,
 		lease: fromDocument(document),
+		operation: document.operation,
+		previousGeneration: document.previous_generation,
 	};
 }
 
@@ -319,57 +354,6 @@ export async function acquireRemoteLease(
 		main.localHead,
 		main.remoteHead,
 		"acquire",
-	);
-}
-
-/**
- * Replace a lease only through an explicit operator-authorized transition.
- *
- * @param engine - Git and time boundaries
- * @param request - Replacement binding and observed generation
- * @returns New fencing generation or a deterministic refusal
- * @throws When caller-owned binding input is structurally unsafe
- *
- * @example
- * ```typescript
- * const result = await takeOverRemoteLease(engine, request)
- * ```
- */
-export async function takeOverRemoteLease(
-	engine: RemoteLedgerEngine,
-	request: AcquireRemoteLeaseRequest,
-): Promise<AcquireRemoteLeaseResult> {
-	validateAcquireRequest(request);
-	if (request.expectedGeneration === null) {
-		throw new Error("operator takeover requires one observed generation");
-	}
-	const main = await requireAlignedMain(
-		engine,
-		request.remote,
-		request.pushPending ?? false,
-	);
-	if (main.status === "refused") return main;
-	const observed = await observeRemoteLedger(engine, request);
-	if (observed.status === "refused") return observed;
-	const generationFence = requireExpectedGeneration(
-		request.expectedGeneration,
-		observed.generation,
-	);
-	if (generationFence) return generationFence;
-	if (!observed.lease || observed.lease.state !== "held") {
-		return refusal(
-			"lease_owner_unknown",
-			"operator_required",
-			"request_operator_takeover",
-			"Inspect the current ledger owner before replacing authority.",
-		);
-	}
-	return appendHeldLease(
-		engine,
-		request,
-		main.localHead,
-		main.remoteHead,
-		"operator_takeover",
 	);
 }
 
@@ -467,12 +451,113 @@ export async function releaseRemoteLease(
 	};
 }
 
+/**
+ * Append one audited abandonment of an exact stale held generation.
+ *
+ * Token validation and the human stopped-writer attestation stay in repair;
+ * this ledger owner performs only the fenced append-only transition. The
+ * superseding actor is recorded as the ledger author and inside the document;
+ * the superseded stale actor stays in the lease body for audit.
+ *
+ * @param engine - Git and time boundaries
+ * @param request - Exact stale generation, transaction binding, and superseding actor
+ * @returns Released generation or a quarantining refusal
+ * @throws When the superseding actor label is structurally unsafe
+ *
+ * @example
+ * ```typescript
+ * const abandoned = await supersedeRemoteLease(engine, {
+ *   remote: "origin", expectedGeneration: generation, transactionId,
+ *   supersedingActor: "operator",
+ * })
+ * ```
+ */
+export async function supersedeRemoteLease(
+	engine: RemoteLedgerEngine,
+	request: SupersedeRemoteLeaseRequest,
+): Promise<SupersedeRemoteLeaseResult> {
+	if (!isOneLine(request.supersedingActor)) {
+		throw new Error("superseding actor must be one non-empty line");
+	}
+	const validated = await validateRemoteLease(engine, request);
+	if (validated.status === "refused") return validated;
+	const timestamp = engine.clock.now().toISOString();
+	const document: LedgerDocument = {
+		...toDocument(
+			{ ...validated.lease, state: "released" },
+			"superseding_abandon",
+			request.expectedGeneration,
+			timestamp,
+		),
+		superseding_actor: request.supersedingActor,
+	};
+	const appended = await engine.git.appendLedgerCommit({
+		remote: request.remote,
+		ledgerRef: VAULT_GIT_LEDGER_REF,
+		expectedGeneration: request.expectedGeneration,
+		content: `${JSON.stringify(document, null, 2)}\n`,
+		message: `vault-ledger: superseding-abandon ${request.transactionId}`,
+		author: request.supersedingActor,
+		timestamp,
+	});
+	if (appended.status === "refused") return appendFailure(appended.reason);
+	return {
+		status: "released",
+		generation: appended.generation,
+		transactionId: request.transactionId,
+		changedState: "remote",
+		hostDisposition: "quarantined",
+	};
+}
+
+/**
+ * Serialize the exact release-ledger document bytes for one atomic close.
+ *
+ * Byte-stable and shared: the retry path compares regenerated content against
+ * the recorded release object and refuses on any difference, so the engine
+ * completion flow and the repair publication flow must call this single
+ * serialization.
+ *
+ * @param receipt - Receipt carrying the admitted lease and commit evidence
+ * @param timestamp - Release transition timestamp bound at preparation
+ * @returns Compact single-line JSON document terminated by one newline
+ * @throws Never
+ *
+ * @example
+ * ```typescript
+ * const ledgerContent = buildVaultGitReleaseLedgerContent(receipt, preparedAt)
+ * ```
+ */
+export function buildVaultGitReleaseLedgerContent(
+	receipt: VaultGitReceipt,
+	timestamp: string,
+): string {
+	return `${JSON.stringify({
+		schema_version: 1,
+		operation: "release",
+		previous_generation: receipt.leaseGeneration,
+		transitioned_at: timestamp,
+		lease: {
+			transaction_id: receipt.transactionId,
+			actor: receipt.actor,
+			host: receipt.host,
+			event: receipt.event,
+			owned_paths: receipt.ownedPaths.map((entry) => entry.path),
+			local_main_head: receipt.localMainHead,
+			remote_main_head: receipt.remoteMainHead,
+			acquired_at: receipt.leaseAcquiredAt,
+			lease_duration_ms: receipt.leaseDurationMs,
+			state: "released",
+		},
+	})}\n`;
+}
+
 async function appendHeldLease(
 	engine: RemoteLedgerEngine,
 	request: AcquireRemoteLeaseRequest,
 	localMainHead: string,
 	remoteMainHead: string,
-	operation: "acquire" | "operator_takeover",
+	operation: "acquire",
 ): Promise<AcquireRemoteLeaseResult> {
 	const timestamp = engine.clock.now().toISOString();
 	const lease: RemoteLease = {
@@ -733,9 +818,12 @@ function parseLedgerDocument(
 		!Number.isSafeInteger(lease.lease_duration_ms) ||
 		(lease.lease_duration_ms as number) <= 0 ||
 		(lease.state !== "held" && lease.state !== "released") ||
-		(value.operation === "release"
+		(value.operation === "release" || value.operation === "superseding_abandon"
 			? lease.state !== "released"
-			: lease.state !== "held")
+			: lease.state !== "held") ||
+		(value.operation === "superseding_abandon"
+			? !isOneLine(value.superseding_actor)
+			: value.superseding_actor !== undefined)
 	) {
 		return null;
 	}
@@ -753,6 +841,9 @@ function parseLedgerDocument(
 		operation: value.operation,
 		previous_generation: previousGeneration,
 		transitioned_at: value.transitioned_at,
+		...(typeof value.superseding_actor === "string"
+			? { superseding_actor: value.superseding_actor }
+			: {}),
 		lease: {
 			transaction_id: lease.transaction_id,
 			actor: lease.actor,
@@ -801,7 +892,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isOperation(value: unknown): value is LedgerDocument["operation"] {
 	return (
-		value === "acquire" || value === "operator_takeover" || value === "release"
+		value === "acquire" ||
+		value === "operator_takeover" ||
+		value === "release" ||
+		value === "superseding_abandon"
 	);
 }
 

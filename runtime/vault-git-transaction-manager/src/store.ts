@@ -54,7 +54,12 @@ export class VaultGitReceiptExistsError extends Error {
 }
 
 /** Stable durable-file category; never emitted by command output. */
-export type VaultGitDurabilityTarget = "history" | "current" | "capability";
+export type VaultGitDurabilityTarget =
+	| "history"
+	| "current"
+	| "capability"
+	| "doctor_token"
+	| "quarantine";
 
 /** One observable load-bearing filesystem operation. */
 export interface VaultGitDurabilityOperation {
@@ -157,6 +162,40 @@ export interface VaultGitCapabilities {
 	readonly joinCapability: Uint8Array;
 }
 
+/** Non-secret state binding one doctor proof to a single-use private token. */
+export interface VaultGitDoctorProof {
+	/** Non-secret transaction correlation. */
+	readonly transactionId: string;
+	/** Exact stale ledger generation. */
+	readonly ledgerGeneration: string;
+	/** Private receipt correlation without a path. */
+	readonly receiptId: string;
+	/** Exact append-only receipt revision proved. */
+	readonly receiptRevision: number;
+	/** SHA-256 binding of current HEAD, hashes, index, and receipt. */
+	readonly proofFingerprint: string;
+	/** Injected proof creation timestamp. */
+	readonly issuedAt: string;
+}
+
+/** Append-only host quarantine transition. */
+export interface VaultGitQuarantineRecord {
+	/** Superseded transaction correlation. */
+	readonly transactionId: string;
+	/** Superseded fencing generation. */
+	readonly ledgerGeneration: string;
+	/**
+	 * Append-only quarantine transition.
+	 *
+	 * `takeover_pending` marks a superseding abandonment admitted but not yet
+	 * proven remote; doctor reconciles it against the observed ledger
+	 * generation before any host write authority returns.
+	 */
+	readonly status: "takeover_pending" | "quarantined" | "reconciled";
+	/** Injected transition timestamp. */
+	readonly recordedAt: string;
+}
+
 /** Valid receipt state loaded from private storage. */
 export interface VaultGitReceiptLoaded {
 	readonly status: "loaded";
@@ -182,13 +221,20 @@ export interface VaultGitReceiptStore {
 		readonly current: string;
 		readonly history: string;
 		readonly capabilities: string;
+		readonly doctorTokens: string;
+		readonly quarantine: string;
 	};
 	/** Create first history entry, pointer, and role capabilities. */
 	initialize(
 		receipt: VaultGitReceipt,
 		capabilities?: VaultGitCapabilities,
 	): Promise<VaultGitCapabilities>;
-	/** Append one revision without replacing immutable history. */
+	/**
+	 * Append one revision without replacing immutable history.
+	 *
+	 * @throws {VaultGitReceiptExistsError} When a concurrent writer already
+	 * published this history revision; the loser must reload and reclassify.
+	 */
 	append(receipt: VaultGitReceipt): Promise<void>;
 	/** Load and validate current state and complete history. */
 	load(): Promise<VaultGitReceiptLoadResult>;
@@ -202,6 +248,28 @@ export interface VaultGitReceiptStore {
 		role: VaultGitCapabilityRole,
 		candidate: Uint8Array,
 	): Promise<boolean>;
+	/** Issue one private token bound to the complete fresh doctor proof. */
+	issueDoctorToken(proof: VaultGitDoctorProof): Promise<Uint8Array>;
+	/** Read the newest private token through an internal launcher boundary. */
+	readDoctorToken(
+		transactionId: string,
+		ledgerGeneration: string,
+	): Promise<Uint8Array>;
+	/** Read the newest non-secret proof binding without token material. */
+	readDoctorProof(
+		transactionId: string,
+		ledgerGeneration: string,
+	): Promise<VaultGitDoctorProof>;
+	/** Atomically consume the newest matching proof token exactly once. */
+	consumeDoctorToken(
+		proof: VaultGitDoctorProof,
+		candidate: Uint8Array,
+		consumedAt: string,
+	): Promise<boolean>;
+	/** Append a quarantine or reconciliation marker without erasing history. */
+	recordQuarantine(record: VaultGitQuarantineRecord): Promise<void>;
+	/** Read the newest append-only quarantine marker. */
+	readQuarantine(): Promise<VaultGitQuarantineRecord | null>;
 }
 
 /** Internal capability-launch request. */
@@ -264,6 +332,8 @@ export function createReceiptStore(
 		current: join(repositoryRoot, "current.json"),
 		history: join(repositoryRoot, "history"),
 		capabilities: join(repositoryRoot, "capabilities"),
+		doctorTokens: join(repositoryRoot, "doctor-tokens"),
+		quarantine: join(repositoryRoot, "quarantine"),
 	} as const;
 
 	async function prepare(): Promise<void> {
@@ -272,6 +342,8 @@ export function createReceiptStore(
 			repositoryRoot,
 			paths.history,
 			paths.capabilities,
+			paths.doctorTokens,
+			paths.quarantine,
 		]) {
 			await mkdir(path, { recursive: true, mode: 0o700 });
 			const metadata = await lstat(path);
@@ -315,7 +387,7 @@ export function createReceiptStore(
 			// Capabilities land before the pointer publish: an orphan capability
 			// file with no pointer is harmless, while a pointer without its
 			// capabilities strands the transaction.
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, durability);
 			await durablePublishExclusive(paths.current, receipt, durability);
@@ -327,7 +399,11 @@ export function createReceiptStore(
 			const loaded = await loadReceiptState(paths);
 			if (loaded.status !== "loaded") throw new Error(`cannot append receipt: ${loaded.status}`);
 			assertAppend(loaded.receipt, receipt);
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			// History publishes through link(2): two racing appends at the same
+			// revision surface VaultGitReceiptExistsError for the loser instead
+			// of silently overwriting the winner's revision. The current pointer
+			// stays rename-published because only the history winner reaches it.
+			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableWrite(paths.current, receipt, "current", durability);
 		},
 		async load() {
@@ -344,6 +420,133 @@ export function createReceiptStore(
 		async validateCapability(receiptId, role, candidate) {
 			const expected = await this.readCapability(receiptId, role);
 			return expected.byteLength === candidate.byteLength && timingSafeEqual(expected, candidate);
+		},
+		async issueDoctorToken(proof) {
+			validateDoctorProof(proof);
+			await prepare();
+			const token = new Uint8Array(randomBytes(32));
+			const tokenId = randomUUID().replaceAll("-", "");
+			const tokenDigest = createHash("sha256").update(token).digest("hex");
+			const record = { schemaVersion: 1, tokenId, tokenDigest, ...proof } as const;
+			await durableBytes(
+				join(paths.doctorTokens, `${tokenId}.token`),
+				token,
+				durability,
+				"doctor_token",
+			);
+			await durableJson(
+				join(paths.doctorTokens, `${tokenId}.issued.json`),
+				record,
+				"doctor_token",
+				durability,
+			);
+			return new Uint8Array(token);
+		},
+		async readDoctorToken(transactionId, ledgerGeneration) {
+			const record = await latestDoctorTokenRecord(
+				paths.doctorTokens,
+				transactionId,
+				ledgerGeneration,
+			);
+			if (!record) throw new Error("doctor token unavailable");
+			return new Uint8Array(
+				await readPrivateBytes(
+					join(paths.doctorTokens, `${record.tokenId}.token`),
+				),
+			);
+		},
+		async readDoctorProof(transactionId, ledgerGeneration) {
+			const record = await latestDoctorTokenRecord(
+				paths.doctorTokens,
+				transactionId,
+				ledgerGeneration,
+			);
+			if (!record) throw new Error("doctor proof unavailable");
+			return {
+				transactionId: record.transactionId,
+				ledgerGeneration: record.ledgerGeneration,
+				receiptId: record.receiptId,
+				receiptRevision: record.receiptRevision,
+				proofFingerprint: record.proofFingerprint,
+				issuedAt: record.issuedAt,
+			};
+		},
+		async consumeDoctorToken(proof, candidate, consumedAt) {
+			validateDoctorProof(proof);
+			if (!isIso(consumedAt)) throw new Error("doctor token consumption time invalid");
+			await prepare();
+			const record = await latestDoctorTokenRecord(
+				paths.doctorTokens,
+				proof.transactionId,
+				proof.ledgerGeneration,
+			);
+			if (!record || !sameDoctorProof(record, proof)) return false;
+			if (Date.parse(consumedAt) < Date.parse(proof.issuedAt)) return false;
+			if (Date.parse(consumedAt) - Date.parse(proof.issuedAt) > 5 * 60_000) {
+				return false;
+			}
+			const digest = createHash("sha256").update(candidate).digest("hex");
+			const expected = Buffer.from(record.tokenDigest, "hex");
+			const actual = Buffer.from(digest, "hex");
+			if (!timingSafeEqual(expected, actual)) return false;
+			try {
+				await durablePublishExclusiveValue(
+					join(paths.doctorTokens, `${record.tokenId}.consumed.json`),
+					{
+						schemaVersion: 1,
+						tokenId: record.tokenId,
+						consumedAt,
+					},
+					"doctor_token",
+					durability,
+				);
+				return true;
+			} catch (error) {
+				if (error instanceof VaultGitReceiptExistsError) return false;
+				throw error;
+			}
+		},
+		async recordQuarantine(record) {
+			validateQuarantineRecord(record);
+			await prepare();
+			let ordinal =
+				(await readdir(paths.quarantine)).filter((name) =>
+					name.endsWith(".json"),
+				).length + 1;
+			for (;;) {
+				try {
+					await durablePublishExclusiveValue(
+						join(
+							paths.quarantine,
+							`${String(ordinal).padStart(8, "0")}.json`,
+						),
+						record,
+						"quarantine",
+						durability,
+					);
+					return;
+				} catch (error) {
+					if (!(error instanceof VaultGitReceiptExistsError)) throw error;
+					ordinal += 1;
+				}
+			}
+		},
+		async readQuarantine() {
+			const names = (
+				await readdir(paths.quarantine).catch((error) => {
+					if (isMissing(error)) return [];
+					throw error;
+				})
+			)
+				.filter((name) => name.endsWith(".json"))
+				.sort();
+			const latest = names.at(-1);
+			if (!latest) return null;
+			const value: unknown = JSON.parse(
+				await readPrivateText(join(paths.quarantine, latest)),
+			);
+			validateQuarantineRecord(value);
+			return value;
 		},
 	};
 }
@@ -469,6 +672,51 @@ async function durableWrite(
 	durability: VaultGitDurabilityPort,
 ): Promise<void> {
 	await durableBytes(path, new TextEncoder().encode(`${JSON.stringify(receipt)}\n`), durability, target);
+}
+
+async function durableJson(
+	path: string,
+	value: unknown,
+	target: VaultGitDurabilityTarget,
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	await durableBytes(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(value)}\n`),
+		durability,
+		target,
+	);
+}
+
+async function durablePublishExclusiveValue(
+	path: string,
+	value: unknown,
+	target: VaultGitDurabilityTarget,
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+	const temporary = `${path}.tmp-${randomUUID()}`;
+	let handle: FileHandle | undefined;
+	try {
+		handle = await open(temporary, "wx", 0o600);
+		await durability.writeTemp(handle, bytes, target);
+		await durability.syncFile(handle, target);
+		await handle.close();
+		handle = undefined;
+		try {
+			await durability.linkExclusive(temporary, path, target);
+		} catch (error) {
+			if (isExists(error)) throw new VaultGitReceiptExistsError();
+			throw error;
+		}
+		await durability.syncDirectory(join(path, ".."), target);
+	} catch (error) {
+		if (handle) await handle.close().catch(() => undefined);
+		await unlink(temporary).catch(() => undefined);
+		if (error instanceof VaultGitReceiptExistsError) throw error;
+		throw new Error("receipt durability unavailable", { cause: error });
+	}
+	await unlink(temporary).catch(() => undefined);
 }
 
 /**
@@ -628,6 +876,127 @@ async function readPrivateText(path: string): Promise<string> {
 		throw new Error("private receipt permissions invalid");
 	}
 	return readFile(path, "utf8");
+}
+
+async function readPrivateBytes(path: string): Promise<Buffer> {
+	const metadata = await lstat(path);
+	if (
+		!metadata.isFile() ||
+		metadata.isSymbolicLink() ||
+		(metadata.mode & 0o777) !== 0o600
+	) {
+		throw new Error("private token permissions invalid");
+	}
+	return readFile(path);
+}
+
+interface DoctorTokenRecord extends VaultGitDoctorProof {
+	readonly schemaVersion: 1;
+	readonly tokenId: string;
+	readonly tokenDigest: string;
+}
+
+async function latestDoctorTokenRecord(
+	directory: string,
+	transactionId: string,
+	ledgerGeneration: string,
+): Promise<DoctorTokenRecord | null> {
+	const names = await readdir(directory).catch((error) => {
+		if (isMissing(error)) return [];
+		throw error;
+	});
+	const records: DoctorTokenRecord[] = [];
+	for (const name of names.filter((entry) => entry.endsWith(".issued.json"))) {
+		const value: unknown = JSON.parse(
+			await readPrivateText(join(directory, name)),
+		);
+		if (!isDoctorTokenRecord(value)) {
+			throw new Error("doctor token record invalid");
+		}
+		if (
+			value.transactionId === transactionId &&
+			value.ledgerGeneration === ledgerGeneration
+		) {
+			records.push(value);
+		}
+	}
+	return (
+		records.sort(
+			(left, right) =>
+				Date.parse(left.issuedAt) - Date.parse(right.issuedAt) ||
+				left.tokenId.localeCompare(right.tokenId),
+		).at(-1) ?? null
+	);
+}
+
+function validateDoctorProof(value: unknown): asserts value is VaultGitDoctorProof {
+	if (
+		!isRecord(value) ||
+		!isTransactionId(value.transactionId) ||
+		!isObjectId(value.ledgerGeneration) ||
+		!isReceiptId(value.receiptId) ||
+		!Number.isSafeInteger(value.receiptRevision) ||
+		(value.receiptRevision as number) < 1 ||
+		!isHexDigest(value.proofFingerprint) ||
+		!isIso(value.issuedAt)
+	) {
+		throw new Error("doctor proof invalid");
+	}
+}
+
+function isDoctorTokenRecord(value: unknown): value is DoctorTokenRecord {
+	try {
+		validateDoctorProof(value);
+	} catch {
+		return false;
+	}
+	return (
+		isRecord(value) &&
+		value.schemaVersion === 1 &&
+		typeof value.tokenId === "string" &&
+		/^[0-9a-f]{32}$/.test(value.tokenId) &&
+		isHexDigest(value.tokenDigest)
+	);
+}
+
+function sameDoctorProof(
+	record: DoctorTokenRecord,
+	proof: VaultGitDoctorProof,
+): boolean {
+	return (
+		record.transactionId === proof.transactionId &&
+		record.ledgerGeneration === proof.ledgerGeneration &&
+		record.receiptId === proof.receiptId &&
+		record.receiptRevision === proof.receiptRevision &&
+		record.proofFingerprint === proof.proofFingerprint &&
+		record.issuedAt === proof.issuedAt
+	);
+}
+
+function validateQuarantineRecord(
+	value: unknown,
+): asserts value is VaultGitQuarantineRecord {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, [
+			"transactionId",
+			"ledgerGeneration",
+			"status",
+			"recordedAt",
+		]) ||
+		!isTransactionId(value.transactionId) ||
+		!isObjectId(value.ledgerGeneration) ||
+		(value.status !== "takeover_pending" &&
+			value.status !== "quarantined" &&
+			value.status !== "reconciled") ||
+		!isIso(value.recordedAt)
+	) {
+		throw new Error("quarantine record invalid");
+	}
+}
+
+function isHexDigest(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 async function assertPrivateDirectory(path: string): Promise<void> {

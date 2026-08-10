@@ -201,6 +201,34 @@ export type VaultGitAtomicCloseResult =
 			readonly ledgerCommit: string;
 	  };
 
+/** Read-only proof input for one previously prepared atomic close. */
+export interface VaultGitAtomicCloseReconcileRequest {
+	/** Named remote recorded by the receipt. */
+	readonly remote: string;
+	/** Exact transaction payload required in both expected commits. */
+	readonly transactionId: string;
+	/** Exact admitted remote main generation. */
+	readonly expectedMainHead: string;
+	/** Exact local event commit expected in remote main history. */
+	readonly mainCommit: string;
+	/** Exact ledger ref used by the transaction manager. */
+	readonly ledgerRef: string;
+	/** Exact held lease generation. */
+	readonly expectedLedgerGeneration: string;
+	/** Exact prepared release commit expected in ledger history. */
+	readonly ledgerCommit: string;
+}
+
+/** Read-only remote outcome proof; uncertainty never collapses to unchanged. */
+export type VaultGitAtomicCloseReconciliation =
+	| { readonly status: "closed" }
+	| { readonly status: "unchanged" }
+	| { readonly status: "host_contract_breach" }
+	| {
+			readonly status: "unknown";
+			readonly reason: "remote_unavailable" | "timed_out" | "local_probe_failed";
+	  };
+
 /** Compare-and-swap append outcome. */
 export type VaultGitLedgerAppendResult =
 	| { readonly status: "appended"; readonly generation: string }
@@ -236,6 +264,10 @@ export interface VaultGitRemotePort {
 	readonly atomicClose?: (
 		request: VaultGitAtomicCloseRequest,
 	) => Promise<VaultGitAtomicCloseResult>;
+	/** Reconcile prepared object ids without creating or pushing objects. */
+	readonly reconcileAtomicClose?: (
+		request: VaultGitAtomicCloseReconcileRequest,
+	) => Promise<VaultGitAtomicCloseReconciliation>;
 }
 
 /** Explicit clock boundary used for lease-age diagnostics and commit dates. */
@@ -334,6 +366,17 @@ export type VaultGitExactCommitResult =
 				| "timed_out";
 	  };
 
+/** Read-only local commit evidence used after an interrupted commit phase. */
+export type VaultGitLocalCommitInspection =
+	| {
+			readonly status: "ok";
+			readonly commitId: string;
+			readonly parents: readonly string[];
+			readonly message: string;
+	  }
+	| { readonly status: "missing" }
+	| { readonly status: "failed"; readonly reason: "timed_out" | "probe_failed" };
+
 /** Repository filesystem facts consumed by transaction policy. */
 export interface VaultGitRepositoryPort {
 	/** Resolve and canonicalize configured repository identity. */
@@ -354,6 +397,10 @@ export interface VaultGitRepositoryPort {
 	readonly commitExact?: (
 		request: VaultGitExactCommitRequest,
 	) => Promise<VaultGitExactCommitResult>;
+	/** Inspect exact local commit ancestry and payload without changing refs. */
+	readonly inspectLocalCommit?: (
+		commitId: string,
+	) => Promise<VaultGitLocalCommitInspection>;
 }
 
 /** Result from the injected vault-owned validation command. */
