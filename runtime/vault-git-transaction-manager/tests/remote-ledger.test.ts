@@ -565,6 +565,9 @@ describe("remote lease ledger", () => {
 					pushAttempted = true;
 					return respond({ exitCode: 1, stderr: "error: failed to push" });
 				}
+				if (args[0] === "ls-remote" && args[1] === "--get-url") {
+					return respond({ stdout: "/tmp/remote.git\n" });
+				}
 				if (args[0] === "ls-remote") {
 					// The verification re-read after the failed push also fails,
 					// leaving the remote outcome unknown.
@@ -574,6 +577,9 @@ describe("remote lease ledger", () => {
 								stderr: "fatal: unable to access remote",
 							})
 						: respond({ stdout: `${generation}\t${VAULT_GIT_LEDGER_REF}\n` });
+				}
+				if (args[0] === "config" && args.includes("remote.origin.url")) {
+					return respond({ stdout: "/tmp/remote.git\n" });
 				}
 				if (args[0] === "config") return respond({ exitCode: 1 });
 				if (args[0] === "rev-parse") return respond({ stdout: `${generation}\n` });
