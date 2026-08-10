@@ -185,6 +185,14 @@ describe("transaction engine lifecycle", () => {
 		expect(loaded.receipt.phase).toBe("writing");
 		expect(loaded.receipt.commitId ?? null).toBeNull();
 		expect((await fixture.engine.inspect()).state).toBe("active");
+
+		// The refusal precedes fencing, so an unreachable remote still reports
+		// the unsupported transition rather than a transport or lease blocker.
+		fixture.remote.failReads = true;
+		expect(await fixture.engine.recordPhase({ phase: "closed", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "none" })).toMatchObject({
+			status: "refused",
+			blocker: "receipt_conflict",
+		});
 	});
 
 	test("recordPhase refuses the join capability with a role mismatch", async () => {

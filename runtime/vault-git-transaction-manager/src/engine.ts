@@ -629,8 +629,6 @@ export function createVaultGitTransactionEngine(
 			if (input.remote !== loaded.remote) {
 				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
 			}
-			const fenced = await fence(loaded, input.remote);
-			if (fenced) return fenced;
 			// Closure is evidence-gated: the plan admits only
 			// `Committing -> Closed: atomic main + ledger release verified` and
 			// `Repairable -> Closed: deterministic restore + release`. This
@@ -638,9 +636,13 @@ export function createVaultGitTransactionEngine(
 			// that proof. Recording `closed` here would leave the remote lease
 			// held while the local receipt reads terminal, which blocks every
 			// later writer and stops doctor and repair from reconciling.
+			// Refuse before fencing so an unreachable remote cannot mask an
+			// unsupported transition behind a lease or transport blocker.
 			if (input.phase === "closed") {
 				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Closure requires verified atomic close; complete or repair the transaction instead of recording closed.");
 			}
+			const fenced = await fence(loaded, input.remote);
+			if (fenced) return fenced;
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
 			// Commit evidence fields are owned by completion and repair flows (U5);
 			// a phase transition must never introduce or mutate them.
