@@ -404,8 +404,11 @@ export async function launchCapabilityProcess(
 		throw new Error("capability launch timeout must be positive");
 	}
 	const capability = await store.readCapability(request.receiptId, request.role);
+	// Only the requested capability descriptor is piped; unread intermediate
+	// pipes would block a child that writes to them.
 	const stdio: Array<"ignore" | "pipe"> = ["ignore", "pipe", "pipe"];
-	while (stdio.length <= descriptor) stdio.push("pipe");
+	while (stdio.length < descriptor) stdio.push("ignore");
+	stdio.push("pipe");
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			request.command,
@@ -704,10 +707,9 @@ function isOwnedPathReceipt(value: unknown): boolean {
 }
 
 function isOwnedPath(value: unknown): value is string {
-	if (typeof value !== "string" || value.startsWith("/")) return false;
+	if (typeof value !== "string" || value.length === 0 || value.startsWith("/")) return false;
 	const segments = value.split("/");
-	if (segments[0] === ".git") return false;
-	return segments.every((part) => part.length > 0 && part !== "." && part !== "..");
+	return segments.every((part) => part.length > 0 && part !== "." && part !== ".." && part.toLowerCase() !== ".git");
 }
 
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
