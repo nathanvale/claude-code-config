@@ -469,6 +469,15 @@ export function createGitAdapter(
 			assertObjectId(request.expectedLedgerGeneration);
 			assertSafeCommitField("author", request.author);
 			assertSafeCommitField("message", request.ledgerMessage);
+			// The remote URL is repository configuration and can change between
+			// begin and complete; re-prove the host before the only operation
+			// that force-updates remote main.
+			await assertSafeRemoteTarget(
+				runGit,
+				request.remote,
+				options.timeouts.localMs,
+				allowedRemoteHosts,
+			);
 			await assertNoConfiguredPushRefspec(
 				runGit,
 				request.remote,
@@ -1667,10 +1676,16 @@ async function isSafeOwnedPath(
 		return false;
 	}
 	const segments = path.split("/");
+	// Keep at least as strict as isOwnedPath in store.ts: a nested or
+	// differently-cased `.git` admitted here would be rejected there, escaping
+	// begin() as a raw throw instead of an owned_path_not_admitted refusal.
 	if (
-		segments[0] === ".git" ||
 		segments.some(
-			(segment) => segment.length === 0 || segment === "." || segment === "..",
+			(segment) =>
+				segment.length === 0 ||
+				segment === "." ||
+				segment === ".." ||
+				segment.toLowerCase() === ".git",
 		)
 	) {
 		return false;
