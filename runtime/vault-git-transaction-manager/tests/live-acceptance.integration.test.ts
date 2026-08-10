@@ -378,6 +378,27 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		expect(fixture.git("status", "--porcelain=v2", "-z")).toBe(statusBefore);
 	});
 
+	test("an unreachable remote refuses without a hidden local commit", async () => {
+		// Decision 10 requires offline refusal among the proven behaviours, and
+		// decision 8 forbids a hidden local commit while offline. Proving this
+		// only against a fake port never exercises the real transport
+		// classifier, which maps any non-atomic-push failure to
+		// remote_unavailable through a catch-all.
+		const fixture = await createFixture({ shimMode: "remote_offline" });
+		const localBefore = fixture.git("rev-parse", "refs/heads/main");
+		const remoteBefore = fixture.remoteRefs();
+		const statusBefore = fixture.git("status", "--porcelain=v2", "-z");
+		const refused = await fixture.run(beginArgs("notes/event.md"));
+		expect(refused.exitCode).not.toBe(0);
+		expect(parseCliProcessJson(refused)).toMatchObject({
+			status: "error",
+			data: { outcome: "refused", changed_state: "none" },
+		});
+		expect(fixture.git("rev-parse", "refs/heads/main")).toBe(localBefore);
+		expect(fixture.remoteRefs()).toEqual(remoteBefore);
+		expect(fixture.git("status", "--porcelain=v2", "-z")).toBe(statusBefore);
+	});
+
 	test("hostile repository and path inputs fail closed without mutation", async () => {
 		for (const scenario of hostileScenarios) {
 			const fixture = await createFixture();
@@ -868,6 +889,12 @@ const dryRun = args.includes("--dry-run");
 if (mode === "atomic_unsupported" && atomic && dryRun) {
   process.stderr.write("fatal: the receiving end does not support atomic push\\n");
   process.exit(1);
+}
+// Every network verb fails as if the host were unreachable, so the real
+// transport classifier runs against a genuine failure instead of a fake port.
+if (mode === "remote_offline" && ["push", "fetch", "ls-remote"].includes(args[0] ?? "")) {
+  process.stderr.write("fatal: unable to access remote: Could not resolve host\\n");
+  process.exit(128);
 }
 if (mode === "lost_ack" && marker && existsSync(marker) && ["fetch", "ls-remote"].includes(args[0] ?? "")) {
   process.stderr.write("fatal: simulated reconciliation outage\\n");
