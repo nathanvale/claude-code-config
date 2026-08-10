@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { BrowserConnectVerifiedEndpoint } from "../src/model.ts";
+import { agentBrowserDefinition } from "../src/adapters/agent-browser.ts";
 import {
 	type AdapterCommandInput,
 	type AdapterCommandResult,
@@ -9,6 +11,12 @@ import {
 
 const EXECUTABLE_PATH = "/opt/adapters/bin/agent-browser";
 const SESSION_NAME = "browser-use-owned-session";
+const ENDPOINT: BrowserConnectVerifiedEndpoint = {
+	http: "http://127.0.0.1:41337",
+	ws: "ws://127.0.0.1:41337/devtools/browser/abc",
+};
+const PROBE_SESSION_PATTERN =
+	/^browser-connect-agent-browser-probe-\d+-[a-f0-9]{8}$/;
 
 function runtimeWith(
 	respond: (input: AdapterCommandInput) => AdapterCommandResult,
@@ -35,6 +43,86 @@ function runtimeWith(
 		},
 	};
 }
+
+function successfulProbeResponse(
+	input: AdapterCommandInput,
+): AdapterCommandResult {
+	if (input.args.includes("close")) {
+		return {
+			exitCode: 0,
+			stdout: JSON.stringify({ success: true }),
+			stderr: "",
+		};
+	}
+	if (input.args.includes("list")) {
+		return {
+			exitCode: 0,
+			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
+			stderr: "",
+		};
+	}
+	return { exitCode: 0, stdout: "snapshot", stderr: "" };
+}
+
+describe("agent-browser probeAttachment", () => {
+	test("uses and releases a derived named session after probe success", async () => {
+		const { runtime, commands } = runtimeWith(successfulProbeResponse);
+
+		const result = await agentBrowserDefinition.probeAttachment(
+			runtime,
+			ENDPOINT,
+			"explicit-cdp",
+		);
+
+		expect(result.attached).toBe(true);
+		const probe = commands.find((command) => command.args.includes("snapshot"));
+		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
+		expect(sessionFlag).toBeGreaterThanOrEqual(0);
+		const probeSessionName = probe?.args[sessionFlag + 1];
+		expect(probeSessionName).toMatch(PROBE_SESSION_PATTERN);
+		if (!probeSessionName) throw new Error("probe session name missing");
+
+		const release = commands.find((command) => command.args.includes("close"));
+		expect(release?.args).toEqual([
+			"--session",
+			probeSessionName,
+			"close",
+			"--json",
+		]);
+		expect(release?.args).not.toContain("--cdp");
+		expect(release?.env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+		expect(release?.timeoutMs).toBe(RELEASE_TIMEOUT_MS);
+	});
+
+	test("releases the derived named session after probe failure", async () => {
+		const { runtime, commands } = runtimeWith((input) => {
+			if (input.args.includes("snapshot")) {
+				return { exitCode: 2, stdout: "", stderr: "probe failed" };
+			}
+			return successfulProbeResponse(input);
+		});
+
+		const result = await agentBrowserDefinition.probeAttachment(
+			runtime,
+			ENDPOINT,
+			"explicit-cdp",
+		);
+
+		expect(result.attached).toBe(false);
+		const probe = commands.find((command) => command.args.includes("snapshot"));
+		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
+		expect(sessionFlag).toBeGreaterThanOrEqual(0);
+		const probeSessionName = probe?.args[sessionFlag + 1];
+		expect(probeSessionName).toMatch(PROBE_SESSION_PATTERN);
+		if (!probeSessionName) throw new Error("probe session name missing");
+		expect(commands.find((command) => command.args.includes("close"))?.args).toEqual([
+			"--session",
+			probeSessionName,
+			"close",
+			"--json",
+		]);
+	});
+});
 
 describe("agent-browser releaseSession", () => {
 	test("registry release closes without --cdp and verifies the owned name is absent", async () => {

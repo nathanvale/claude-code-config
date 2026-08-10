@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
@@ -86,6 +87,15 @@ export const AGENT_BROWSER_CDP_FLAG = "--cdp" as const;
  * endpoint from `AGENT_BROWSER_CDP`.
  */
 export const AGENT_BROWSER_CDP_ENV_VAR = "AGENT_BROWSER_CDP" as const;
+
+/** Fixed prefix for agent-browser attachment probe sessions. */
+export const AGENT_BROWSER_PROBE_SESSION_PREFIX =
+	"browser-connect-agent-browser-probe" as const;
+
+/** Derive a unique, recognizable session name for one attachment probe. */
+export function deriveProbeSessionName(): string {
+	return `${AGENT_BROWSER_PROBE_SESSION_PREFIX}-${process.pid}-${randomBytes(4).toString("hex")}`;
+}
 
 const RELEASE_VERIFY_ATTEMPTS = 6;
 const RELEASE_VERIFY_DELAY_MS = 1000;
@@ -189,48 +199,69 @@ export const agentBrowserDefinition = {
 			};
 		}
 		const injection = this.inject(endpoint);
-		let result: AdapterCommandResult;
+		const sessionName = deriveProbeSessionName();
+		let probeResult: AdapterProbeResult;
 		try {
-			result = await runtime.runCommand({
+			const result = await runtime.runCommand({
 				command: resolution.path,
 				// Read-only invocation: attach via injected endpoint and snapshot
 				// (no navigation, no mutation) through the adapter's own binary.
-				args: [...injection.argv, "snapshot"],
+				args: [...injection.argv, "--session", sessionName, "snapshot"],
 				timeoutMs: PROBE_TIMEOUT_MS,
 			});
+			if (result.timedOut) {
+				probeResult = {
+					attached: false,
+					failureClass: "attachment-failed",
+					cause: "transient_probe_failure",
+					detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe timed out.`,
+				};
+			} else if (result.exitCode !== 0) {
+				probeResult = {
+					attached: false,
+					failureClass: "attachment-failed",
+					cause: "probe_failed",
+					detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
+				};
+			} else {
+				probeResult = {
+					attached: true,
+					attachment: {
+						adapter_id: "agent-browser",
+						route,
+						probe_executable: resolution.path,
+					},
+					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+				};
+			}
 		} catch (error) {
-			return {
+			probeResult = {
 				attached: false,
 				failureClass: "attachment-failed",
 				cause: "transient_probe_failure",
 				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe did not start: ${errorMessage(error)}.`,
 			};
 		}
-		if (result.timedOut) {
-			return {
-				attached: false,
-				failureClass: "attachment-failed",
-				cause: "transient_probe_failure",
-				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe timed out.`,
-			};
-		}
-		if (result.exitCode !== 0) {
+
+		const releaseSession = this.releaseSession;
+		if (!releaseSession) {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
 				cause: "probe_failed",
-				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe session release mechanic is unavailable.`,
 			};
 		}
-		return {
-			attached: true,
-			attachment: {
-				adapter_id: "agent-browser",
-				route,
-				probe_executable: resolution.path,
-			},
-			evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
-		};
+		const release = await releaseSession(runtime, { sessionName });
+		if (probeResult.attached && !release.released) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "probe_failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe session release failed: ${release.detail}`,
+			};
+		}
+		return probeResult;
 	},
 
 	async releaseSession(
