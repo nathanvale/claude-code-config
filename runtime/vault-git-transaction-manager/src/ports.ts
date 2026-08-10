@@ -14,7 +14,13 @@ export interface VaultGitReadRequest {
 /** Mutation request accepted only after future admission policy succeeds. */
 export interface VaultGitMutationRequest {
 	/** Public mutating command. */
-	readonly command: "begin" | "join" | "complete" | "repair" | "tidy" | "janitor";
+	readonly command:
+		| "begin"
+		| "join"
+		| "complete"
+		| "repair"
+		| "tidy"
+		| "janitor";
 	/** Optional inherited capability descriptor number, never capability bytes. */
 	readonly capabilityFd?: number;
 }
@@ -28,11 +34,155 @@ export interface VaultGitStatePort {
 /** Admitted mutation boundary implemented by the future engine. */
 export interface VaultGitMutationPort {
 	/** Execute one admitted mutation or return a deterministic refusal. */
-	mutate(request: VaultGitMutationRequest): Promise<VaultGitLifecycleResultPayload>;
+	mutate(
+		request: VaultGitMutationRequest,
+	): Promise<VaultGitLifecycleResultPayload>;
 }
 
 /** Capability-byte reader isolated behind an inherited descriptor boundary. */
 export interface VaultGitCapabilityPort {
 	/** Read capability bytes from a numeric inherited descriptor. */
 	readCapability(descriptor: number): Promise<Uint8Array>;
+}
+
+/** One bounded subprocess invocation used by the Git adapter. */
+export interface VaultGitProcessRequest {
+	/** Executable name or absolute path. */
+	readonly command: string;
+	/** Arguments passed without a shell. */
+	readonly args: readonly string[];
+	/** Working directory containing the disposable or configured repository. */
+	readonly cwd: string;
+	/** Optional standard input bytes. */
+	readonly stdin?: string;
+	/** Environment additions; ambient values remain process-adapter owned. */
+	readonly env?: Readonly<Record<string, string>>;
+	/** Hard operation deadline. */
+	readonly timeoutMs: number;
+}
+
+/** Captured subprocess outcome with timeout state made explicit. */
+export interface VaultGitProcessResult {
+	/** Process exit status, or null when no status was available. */
+	readonly exitCode: number | null;
+	/** Captured standard output. */
+	readonly stdout: string;
+	/** Captured standard error. */
+	readonly stderr: string;
+	/** Whether the adapter terminated the process at its deadline. */
+	readonly timedOut: boolean;
+}
+
+/** Injectable process boundary that keeps Git execution out of engine logic. */
+export interface VaultGitProcessPort {
+	/** Run one bounded process without a shell. */
+	run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult>;
+}
+
+/** Main-branch relationship after fetching the exact upstream ref. */
+export type VaultGitMainAlignment =
+	| "aligned"
+	| "behind"
+	| "ahead"
+	| "diverged"
+	| "local_missing";
+
+/** Successful exact-main inspection. */
+export interface VaultGitMainInspectionSuccess {
+	/** Successful transport and comparison marker. */
+	readonly status: "ok";
+	/** Local-to-fetched-upstream relationship. */
+	readonly alignment: VaultGitMainAlignment;
+	/** Local full main-ref object id when present. */
+	readonly localHead: string | null;
+	/** Fetched upstream main object id. */
+	readonly remoteHead: string;
+}
+
+/** Failed exact-main inspection. */
+export interface VaultGitMainInspectionFailure {
+	/** Transport or timeout failure marker. */
+	readonly status: "failed";
+	/** Stable failure category safe for engine mapping. */
+	readonly reason: "remote_unavailable" | "timed_out" | "remote_main_missing";
+}
+
+/** Complete exact-main inspection result. */
+export type VaultGitMainInspection =
+	| VaultGitMainInspectionSuccess
+	| VaultGitMainInspectionFailure;
+
+/** Raw fetched ledger commit for engine-owned schema validation. */
+export interface VaultGitLedgerHead {
+	/** Commit object id used as the fencing generation. */
+	readonly generation: string;
+	/** Direct commit parents in declared order. */
+	readonly parents: readonly string[];
+	/** Ledger file content, or null when the commit lacks the file. */
+	readonly content: string | null;
+}
+
+/** Result of fetching the exact ledger branch. */
+export type VaultGitLedgerReadResult =
+	| { readonly status: "ok"; readonly head: VaultGitLedgerHead | null }
+	| {
+			readonly status: "failed";
+			readonly reason: "remote_unavailable" | "timed_out";
+	  };
+
+/** Input for one compare-and-swap ledger append. */
+export interface VaultGitLedgerAppendRequest {
+	/** Named remote used by the current repository. */
+	readonly remote: string;
+	/** Exact full destination branch ref. */
+	readonly ledgerRef: string;
+	/** Freshly observed parent generation, or null for bootstrap. */
+	readonly expectedGeneration: string | null;
+	/** Complete next ledger JSON document. */
+	readonly content: string;
+	/** Git commit subject. */
+	readonly message: string;
+	/** Non-secret actor label used for commit attribution. */
+	readonly author: string;
+	/** ISO timestamp supplied by the engine clock. */
+	readonly timestamp: string;
+}
+
+/** Compare-and-swap append outcome. */
+export type VaultGitLedgerAppendResult =
+	| { readonly status: "appended"; readonly generation: string }
+	| {
+			readonly status: "refused";
+			readonly reason:
+				| "remote_moved"
+				| "remote_unavailable"
+				| "remote_state_unknown"
+				| "timed_out";
+	  };
+
+/**
+ * Single Git boundary used by remote-ledger engine logic.
+ *
+ * Callers must serialize operations per repository clone: fetches avoid
+ * shared FETCH_HEAD by using private per-call refs, but local branch refs
+ * and the object database remain repository-wide shared state.
+ */
+export interface VaultGitRemotePort {
+	/** Fetch and compare exact local and upstream main refs. */
+	inspectMain(remote: string): Promise<VaultGitMainInspection>;
+	/** Fetch the exact ledger branch without updating a local branch. */
+	readLedger(
+		remote: string,
+		ledgerRef: string,
+	): Promise<VaultGitLedgerReadResult>;
+	/** Append one verified commit through an explicit non-force refspec. */
+	appendLedgerCommit(
+		request: VaultGitLedgerAppendRequest,
+	): Promise<VaultGitLedgerAppendResult>;
+}
+
+/** Explicit clock boundary used for lease-age diagnostics and commit dates. */
+export interface VaultGitClockPort {
+	/** Read current wall-clock time. */
+	now(): Date;
 }

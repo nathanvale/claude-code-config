@@ -21,7 +21,7 @@ import {
 	vaultGitContracts,
 } from "../src/command-contract.ts";
 import {
-	VAULT_GIT_STATION_IDS,
+	type VAULT_GIT_STATION_IDS,
 	vaultGitBranchStationCatalog,
 } from "../src/branch-station-catalog.ts";
 import { renderVaultGitHelp, runVaultGitForTest } from "../src/cli.ts";
@@ -51,8 +51,12 @@ describe("vault-git command contract", () => {
 		expect(vaultGitContractEntries.map(([command]) => command)).toEqual([
 			...VAULT_GIT_COMMANDS,
 		]);
-		expect(findCommandFacadeMetadataDrift(vaultGitContracts, contractOptions)).toEqual([]);
-		expect(findCommandDiscoveryTreeDrift(projectVaultGitCommandDiscoveryTree())).toEqual([]);
+		expect(
+			findCommandFacadeMetadataDrift(vaultGitContracts, contractOptions),
+		).toEqual([]);
+		expect(
+			findCommandDiscoveryTreeDrift(projectVaultGitCommandDiscoveryTree()),
+		).toEqual([]);
 	});
 
 	test("keeps rendered help, parser acceptance, and discovery flags aligned", () => {
@@ -66,7 +70,9 @@ describe("vault-git command contract", () => {
 			});
 			const advertised = Object.keys(discovery.commands[command]?.flags ?? {});
 			for (const flag of advertised) {
-				expect(() => parseVaultGitInvocation(argvForFlag(command, flag))).not.toThrow();
+				expect(() =>
+					parseVaultGitInvocation(argvForFlag(command, flag)),
+				).not.toThrow();
 			}
 		}
 	});
@@ -91,20 +97,31 @@ describe("vault-git command contract", () => {
 				expect(renderCommandUsage(vaultGitContracts[command])).toContain(flag);
 			}
 		}
-		expect(JSON.stringify(discovery)).not.toMatch(/claude|codex|scheduled_caller/i);
+		expect(JSON.stringify(discovery)).not.toMatch(
+			/claude|codex|scheduled_caller/i,
+		);
 	});
 
 	test("contract construction rejects drifted flags", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		const status = drifted.status as { flags: Record<string, unknown> };
-		status.flags["--force"] = { type: "boolean", description: "Bypass policy." };
+		status.flags["--force"] = {
+			type: "boolean",
+			description: "Bypass policy.",
+		};
 		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
 			CliRuntimeContractError,
 		);
 	});
 
 	test("contract construction rejects a drifted command set", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		delete drifted.janitor;
 		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
 			CliRuntimeContractError,
@@ -112,7 +129,10 @@ describe("vault-git command contract", () => {
 	});
 
 	test("contract construction rejects unsafe text", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		(drifted.status as { summary: string }).summary =
 			"Read private state at /Users/example/private-vault.";
 		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
@@ -121,7 +141,10 @@ describe("vault-git command contract", () => {
 	});
 
 	test("contract construction rejects foreign result contracts", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		(drifted.status as { resultContract: { id: string } }).resultContract.id =
 			"foreign.result";
 		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
@@ -130,7 +153,10 @@ describe("vault-git command contract", () => {
 	});
 
 	test("contract construction rejects drifted result schema versions", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		(
 			drifted.status as { resultContract: { schema_version: string } }
 		).resultContract.schema_version = "999";
@@ -140,7 +166,10 @@ describe("vault-git command contract", () => {
 	});
 
 	test("contract construction rejects missing side-effect metadata", () => {
-		const drifted = structuredClone(vaultGitContracts) as Record<string, unknown>;
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
 		delete (drifted.status as { sideEffects?: unknown }).sideEffects;
 		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
 			CliRuntimeContractError,
@@ -153,9 +182,12 @@ describe("vault-git U1 read-only runtime", () => {
 		const run = runVaultGitForTest([], { runId: "run-dashboard" });
 		expect(run.exitCode).toBe(0);
 		expect(run.stderr).toBe("");
-		expect(run.stdout.trim().split("\n").filter((line) => line.startsWith("next:"))).toEqual([
-			"next: wait_for_runtime",
-		]);
+		expect(
+			run.stdout
+				.trim()
+				.split("\n")
+				.filter((line) => line.startsWith("next:")),
+		).toEqual(["next: wait_for_runtime"]);
 		expect(run.stdout).toContain("write_permission: denied");
 		expect(run.stdout).toContain("changed_state: none");
 		expect(run.stdout).toContain("blockers: runtime_unavailable");
@@ -184,7 +216,9 @@ describe("vault-git U1 read-only runtime", () => {
 			continuation: { next_action_id: "wait_for_runtime" },
 		});
 		expect(envelope.data.blockers).toEqual(["runtime_unavailable"]);
-		expect(JSON.stringify(envelope)).not.toMatch(/\/Users\/|\/private\/|capability/i);
+		expect(JSON.stringify(envelope)).not.toMatch(
+			/\/Users\/|\/private\/|capability/i,
+		);
 	});
 
 	test("every mutating station refuses explicitly without reporting a change", () => {
@@ -222,7 +256,9 @@ describe("vault-git U1 read-only runtime", () => {
 		expect(rejectedEnum.exitCode).toBe(2);
 		const rejectedEnvelope = JSON.parse(rejectedEnum.stdout);
 		expect(rejectedEnvelope.error.message).toContain("--event must be one of:");
-		expect(JSON.stringify(rejectedEnvelope)).not.toMatch(/\/Users\/|\/private\//);
+		expect(JSON.stringify(rejectedEnvelope)).not.toMatch(
+			/\/Users\/|\/private\//,
+		);
 
 		const unknownCommand = runVaultGitForTest(
 			["/Users/example/private-vault", "--json"],
@@ -230,7 +266,9 @@ describe("vault-git U1 read-only runtime", () => {
 		);
 		expect(unknownCommand.exitCode).toBe(2);
 		const unknownEnvelope = JSON.parse(unknownCommand.stdout);
-		expect(JSON.stringify(unknownEnvelope)).not.toMatch(/\/Users\/|\/private\//);
+		expect(JSON.stringify(unknownEnvelope)).not.toMatch(
+			/\/Users\/|\/private\//,
+		);
 		expect(unknownEnvelope.data.command).toBe("status");
 	});
 
@@ -256,7 +294,9 @@ describe("vault-git U1 read-only runtime", () => {
 	});
 
 	test("capability input accepts only a numeric inherited descriptor", () => {
-		expect(parseVaultGitInvocation(["join", "--capability-fd", "7"])).toMatchObject({
+		expect(
+			parseVaultGitInvocation(["join", "--capability-fd", "7"]),
+		).toMatchObject({
 			command: "join",
 			capabilityFd: 7,
 		});
@@ -269,11 +309,15 @@ describe("vault-git U1 read-only runtime", () => {
 			).toThrow("numeric inherited file descriptor");
 		}
 		expect(() =>
-			parseVaultGitInvocation(["join", "--capability-fd", "99999999999999999999"]),
+			parseVaultGitInvocation([
+				"join",
+				"--capability-fd",
+				"99999999999999999999",
+			]),
 		).toThrow("numeric inherited file descriptor");
-		expect(() => parseVaultGitInvocation(["join", "--capability", "secret"])).toThrow(
-			"Unsupported flag",
-		);
+		expect(() =>
+			parseVaultGitInvocation(["join", "--capability", "secret"]),
+		).toThrow("Unsupported flag");
 	});
 
 	test("result construction rejects literals outside package vocabulary", () => {
@@ -286,7 +330,10 @@ describe("vault-git U1 read-only runtime", () => {
 				changed_state: "none",
 				retry_safety: "same_input_safe",
 				blockers: ["runtime_unavailable"],
-				next_action: { id: "wait_for_runtime", summary: "Wait for the runtime implementation." },
+				next_action: {
+					id: "wait_for_runtime",
+					summary: "Wait for the runtime implementation.",
+				},
 			}),
 		).toThrow("phase");
 		expect(VAULT_GIT_TRANSACTION_PHASES).toContain("closed");
@@ -383,9 +430,13 @@ describe("vault-git Branch Station runtime coverage", () => {
 		expect(envelope.data.contract_id).toBe(VAULT_GIT_COMMANDS_CONTRACT_ID);
 		expect(envelope.data.outcome).toBe("discovered");
 		expect(envelope.data.changed_state).toBe("none");
-		expect(Object.keys(envelope.data.commands)).toEqual([...VAULT_GIT_COMMANDS]);
+		expect(Object.keys(envelope.data.commands)).toEqual([
+			...VAULT_GIT_COMMANDS,
+		]);
 		expect(envelope.data.commands).toEqual(
-			JSON.parse(JSON.stringify(projectVaultGitCommandDiscoveryTree().commands)),
+			JSON.parse(
+				JSON.stringify(projectVaultGitCommandDiscoveryTree().commands),
+			),
 		);
 		expect(envelope.data.next_action.id).toBe("inspect_commands");
 		expect(envelope.continuation.next_action_id).toBe("inspect_commands");
@@ -439,12 +490,17 @@ describe("vault-git KTD16 boundaries", () => {
 		["model.ts", new Set<string>()],
 		["ports.ts", new Set(["model.ts"])],
 	]);
+	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
+		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
+		["remote-ledger.ts", new Set(["model.ts", "ports.ts"])],
+	]);
 
 	test("keeps model and ports independent from facade, process, filesystem, and Git adapters", () => {
 		expect(srcModules).toContain("cli.ts");
 		const findings = [...pureLayerLocalImports].flatMap(([file, allowed]) => {
 			const imports = graph.get(file);
-			if (!imports) return [`${file} is missing from the enumerated source graph`];
+			if (!imports)
+				return [`${file} is missing from the enumerated source graph`];
 			return [
 				...imports.external.map((specifier) => `${file} imports ${specifier}`),
 				...imports.unresolved,
@@ -463,8 +519,29 @@ describe("vault-git KTD16 boundaries", () => {
 		);
 	});
 
+	test("keeps the remote engine behind ports and the Git adapter at the process edge", () => {
+		const findings = [...layeredLocalImports].flatMap(([file, allowed]) => {
+			const imports = graph.get(file);
+			if (!imports)
+				return [`${file} is missing from the enumerated source graph`];
+			return imports.local
+				.filter((dependency) => !allowed.has(dependency))
+				.map((dependency) => `${file} imports ./${dependency}`);
+		});
+		expect(findings).toEqual([]);
+		expect(graph.get("remote-ledger.ts")?.external.toSorted()).toEqual([
+			"node:crypto",
+		]);
+		expect(graph.get("git-adapter.ts")?.external.toSorted()).toEqual([
+			"node:child_process",
+			"node:crypto",
+		]);
+	});
+
 	test("keeps the enumerated source import graph fully resolved and acyclic", () => {
-		const unresolved = [...graph.values()].flatMap((imports) => imports.unresolved);
+		const unresolved = [...graph.values()].flatMap(
+			(imports) => imports.unresolved,
+		);
 		expect(unresolved).toEqual([]);
 		const localGraph = new Map(
 			[...graph].map(([file, imports]) => [file, imports.local] as const),
@@ -473,7 +550,16 @@ describe("vault-git KTD16 boundaries", () => {
 	});
 });
 
-function argvForFlag(command: (typeof VAULT_GIT_COMMANDS)[number], flag: string): string[] {
+type ExactUnion<Left, Right> = [Left] extends [Right]
+	? [Right] extends [Left]
+		? true
+		: false
+	: false;
+
+function argvForFlag(
+	command: (typeof VAULT_GIT_COMMANDS)[number],
+	flag: string,
+): string[] {
 	const argv = command === "tidy" ? [command, "now"] : [command];
 	switch (flag) {
 		case "--capability-fd":
@@ -490,12 +576,6 @@ function argvForFlag(command: (typeof VAULT_GIT_COMMANDS)[number], flag: string)
 			return [...argv, flag];
 	}
 }
-
-type ExactUnion<Left, Right> = [Left] extends [Right]
-	? [Right] extends [Left]
-		? true
-		: false
-	: false;
 
 function stationById(id: (typeof VAULT_GIT_STATION_IDS)[number]) {
 	const station = vaultGitBranchStationCatalog.find((entry) => entry.id === id);
@@ -522,7 +602,9 @@ interface ModuleImports {
 	readonly unresolved: readonly string[];
 }
 
-function buildModuleGraph(modules: readonly string[]): Map<string, ModuleImports> {
+function buildModuleGraph(
+	modules: readonly string[],
+): Map<string, ModuleImports> {
 	const known = new Set(modules);
 	return new Map(
 		modules.map((file) => {
@@ -535,10 +617,15 @@ function buildModuleGraph(modules: readonly string[]): Map<string, ModuleImports
 					external.push(specifier);
 					continue;
 				}
-				const relative = specifier.startsWith("./") ? specifier.slice(2) : specifier;
+				const relative = specifier.startsWith("./")
+					? specifier.slice(2)
+					: specifier;
 				const target = `${relative.replace(extname(relative), "")}.ts`;
 				if (known.has(target)) local.push(target);
-				else unresolved.push(`${file} imports unresolved relative module ${specifier}`);
+				else
+					unresolved.push(
+						`${file} imports unresolved relative module ${specifier}`,
+					);
 			}
 			return [file, { local, external, unresolved }] as const;
 		}),
