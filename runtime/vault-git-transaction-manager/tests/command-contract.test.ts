@@ -489,6 +489,7 @@ describe("vault-git KTD16 boundaries", () => {
 	const pureLayerLocalImports = new Map<string, ReadonlySet<string>>([
 		["model.ts", new Set<string>()],
 		["ports.ts", new Set(["model.ts"])],
+		["commit-policy.ts", new Set(["model.ts"])],
 	]);
 	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
 		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
@@ -497,7 +498,13 @@ describe("vault-git KTD16 boundaries", () => {
 		["store.ts", new Set(["model.ts"])],
 		[
 			"engine.ts",
-			new Set(["model.ts", "ports.ts", "remote-ledger.ts", "store.ts"]),
+			new Set([
+				"commit-policy.ts",
+				"model.ts",
+				"ports.ts",
+				"remote-ledger.ts",
+				"store.ts",
+			]),
 		],
 	]);
 
@@ -541,7 +548,47 @@ describe("vault-git KTD16 boundaries", () => {
 		expect(graph.get("git-adapter.ts")?.external.toSorted()).toEqual([
 			"node:child_process",
 			"node:crypto",
+			"node:fs/promises",
+			"node:path",
 		]);
+	});
+
+	test("keeps atomicClose as the sole remote-main mutation owner", () => {
+		const mainMutationOwners = srcModules.filter((file) => {
+			const source = readFileSync(resolve(packageRoot, "src", file), "utf8");
+			return source.includes(":refs/heads/main");
+		});
+		expect(mainMutationOwners).toEqual(["git-adapter.ts"]);
+		const adapter = readFileSync(
+			resolve(packageRoot, "src", "git-adapter.ts"),
+			"utf8",
+		);
+		const atomicClose = adapter.slice(
+			adapter.indexOf("async atomicClose"),
+			adapter.indexOf("export interface VaultGitRepositoryAdapterOptions"),
+		);
+		// KTD4: the plan-mandated flags live in one named constant the sole
+		// atomic close push spreads verbatim.
+		const flagConstant = adapter.slice(
+			adapter.indexOf("export const VAULT_GIT_ATOMIC_PUSH_FLAGS"),
+			adapter.indexOf("] as const;", adapter.indexOf("export const VAULT_GIT_ATOMIC_PUSH_FLAGS")),
+		);
+		expect(flagConstant).toContain('"--atomic"');
+		expect(flagConstant).toContain('"--porcelain"');
+		expect(flagConstant).toContain('"--no-verify"');
+		expect(atomicClose).toContain("...VAULT_GIT_ATOMIC_PUSH_FLAGS");
+		expect(atomicClose).toContain(
+			["`--force-with-lease=refs/heads/main:${", "request.expectedMainHead", "}`"].join(""),
+		);
+		expect(atomicClose).toContain(
+			["`--force-with-lease=${", "request.ledgerRef", "}:${", "request.expectedLedgerGeneration", "}`"].join(""),
+		);
+		expect(atomicClose).toContain(
+			["`", "${", "request.mainCommit", "}:refs/heads/main`"].join(""),
+		);
+		expect(atomicClose).toContain(
+			["`", "${", "ledgerCommit", "}:${", "request.ledgerRef", "}`"].join(""),
+		);
 	});
 
 	test("keeps the enumerated source import graph fully resolved and acyclic", () => {

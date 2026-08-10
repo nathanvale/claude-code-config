@@ -661,12 +661,13 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 		!hasExactKeys(value, [
 			"schemaVersion", "receiptId", "transactionId", "revision", "phase",
 			"transition", "recordedAt", "event", "actor", "host", "remote",
-			"ownedPaths", "localMainHead", "remoteMainHead",
+			"ownedPaths", "unrelatedState", "localMainHead", "remoteMainHead",
 			"expectedLeaseGeneration", "leaseGeneration", "leaseAcquiredAt",
-			"leaseDurationMs", "commitId", "nextSafeAction",
+			"leaseDurationMs", "commitId", "expectedMainCommit",
+			"ledgerReleaseId", "pushOutcome", "nextSafeAction",
 			"diagnosticsReference",
 		]) ||
-		value.schemaVersion !== 1 ||
+		value.schemaVersion !== 2 ||
 		!isReceiptId(value.receiptId) ||
 		(value.transactionId !== null && !isTransactionId(value.transactionId)) ||
 		!Number.isSafeInteger(value.revision) || (value.revision as number) < 1 ||
@@ -679,11 +680,21 @@ function validateReceipt(value: unknown): asserts value is VaultGitReceipt {
 		!isOneLine(value.remote) ||
 		!Array.isArray(value.ownedPaths) || value.ownedPaths.length === 0 ||
 		!value.ownedPaths.every(isOwnedPathReceipt) ||
+		!isUnrelatedState(value.unrelatedState) ||
 		!isObjectId(value.localMainHead) || !isObjectId(value.remoteMainHead) ||
 		!isNullableObjectId(value.expectedLeaseGeneration) || !isNullableObjectId(value.leaseGeneration) ||
 		(value.leaseAcquiredAt !== null && !isIso(value.leaseAcquiredAt)) ||
 		!Number.isSafeInteger(value.leaseDurationMs) || (value.leaseDurationMs as number) <= 0 ||
 		!isNullableObjectId(value.commitId) ||
+		!isNullableObjectId(value.expectedMainCommit) ||
+		!isNullableObjectId(value.ledgerReleaseId) ||
+		!["not_attempted", "unknown", "closed", "host_contract_breach"].includes(String(value.pushOutcome)) ||
+		// Commit evidence may exist before the release-ledger commit does, but a
+		// release id without its main commit is always corrupt.
+		(value.ledgerReleaseId !== null && value.expectedMainCommit === null) ||
+		(value.commitId !== null && value.commitId !== value.expectedMainCommit) ||
+		(value.pushOutcome === "not_attempted" && value.expectedMainCommit !== null) ||
+		(value.pushOutcome !== "not_attempted" && value.expectedMainCommit === null) ||
 		!VAULT_GIT_RECEIPT_NEXT_ACTIONS.includes(value.nextSafeAction as never) ||
 		!/^receipt:receipt_[0-9a-f]{32}$/.test(String(value.diagnosticsReference))
 	) throw new Error("receipt schema invalid");
@@ -696,14 +707,33 @@ function assertAppend(previous: VaultGitReceipt, next: VaultGitReceipt): void {
 	}
 	if (previous.transactionId !== null && next.transactionId !== previous.transactionId) throw new Error("transaction id changed");
 	if (previous.leaseGeneration !== null && next.leaseGeneration !== previous.leaseGeneration) throw new Error("lease generation changed");
+	if (previous.commitId !== null && next.commitId !== previous.commitId) throw new Error("commit id changed");
+	if (previous.expectedMainCommit !== null && next.expectedMainCommit !== previous.expectedMainCommit) throw new Error("expected main commit changed");
+	if (previous.ledgerReleaseId !== null && next.ledgerReleaseId !== previous.ledgerReleaseId) throw new Error("ledger release id changed");
+	const pushTransitions: Readonly<Record<VaultGitReceipt["pushOutcome"], readonly VaultGitReceipt["pushOutcome"][]>> = {
+		not_attempted: ["not_attempted", "unknown"],
+		unknown: ["unknown", "closed", "host_contract_breach"],
+		closed: ["closed"],
+		host_contract_breach: ["host_contract_breach"],
+	};
+	if (!pushTransitions[previous.pushOutcome].includes(next.pushOutcome)) throw new Error("push outcome regressed");
 	const previousPaths = new Map(previous.ownedPaths.map((path) => [path.path, path]));
 	for (const [path, entry] of previousPaths) {
 		if (JSON.stringify(next.ownedPaths.find((candidate) => candidate.path === path)) !== JSON.stringify(entry)) throw new Error("owned path changed");
 	}
+	if (next.ownedPaths.length === previous.ownedPaths.length && JSON.stringify(next.unrelatedState) !== JSON.stringify(previous.unrelatedState)) throw new Error("unrelated state changed without joined paths");
 }
 
 function isOwnedPathReceipt(value: unknown): boolean {
 	return isRecord(value) && hasExactKeys(value, ["path", "baselineHash", "admittedNewFile"]) && isOwnedPath(value.path) && (value.baselineHash === null || isObjectId(value.baselineHash)) && typeof value.admittedNewFile === "boolean" && (value.baselineHash === null) === value.admittedNewFile;
+}
+
+function isUnrelatedState(value: unknown): boolean {
+	return isRecord(value) && hasExactKeys(value, ["statusHex", "indexHex"]) && isHex(value.statusHex) && isHex(value.indexHex);
+}
+
+function isHex(value: unknown): value is string {
+	return typeof value === "string" && value.length % 2 === 0 && /^[0-9a-f]*$/.test(value);
 }
 
 function isOwnedPath(value: unknown): value is string {

@@ -164,6 +164,46 @@ describe("private receipt store", () => {
 		expect((await store.load()).status).toBe("conflict");
 	});
 
+	test("persists exact atomic-close recovery evidence and refuses legacy v1 receipts", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		const first = receipt();
+		await store.initialize(first, {
+			ownerCapability: new Uint8Array([1]),
+			joinCapability: new Uint8Array([2]),
+		});
+		const expectedMainCommit = "c".repeat(40);
+		const ledgerReleaseId = "d".repeat(40);
+		await store.append({
+			...first,
+			revision: 2,
+			phase: "push_pending",
+			transition: "push_outcome_unknown",
+			commitId: expectedMainCommit,
+			expectedMainCommit,
+			ledgerReleaseId,
+			pushOutcome: "unknown",
+			nextSafeAction: "retry_push",
+		});
+		expect(await store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				expectedMainCommit,
+				ledgerReleaseId,
+				pushOutcome: "unknown",
+			},
+		});
+
+		const legacyRoot = await fixtureRoot();
+		const legacyStore = createReceiptStore({ stateRoot: legacyRoot, repositoryIdentity: "vault@example" });
+		await expect(
+			legacyStore.initialize({ ...receipt(), schemaVersion: 1 } as never, {
+				ownerCapability: new Uint8Array([1]),
+				joinCapability: new Uint8Array([2]),
+			}),
+		).rejects.toThrow("receipt schema invalid");
+	});
+
 	test("validateCapability accepts only exact same-length role bytes", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
@@ -424,7 +464,7 @@ async function fixtureRoot(): Promise<string> {
 
 function receipt(overrides: Partial<VaultGitReceipt> = {}): VaultGitReceipt {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		receiptId: "receipt_11111111111111111111111111111111",
 		transactionId: null,
 		revision: 1,
@@ -436,6 +476,7 @@ function receipt(overrides: Partial<VaultGitReceipt> = {}): VaultGitReceipt {
 		host: "laptop",
 		remote: "origin",
 		ownedPaths: [{ path: "notes/example.md", baselineHash: null, admittedNewFile: true }],
+		unrelatedState: { statusHex: "", indexHex: "" },
 		localMainHead: "b".repeat(40),
 		remoteMainHead: "b".repeat(40),
 		expectedLeaseGeneration: null,
@@ -443,6 +484,9 @@ function receipt(overrides: Partial<VaultGitReceipt> = {}): VaultGitReceipt {
 		leaseAcquiredAt: null,
 		leaseDurationMs: 60_000,
 		commitId: null,
+		expectedMainCommit: null,
+		ledgerReleaseId: null,
+		pushOutcome: "not_attempted",
 		nextSafeAction: "retry_remote",
 		diagnosticsReference: "receipt:receipt_11111111111111111111111111111111",
 		...overrides,

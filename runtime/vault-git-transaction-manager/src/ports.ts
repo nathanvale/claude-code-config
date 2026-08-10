@@ -2,6 +2,7 @@ import type {
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
+	VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
 
 /** Read-side request accepted by a future transaction engine. */
@@ -149,6 +150,57 @@ export interface VaultGitLedgerAppendRequest {
 	readonly timestamp: string;
 }
 
+/** Durable object ids prepared before the sole atomic close push. */
+export interface VaultGitAtomicCloseEvidence {
+	/** Exact local main commit intended for publication. */
+	readonly mainCommit: string;
+	/** Exact release-ledger commit intended for publication. */
+	readonly ledgerCommit: string;
+}
+
+/** Input for the only operation allowed to mutate remote main. */
+export interface VaultGitAtomicCloseRequest {
+	/** Named remote admitted by the transaction. */
+	readonly remote: string;
+	/** Exact old remote main object id. */
+	readonly expectedMainHead: string;
+	/** Verified local main commit to publish. */
+	readonly mainCommit: string;
+	/** Exact full ledger destination ref. */
+	readonly ledgerRef: string;
+	/** Exact held-ledger generation. */
+	readonly expectedLedgerGeneration: string;
+	/** Complete release-ledger JSON document. */
+	readonly ledgerContent: string;
+	/** Non-sensitive release commit subject. */
+	readonly ledgerMessage: string;
+	/** Non-secret admitted actor identity. */
+	readonly author: string;
+	/** Injected ISO commit timestamp. */
+	readonly timestamp: string;
+	/** Persist both expected object ids before any remote push begins. */
+	readonly onPrepared: (evidence: VaultGitAtomicCloseEvidence) => void | Promise<void>;
+}
+
+/** Result after push and exact-ref reconciliation. */
+export type VaultGitAtomicCloseResult =
+	| {
+			readonly status: "closed";
+			readonly mainCommit: string;
+			readonly ledgerCommit: string;
+	  }
+	| {
+			readonly status: "push_pending";
+			readonly reason: "remote_unavailable" | "remote_state_unknown" | "timed_out";
+			readonly mainCommit: string;
+			readonly ledgerCommit: string;
+	  }
+	| {
+			readonly status: "host_contract_breach";
+			readonly mainCommit: string;
+			readonly ledgerCommit: string;
+	  };
+
 /** Compare-and-swap append outcome. */
 export type VaultGitLedgerAppendResult =
 	| { readonly status: "appended"; readonly generation: string }
@@ -180,6 +232,10 @@ export interface VaultGitRemotePort {
 	appendLedgerCommit(
 		request: VaultGitLedgerAppendRequest,
 	): Promise<VaultGitLedgerAppendResult>;
+	/** Atomically advance exact main and release-ledger refs, then reconcile. */
+	readonly atomicClose?: (
+		request: VaultGitAtomicCloseRequest,
+	) => Promise<VaultGitAtomicCloseResult>;
 }
 
 /** Explicit clock boundary used for lease-age diagnostics and commit dates. */
@@ -211,10 +267,71 @@ export type VaultGitOwnedPathInspection =
 	| {
 			readonly status: "admitted";
 			readonly paths: readonly VaultGitOwnedPathReceipt[];
+			readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
 	  }
 	| {
 			readonly status: "refused";
 			readonly reason: VaultGitOwnedPathRefusalReason;
+	  };
+
+/** One owned path bound to the exact worktree content hash observed pre-check. */
+export interface VaultGitOwnedPathContentHash {
+	/** Repository-relative owned leaf path. */
+	readonly path: string;
+	/** Blob object id of current worktree content, or null when absent. */
+	readonly contentHash: string | null;
+}
+
+/** Input for one exact local event commit. */
+export interface VaultGitExactCommitRequest {
+	/** Exact local main object admitted at begin. */
+	readonly baselineHead: string;
+	/** Frozen admitted leaf set with begin-time hashes. */
+	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
+	/** Exact unrelated state recorded at admission or the latest join. */
+	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
+	/**
+	 * Content hashes captured immediately before the vault-owned check ran.
+	 * When present, the frozen candidate blobs must equal these hashes so the
+	 * committed bytes are exactly the checked bytes.
+	 */
+	readonly expectedContentHashes?: readonly VaultGitOwnedPathContentHash[];
+	/** Complete manager-owned commit message. */
+	readonly message: string;
+	/** Non-secret admitted actor identity. */
+	readonly author: string;
+	/** Injected ISO commit timestamp. */
+	readonly timestamp: string;
+}
+
+/** Exact local commit outcome before remote publication. */
+export type VaultGitExactCommitResult =
+	| {
+			readonly status: "committed";
+			readonly commitId: string;
+			readonly treeId: string;
+	  }
+	| {
+			/**
+			 * Local main advanced to the new commit but the canonical owned index
+			 * could not be synchronized; commit evidence must be preserved.
+			 */
+			readonly status: "committed_incomplete";
+			readonly reason: "index_update_failed";
+			readonly commitId: string;
+			readonly treeId: string;
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason:
+				| "owned_path_baseline_changed"
+				| "owned_path_symlink"
+				| "unrelated_state_changed"
+				| "checked_content_changed"
+				| "empty_event"
+				| "candidate_mismatch"
+				| "local_main_moved"
+				| "timed_out";
 	  };
 
 /** Repository filesystem facts consumed by transaction policy. */
@@ -225,6 +342,29 @@ export interface VaultGitRepositoryPort {
 	inspectOwnedPaths(
 		requestedPaths: readonly string[],
 	): Promise<VaultGitOwnedPathInspection>;
+	/** Capture current unrelated state for a joined owned leaf set. */
+	readonly captureUnrelatedState?: (
+		ownedPaths: readonly string[],
+	) => Promise<VaultGitUnrelatedStateSnapshot>;
+	/** Hash current owned-path worktree content for check-to-commit binding. */
+	readonly hashOwnedPaths?: (
+		ownedPaths: readonly string[],
+	) => Promise<readonly VaultGitOwnedPathContentHash[]>;
+	/** Build, verify, and install one exact local event commit. */
+	readonly commitExact?: (
+		request: VaultGitExactCommitRequest,
+	) => Promise<VaultGitExactCommitResult>;
+}
+
+/** Result from the injected vault-owned validation command. */
+export type VaultGitCheckResult =
+	| { readonly status: "passed" }
+	| { readonly status: "failed"; readonly reason: "check_failed" | "timed_out" };
+
+/** Injected vault-owned check boundary run from the resolved vault root. */
+export interface VaultGitCheckPort {
+	/** Run the admitted repository's own deterministic check command. */
+	run(): Promise<VaultGitCheckResult>;
 }
 
 /** Deterministic process, identity, randomness, and interruption boundary. */

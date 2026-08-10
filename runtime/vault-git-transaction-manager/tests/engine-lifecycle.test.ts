@@ -181,6 +181,50 @@ describe("transaction engine lifecycle", () => {
 		expect(loaded).toMatchObject({ status: "loaded", receipt: { phase: "writing" } });
 	});
 
+	test("refuses a secret-like actor label before any lease or receipt exists", async () => {
+		const fixture = await engineFixture();
+		fixture.runtime.actorValue = "token=super-secret";
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			state: "absent",
+			blocker: "identity_label_invalid",
+			changedState: "none",
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+	});
+
+	test("refuses a private-path host label before any lease or receipt exists", async () => {
+		const fixture = await engineFixture();
+		fixture.runtime.hostValue = "/Users/example/private-host";
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			blocker: "identity_label_invalid",
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+	});
+
+	test("recordPhase never introduces commit evidence or breaks receipt invariants", async () => {
+		const fixture = await engineFixture();
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		for (const phase of ["push_pending", "repairable", "human_required", "closed"] as const) {
+			const recorded = await fixture.engine.recordPhase({ phase, transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "inspect_status" });
+			expect(recorded.status).toBe("advanced");
+			const loaded = await fixture.store.load();
+			if (loaded.status !== "loaded") throw new Error(`receipt ${loaded.status} after ${phase}`);
+			expect(loaded.receipt).toMatchObject({
+				phase,
+				commitId: null,
+				expectedMainCommit: null,
+				ledgerReleaseId: null,
+				pushOutcome: "not_attempted",
+			});
+		}
+	});
+
 	test("re-admits after a refused acquisition once the remote contention clears", async () => {
 		const fixture = await engineFixture();
 		const heldGeneration = "d".repeat(40);
@@ -271,11 +315,13 @@ async function engineFixture(interruptAt?: string) {
 
 class FakeRuntime implements VaultGitRuntimePort, VaultGitClockPort {
 	nowValue = new Date("2026-08-09T00:00:01.000Z");
+	actorValue = "agent-a";
+	hostValue = "laptop";
 	private receiptCounter = 0;
 	constructor(private readonly interruptAt?: string) {}
 	now(): Date { return new Date(this.nowValue); }
-	actor(): string { return "agent-a"; }
-	host(): string { return "laptop"; }
+	actor(): string { return this.actorValue; }
+	host(): string { return this.hostValue; }
 	newReceiptId(): string {
 		this.receiptCounter += 1;
 		return `receipt_${String(this.receiptCounter).padStart(32, "0")}`;
@@ -295,7 +341,11 @@ class FakeRepository implements VaultGitRepositoryPort {
 		this.lastRequested = [...paths];
 		if (this.refusal) return { status: "refused" as const, reason: this.refusal };
 		if (paths.some((path) => this.dirtyPaths.has(path))) return { status: "refused" as const, reason: "dirty_worktree" as const };
-		return { status: "admitted" as const, paths: paths.map((path) => ({ path, baselineHash: null, admittedNewFile: true })) };
+		return {
+			status: "admitted" as const,
+			paths: paths.map((path) => ({ path, baselineHash: null, admittedNewFile: true })),
+			unrelatedState: { statusHex: "", indexHex: "" },
+		};
 	}
 }
 

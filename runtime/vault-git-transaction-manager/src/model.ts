@@ -65,6 +65,7 @@ export const VAULT_GIT_RECEIPT_TRANSITIONS = [
 	"write_authority_granted",
 	"paths_joined",
 	"completion_requested",
+	"commit_candidate_frozen",
 	"push_outcome_unknown",
 	"deterministic_repair_available",
 	"human_intervention_required",
@@ -106,10 +107,25 @@ export interface VaultGitOwnedPathReceipt {
 	readonly admittedNewFile: boolean;
 }
 
+/** Full unrelated status and index intent captured at admission. */
+export interface VaultGitUnrelatedStateSnapshot {
+	/** NUL-safe hexadecimal encoding of porcelain-v2 status output. */
+	readonly statusHex: string;
+	/** NUL-safe hexadecimal encoding of index entries outside owned paths. */
+	readonly indexHex: string;
+}
+
+/** Durable atomic-publication observation. */
+export type VaultGitPushOutcome =
+	| "not_attempted"
+	| "unknown"
+	| "closed"
+	| "host_contract_breach";
+
 /** Private, capability-free state persisted for one transaction transition. */
 export interface VaultGitReceipt {
 	/** Exact receipt schema version. */
-	readonly schemaVersion: 1;
+	readonly schemaVersion: 2;
 	/** Store-local opaque acquisition correlation id. */
 	readonly receiptId: string;
 	/** Remote transaction id after lease acquisition. */
@@ -132,6 +148,8 @@ export interface VaultGitReceipt {
 	readonly remote: string;
 	/** Frozen admitted owned leaf paths and their pre-state. */
 	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
+	/** Full begin-time status and index intent outside the owned leaf set. */
+	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
 	/** Local main baseline. */
 	readonly localMainHead: string;
 	/** Remote main baseline. */
@@ -146,6 +164,12 @@ export interface VaultGitReceipt {
 	readonly leaseDurationMs: number;
 	/** Local candidate commit when one exists. */
 	readonly commitId: string | null;
+	/** Exact main commit expected after atomic publication. */
+	readonly expectedMainCommit: string | null;
+	/** Exact release-ledger commit expected after atomic publication. */
+	readonly ledgerReleaseId: string | null;
+	/** Last durable atomic publication classification. */
+	readonly pushOutcome: VaultGitPushOutcome;
 	/** Exactly one engine-owned safe continuation id. */
 	readonly nextSafeAction: VaultGitReceiptNextAction;
 	/** Opaque diagnostics reference, never a private path. */
@@ -205,6 +229,14 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"capability_role_mismatch",
 	"vault_identity_changed",
 	"owned_path_not_admitted",
+	"commit_subject_invalid",
+	"identity_label_invalid",
+	"owned_path_changed",
+	"unrelated_state_changed",
+	"completion_baseline_changed",
+	"completion_interrupted",
+	"empty_event",
+	"vault_check_failed",
 	"transaction_mismatch",
 ] as const;
 
@@ -257,6 +289,7 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	...VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	"begin_transaction",
 	"capture_private_draft",
+	"change_commit_summary",
 	"change_owned_paths",
 	"continue_transaction",
 	"inspect_configured_vault",

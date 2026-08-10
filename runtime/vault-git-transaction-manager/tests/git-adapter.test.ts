@@ -385,6 +385,51 @@ describe("git adapter append classification", () => {
 	});
 });
 
+describe("git adapter atomic close reconciliation", () => {
+	test("unknown ancestry stays push_pending instead of host_contract_breach", async () => {
+		const remoteMainNow = "f".repeat(40);
+		const ledgerCommit = "9".repeat(40);
+		const temporaryRefCommits = new Map<string, string>();
+		const adapter = createFakeAdapter(({ args }) => {
+			if (args[0] === "config") return { exitCode: 1 };
+			if (args[0] === "show" && args[1] === "-s") return { stdout: `${EXPECTED}\n` };
+			if (args[0] === "hash-object") return { stdout: `${"c".repeat(40)}\n` };
+			if (args[0] === "mktree") return { stdout: `${"d".repeat(40)}\n` };
+			if (args[0] === "commit-tree") return { stdout: `${ledgerCommit}\n` };
+			if (args[0] === "push") return { exitCode: 1 };
+			if (args[0] === "fetch") {
+				const [source, temporaryRef] = String(args[3] ?? "").split(":");
+				temporaryRefCommits.set(
+					String(temporaryRef),
+					source === "refs/heads/main" ? remoteMainNow : ledgerCommit,
+				);
+				return {};
+			}
+			if (args[0] === "rev-parse") {
+				const target = String(args[2] ?? "").replace("^{commit}", "");
+				return { stdout: `${temporaryRefCommits.get(target) ?? ""}\n` };
+			}
+			// merge-base --is-ancestor times out: ancestry is unknown, not "no".
+			if (args[0] === "merge-base") return { exitCode: null, timedOut: true };
+			return {};
+		});
+		expect(
+			await adapter.atomicClose?.({
+				remote: "origin",
+				expectedMainHead: EXPECTED,
+				mainCommit: COMMIT,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: GENERATION,
+				ledgerContent: "{}",
+				ledgerMessage: "vault-ledger: release txn",
+				author: "agent-a",
+				timestamp: "2026-08-09T00:00:00.000Z",
+				onPrepared() {},
+			}),
+		).toMatchObject({ status: "push_pending" });
+	});
+});
+
 describe("git adapter process environment", () => {
 	test("an ambient GIT_DIR cannot retarget the adapter-owned repository", async () => {
 		const root = await mkdtemp(join(tmpdir(), "vault-git-env-"));
