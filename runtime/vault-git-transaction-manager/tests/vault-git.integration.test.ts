@@ -538,6 +538,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-hygiene",
 				host: "host-hygiene",
 			});
+			await admitActivationForTest(hygiene.store);
 			const refused = await hygiene.engine.runHygieneTransaction({
 				paths: ["notes/a.md"],
 				remote: "origin",
@@ -573,6 +574,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-foreground",
 				host: "host-foreground",
 			});
+			await admitActivationForTest(foreground.store);
 			const next = await foreground.engine.begin({
 				event: "note_created",
 				requestedPaths: ["notes/a.md"],
