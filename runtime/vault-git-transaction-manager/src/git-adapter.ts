@@ -210,24 +210,28 @@ export function createGitAdapter(
 			if (localHead === remoteHead) {
 				return { status: "ok", alignment: "aligned", localHead, remoteHead };
 			}
-			if (
-				await isAncestor(
-					runGit,
-					localHead,
-					remoteHead,
-					options.timeouts.localMs,
-				)
-			) {
+			const localToRemote = await inspectAncestry(
+				runGit,
+				localHead,
+				remoteHead,
+				options.timeouts.localMs,
+			);
+			const remoteToLocal = await inspectAncestry(
+				runGit,
+				remoteHead,
+				localHead,
+				options.timeouts.localMs,
+			);
+			if (localToRemote === "timed_out" || remoteToLocal === "timed_out") {
+				return { status: "failed", reason: "timed_out" };
+			}
+			if (localToRemote === "failed" || remoteToLocal === "failed") {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			if (localToRemote === "ancestor") {
 				return { status: "ok", alignment: "behind", localHead, remoteHead };
 			}
-			if (
-				await isAncestor(
-					runGit,
-					remoteHead,
-					localHead,
-					options.timeouts.localMs,
-				)
-			) {
+			if (remoteToLocal === "ancestor") {
 				return { status: "ok", alignment: "ahead", localHead, remoteHead };
 			}
 			return { status: "ok", alignment: "diverged", localHead, remoteHead };
@@ -427,7 +431,7 @@ function scrubbedAmbientEnvironment(): NodeJS.ProcessEnv {
 	return environment;
 }
 
-async function isAncestor(
+async function inspectAncestry(
 	runGit: (
 		args: readonly string[],
 		timeoutMs: number,
@@ -435,12 +439,15 @@ async function isAncestor(
 	ancestor: string,
 	descendant: string,
 	timeoutMs: number,
-): Promise<boolean> {
+): Promise<"ancestor" | "not_ancestor" | "failed" | "timed_out"> {
 	const result = await runGit(
 		["merge-base", "--is-ancestor", ancestor, descendant],
 		timeoutMs,
 	);
-	return result.exitCode === 0 && !result.timedOut;
+	if (result.timedOut) return "timed_out";
+	if (result.exitCode === 0) return "ancestor";
+	if (result.exitCode === 1) return "not_ancestor";
+	return "failed";
 }
 
 async function assertNoConfiguredPushRefspec(

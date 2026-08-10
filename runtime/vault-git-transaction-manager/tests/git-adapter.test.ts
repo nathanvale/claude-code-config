@@ -23,6 +23,7 @@ afterEach(async () => {
 const GENERATION = "a".repeat(40);
 const EXPECTED = "e".repeat(40);
 const COMMIT = "b".repeat(40);
+const LOCAL_MAIN = "f".repeat(40);
 
 type Responder = (
 	request: VaultGitProcessRequest,
@@ -130,6 +131,40 @@ describe("git adapter ledger reads", () => {
 	});
 });
 
+describe("git adapter main inspection", () => {
+	test.each([
+		{
+			name: "command failure",
+			results: [{ exitCode: 128 }, { exitCode: 1 }],
+			reason: "remote_unavailable",
+		},
+		{
+			name: "timeout",
+			results: [{ exitCode: 1 }, { exitCode: null, timedOut: true }],
+			reason: "timed_out",
+		},
+	] as const)("propagates merge-base $name", async ({ results, reason }) => {
+		let ancestryCall = 0;
+		const adapter = createFakeAdapter(({ args }) => {
+			if (args[0] === "ls-remote") {
+				return { stdout: `${GENERATION}\trefs/heads/main\n` };
+			}
+			if (args[0] === "rev-parse") {
+				return {
+					stdout: `${args.includes("refs/heads/main^{commit}") ? LOCAL_MAIN : GENERATION}\n`,
+				};
+			}
+			if (args[0] === "merge-base") return results[ancestryCall++];
+			return {};
+		});
+		expect(await adapter.inspectMain("origin")).toEqual({
+			status: "failed",
+			reason,
+		});
+		expect(ancestryCall).toBe(2);
+	});
+});
+
 function appendResponder(options: {
 	readonly push: Partial<VaultGitProcessResult>;
 	readonly expectedGeneration: string | null;
@@ -143,7 +178,7 @@ function appendResponder(options: {
 		if (args[0] === "mktree") return { stdout: `${"d".repeat(40)}\n` };
 		if (args[0] === "commit-tree") return { stdout: `${COMMIT}\n` };
 		if (args[0] === "show" && args[1] === "-s") {
-			return args[3] === COMMIT
+			return args.includes(COMMIT)
 				? { stdout: `${options.expectedGeneration ?? ""}\n` }
 				: { stdout: "\n" };
 		}

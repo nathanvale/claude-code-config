@@ -180,6 +180,26 @@ describe("remote lease ledger", () => {
 			nextAction: { id: "request_operator_takeover" },
 		});
 
+		const exactBoundary = await acquireRemoteLease(
+			createEngine(fixture.cloneB, "2026-08-09T00:00:01.000Z"),
+			{
+				remote: "origin",
+				expectedGeneration: acquired.generation,
+				actor: "agent-b",
+				host: "mac-mini",
+				event: "note_created",
+				ownedPaths: ["notes/b.md"],
+				leaseDurationMs: 1_000,
+			},
+		);
+		expect(exactBoundary).toMatchObject({
+			status: "refused",
+			blocker: "lease_stale",
+			retrySafety: "operator_required",
+			nextAction: { id: "request_operator_takeover" },
+			diagnostics: { leaseAgeMs: 1_000 },
+		});
+
 		const stale = await acquireRemoteLease(
 			createEngine(fixture.cloneB, "2026-08-09T00:00:02.000Z"),
 			{
@@ -550,7 +570,7 @@ describe("remote lease ledger", () => {
 				if (args[0] === "commit-tree") return respond({ stdout: `${commit}\n` });
 				if (args[0] === "show" && args[1] === "-s") {
 					return respond({
-						stdout: args[3] === commit ? `${generation}\n` : "\n",
+						stdout: args.includes(commit) ? `${generation}\n` : "\n",
 					});
 				}
 				if (args[0] === "show") return respond({ stdout: content });

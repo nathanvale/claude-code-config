@@ -535,7 +535,7 @@ describe("vault-git KTD16 boundaries", () => {
 		expect(graph.get("git-adapter.ts")?.external.toSorted()).toEqual([
 			"node:child_process",
 			"node:crypto",
-		].toSorted());
+		]);
 	});
 
 	test("keeps the enumerated source import graph fully resolved and acyclic", () => {
