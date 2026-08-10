@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,41 @@ describe("atomic remote close", () => {
 		expect(prepared).toHaveLength(1);
 		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.candidate);
 		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(prepared[0]?.ledgerCommit);
+	});
+
+	test("AE11b: a mid-flight edit does not change the committed bytes", async () => {
+		// AE11b is the strongest data-loss claim in the spec: an owned file that
+		// changes after write-tree but before the ref update must publish the
+		// frozen bytes, with the later edit surviving as an unstaged change.
+		// Without this, nothing distinguishes a real freeze from an
+		// implementation that happens to read the file only once.
+		const fixture = await remoteFixture();
+		const ownedPath = join(fixture.clone, "frozen.md");
+		writeFileSync(ownedPath, "frozen bytes\n");
+		git(fixture.clone, "add", "--", "frozen.md");
+		const frozenTree = git(fixture.clone, "write-tree");
+		const frozenCommit = git(fixture.clone, "commit-tree", frozenTree, "-p", fixture.mainHead, "-m", "frozen");
+		const result = await fixture.adapter.atomicClose?.({
+			remote: "origin",
+			expectedMainHead: fixture.mainHead,
+			mainCommit: frozenCommit,
+			ledgerRef: VAULT_GIT_LEDGER_REF,
+			expectedLedgerGeneration: fixture.ledgerHead,
+			ledgerContent: fixture.releaseContent,
+			ledgerMessage: `vault-ledger: release txn_${"1".repeat(32)}`,
+			author: "agent-a",
+			timestamp: "2026-08-09T00:00:00.000Z",
+			onPrepared() {
+				// The window AE11b names: the commit exists, the push has not run.
+				writeFileSync(ownedPath, "later edit\n");
+			},
+		});
+		expect(result).toMatchObject({ status: "closed" });
+		// The remote carries the frozen bytes, never the mid-flight edit.
+		expect(git(fixture.bare, "show", "refs/heads/main:frozen.md")).toBe("frozen bytes");
+		// The later edit is preserved in the worktree rather than discarded.
+		expect(readFileSync(ownedPath, "utf8")).toBe("later edit\n");
+		expect(git(fixture.clone, "status", "--porcelain", "--", "frozen.md")).toContain("frozen.md");
 	});
 
 	test("a rewound remote rejects the push even when it would fast-forward", async () => {
