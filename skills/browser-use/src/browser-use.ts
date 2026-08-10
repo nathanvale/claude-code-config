@@ -122,8 +122,14 @@ import {
 import { createBrowserUseAuthContract } from "./browser-use-auth";
 import {
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
+	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
+import {
+	type BrowserUseBindingSelectionRequest,
+	bindingSelectionCandidateDigestOf,
+} from "./browser-use-binding-selection";
 import {
 	acquireBrowserUseAuthAccess,
 	managedBrowserUseAuthAccessProvider,
@@ -8652,9 +8658,139 @@ function retrievalBlockedEvaluation(
 	};
 }
 
+function selectionBlockedEvaluation(code: string): AuthReadinessEvaluation {
+	return {
+		status: "selection-blocked",
+		blocked_cause: "ambiguous-binding-selection",
+		detail: { refusal_code: code },
+		continuationId: "request-binding-selection-grant",
+	};
+}
+
+function selectionGrantMatchesLiveItem(
+	request: BrowserUseBindingSelectionRequest,
+	item: import("./browser-use-auth-bindings").BrowserUseVaultItemEvidence,
+	grant: import("./browser-use-binding-selection").BrowserUseBindingSelectionGrant,
+): boolean {
+	return (
+		grant.resolution_key.binding_ref === request.resolution_key.binding_ref &&
+		grant.resolution_key.service_id === request.resolution_key.service_id &&
+		grant.resolution_key.auth_context === request.resolution_key.auth_context &&
+		grant.resolution_key.environment === request.resolution_key.environment &&
+		grant.resolution_key.profile === request.resolution_key.profile &&
+		grant.facts.run_id === request.facts.run_id &&
+		grant.facts.service_id === request.facts.service_id &&
+		grant.facts.origin === request.facts.origin &&
+		grant.facts.vault_id === request.facts.vault_id &&
+		grant.facts.candidate_set_digest === request.facts.candidate_set_digest &&
+		item.state === "active" &&
+		item.item_id === grant.binding.item_id &&
+		item.vault_id === grant.binding.vault_id &&
+		item.origins.includes(request.facts.origin) &&
+		JSON.stringify(item.login_paths) === JSON.stringify(grant.binding.allowed_login_paths) &&
+		JSON.stringify(item.supported_methods) === JSON.stringify(grant.binding.allowed_auth_methods)
+	);
+}
+
+async function evaluateBindingSelection(
+	input: PlatformCommandInput,
+	run: BrowserUseSharedRun | undefined,
+	port: BrowserUseTokenRetrievalPort,
+): Promise<AuthReadinessEvaluation> {
+	if (run === undefined) return selectionBlockedEvaluation("selection_run_required");
+	const fragmentValue = run.auth_fragment?.fragment;
+	if (
+		validateAuthFragmentShape(fragmentValue).length > 0 ||
+		run.state !== "awaiting-auth"
+	) {
+		return selectionBlockedEvaluation("selection_run_context_invalid");
+	}
+	const fragment = fragmentValue as BrowserUseAuthTransactionFragment;
+	if (
+		fragment.status !== "blocked" ||
+		(fragment.blocked_cause !== "ambiguous-binding-selection" &&
+			fragment.blocked_cause !== "binding-approval-required") ||
+		fragment.binding.run_id !== run.run_id ||
+		fragment.binding.service_id.length === 0 ||
+		fragment.binding.auth_context !== "interactive-login"
+	) {
+		return selectionBlockedEvaluation("selection_run_context_invalid");
+	}
+	const ceremony = input.runtime.bindingSelectionCeremony;
+	const verifier = input.runtime.bindingSelectionGrantVerifier;
+	if (ceremony === undefined || verifier === undefined) {
+		return {
+			status: "native-capability-absent",
+			blocked_cause: "ambiguous-binding-selection",
+			continuationId: "acquire-native-capability",
+		};
+	}
+	const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+	const before = await port.listLoginItems({ vault_id: vaultId });
+	if (!before.ok) return retrievalBlockedEvaluation(before.rejection);
+	if (before.items.length === 0) return selectionBlockedEvaluation("selection_candidates_absent");
+	const request: BrowserUseBindingSelectionRequest = {
+		resolution_key: {
+			binding_ref: fragment.binding.service_id,
+			service_id: fragment.binding.service_id,
+			auth_context: "interactive-login",
+			environment: fragment.binding.environment,
+			profile: fragment.binding.profile,
+		},
+		facts: {
+			run_id: run.run_id,
+			service_id: fragment.binding.service_id,
+			origin: fragment.binding.origin,
+			vault_id: vaultId,
+			candidate_set_digest: bindingSelectionCandidateDigestOf(before.items),
+		},
+		candidate_count: before.items.length,
+	};
+	const selected = await ceremony.requestBindingSelection(request);
+	if (!selected.ok) return selectionBlockedEvaluation(selected.rejection.code);
+	const consumed = await verifier.verifyAndReserve({
+		grant: selected.grant,
+		expected: request,
+		at_epoch_ms: input.runtime.now(),
+	});
+	if (!consumed.ok) return selectionBlockedEvaluation(consumed.code);
+	const after = await port.listLoginItems({ vault_id: vaultId });
+	if (!after.ok) return retrievalBlockedEvaluation(after.rejection);
+	if (bindingSelectionCandidateDigestOf(after.items) !== request.facts.candidate_set_digest) {
+		return selectionBlockedEvaluation("selection_candidates_drifted");
+	}
+	const live = await port.getLoginItem({
+		vault_id: vaultId,
+		item_id: consumed.grant.binding.item_id,
+	});
+	if (!live.ok) return selectionBlockedEvaluation("selection_item_unavailable");
+	if (!selectionGrantMatchesLiveItem(request, live.item, consumed.grant)) {
+		return selectionBlockedEvaluation("selection_item_drifted");
+	}
+	const opened = await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
+	if (!opened.ok) return selectionBlockedEvaluation(opened.refusal.code);
+	const catalog = createBindingCatalog({
+		fs: input.runtime.platformFs,
+		root: join(opened.paths.resolution.roots.state, "binding-catalog"),
+		verifier: input.runtime.bindingApprovalReceiptVerifier,
+		selectionGrantVerifier: verifier,
+	});
+	const committed = await catalog.commitSelectionGrant(consumed.grant);
+	if (!committed.ok) return selectionBlockedEvaluation(committed.code);
+	return {
+		status: "binding-active",
+		detail: {
+			binding_ref: request.resolution_key.binding_ref,
+			revision: consumed.grant.binding.binding_revision,
+		},
+		continuationId: "inspect-auth-readiness",
+	};
+}
+
 async function evaluateAuthReadiness(
 	subcommand: BrowserUseAuthRepairSubcommand,
 	input: PlatformCommandInput,
+	run?: BrowserUseSharedRun,
 ): Promise<AuthReadinessEvaluation> {
 	const port = input.runtime.authTokenRetrieval;
 	if (port === undefined) return NATIVE_CAPABILITY_ABSENT;
@@ -8726,25 +8862,7 @@ async function evaluateAuthReadiness(
 			};
 		}
 		case "request-binding-selection-grant": {
-			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
-			const items = await port.listLoginItems({ vault_id: vaultId });
-			if (!items.ok) return retrievalBlockedEvaluation(items.rejection);
-			// The selection set the signed one-use grant must bind (R20).
-			// Signing needs the native Approval Broker — absent until U3b — so
-			// the projection is honest about what remains.
-			return {
-				status: "selection-candidates-projected",
-				detail: {
-					vault_id: vaultId,
-					candidate_count: items.items.length,
-					candidates: items.items.map((item, index) => ({
-						ordinal: index + 1,
-						item_id: item.item_id,
-						item_state: item.state,
-					})),
-				},
-				continuationId: "acquire-native-capability",
-			};
+			return await evaluateBindingSelection(input, run, port);
 		}
 	}
 }
@@ -8811,6 +8929,7 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
 		| undefined;
+	let selectedRun: BrowserUseSharedRun | undefined;
 	if (runFlag !== undefined) {
 		const store = await openPlatformStore(input);
 		if (!store.ok) return store.exitCode;
@@ -8838,8 +8957,9 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 			state: loaded.run.state,
 			continuation_id: persisted,
 		};
+		selectedRun = loaded.run;
 	}
-	const evaluation = await evaluateAuthReadiness(subcommand, input);
+	const evaluation = await evaluateAuthReadiness(subcommand, input, selectedRun);
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller, [

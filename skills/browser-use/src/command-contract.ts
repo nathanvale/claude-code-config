@@ -1917,8 +1917,8 @@ export const browserUseAuthRepairActions = [
 	},
 	{
 		id: "request-binding-selection-grant",
-		summary: "Request a signed one-use grant to select one login item.",
-		sideEffects: ["check"],
+		summary: "Run the native picker and commit one grant-authorized Item Binding.",
+		sideEffects: ["check", "write"],
 	},
 ] as const;
 
@@ -2877,17 +2877,21 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"auth-request-binding-selection-grant": {
 			script: "browser-use",
 			summary:
-				"Project the ambiguous-binding candidate set a signed one-use selection grant must bind (R20); signing stays with the native Approval Broker.",
+				"Run one descriptor-private native selection ceremony, consume its signed one-use grant, and commit at most one Item Binding.",
 			usage: [
-				"auth request-binding-selection-grant --vault-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+				"auth request-binding-selection-grant --vault-id <id> --run <id> [--caller <label>] [--json|--plain]",
 			],
 			json: true,
-			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"The native picker is the review surface; its short-lived signed grant is atomically reserved before one first-revision binding write.",
+			},
 			outputModes: ["json", "plain"],
-			interactivity: "none",
+			interactivity: "required",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseAuthReadinessResultContract,
 			actionAffordances: {

@@ -10,6 +10,10 @@
 // ---------------------------------------------------------------------------
 
 import {
+	createPublicKey,
+	verify,
+} from "node:crypto";
+import {
 	closeSync,
 	constants as fsConstants,
 	existsSync,
@@ -47,7 +51,15 @@ import type {
 	BrowserUseBindingApprovalReceiptVerifier,
 } from "./browser-use-auth-approval";
 import { createP256BindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
-import { createNativeBindingApprovalBroker } from "./browser-use-binding-approval-native";
+import {
+	createNativeBindingApprovalBroker,
+	createNativeBindingSelectionCeremony,
+} from "./browser-use-binding-approval-native";
+import type {
+	BrowserUseBindingSelectionCeremonyPort,
+	BrowserUseBindingSelectionGrantVerifier,
+} from "./browser-use-binding-selection";
+import { createBindingSelectionGrantVerifier } from "./browser-use-binding-selection";
 import { createBindingCatalog } from "./browser-use-binding-catalog";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import { createBrowserUseSessionIdentityProof } from "./browser-use-session-identity-proof";
@@ -73,6 +85,7 @@ import {
 	fullFsyncDurableFile,
 	inspectBrowserUsePaths,
 	inspectBrowserUseRoot,
+	openBrowserUsePaths,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
@@ -1310,6 +1323,10 @@ export type BrowserUseRuntime = {
 	bindingApprovalBroker?: BrowserUseBindingApprovalBrokerPort;
 	/** Presence-free verifier for immutable binding revisions. */
 	bindingApprovalReceiptVerifier?: BrowserUseBindingApprovalReceiptVerifier;
+	/** Descriptor-private native picker and one-use selection signer. */
+	bindingSelectionCeremony?: BrowserUseBindingSelectionCeremonyPort;
+	/** Offline selection-grant verifier with atomic reservation custody. */
+	bindingSelectionGrantVerifier?: BrowserUseBindingSelectionGrantVerifier;
 	/** Test/composition seam for an already approved binding catalog owner. */
 	runbookApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
@@ -1381,6 +1398,65 @@ export function createDefaultBrowserUseRuntime(
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
 	};
+}
+
+function createP256BindingSelectionGrantVerifier(
+	runtime: BrowserUseRuntime,
+	identity: BrowserUseReviewedActionVerifierIdentity,
+): BrowserUseBindingSelectionGrantVerifier {
+	let publicKey: ReturnType<typeof createPublicKey> | undefined;
+	try {
+		const raw = Buffer.from(identity.public_key, "base64");
+		publicKey = createPublicKey({
+			key: {
+				kty: "EC",
+				crv: "P-256",
+				x: raw.subarray(1, 33).toString("base64url"),
+				y: raw.subarray(33, 65).toString("base64url"),
+			},
+			format: "jwk",
+		});
+	} catch {
+		publicKey = undefined;
+	}
+	return createBindingSelectionGrantVerifier({
+		verifier: identity,
+		verifySignature: ({ digest, signature, key_id }) => {
+			if (publicKey === undefined || key_id !== identity.key_id) return false;
+			try {
+				return verify(
+					"sha256",
+					Buffer.from(digest, "hex"),
+					publicKey,
+					Buffer.from(signature, "base64"),
+				);
+			} catch {
+				return false;
+			}
+		},
+		reserveGrant: async (grantId) => {
+			const opened = await openBrowserUsePaths(runtime.platformFs, runtime.env);
+			if (!opened.ok) return false;
+			const root = join(
+				opened.paths.resolution.roots.state,
+				"binding-selection-grants",
+			);
+			try {
+				await runtime.platformFs.mkdir(root, { recursive: true, mode: 0o700 });
+				const metadata = await runtime.platformFs.lstat(root);
+				if (metadata?.kind !== "directory" || metadata.mode !== 0o700) return false;
+				await runtime.platformFs.createExclusive(
+					join(root, grantId),
+					`${grantId}\n`,
+					0o600,
+				);
+				await runtime.platformFs.syncDirectory(root);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+	});
 }
 
 /**
@@ -1480,11 +1556,39 @@ export async function createProductionBrowserUseRuntime(
 	) {
 		runtime.bindingApprovalBroker = createNativeBindingApprovalBroker(brokerPath);
 	}
+	const selectionOwner = environmentTokenSupervisorDeps(runtime.env);
+	if (
+		runtime.bindingSelectionCeremony === undefined &&
+		brokerPath !== undefined &&
+		brokerPath !== "" &&
+		selectionOwner?.opPath !== undefined
+	) {
+		runtime.bindingSelectionCeremony = createNativeBindingSelectionCeremony(
+			brokerPath,
+			{
+				supervisorPath: selectionOwner.supervisorPath,
+				opPath: selectionOwner.opPath,
+				configRoot: selectionOwner.configRoot,
+			},
+		);
+	}
+	if (
+		runtime.bindingSelectionGrantVerifier === undefined &&
+		reviewedActionVerifierIdentity !== undefined
+	) {
+		runtime.bindingSelectionGrantVerifier =
+			createP256BindingSelectionGrantVerifier(
+				runtime,
+				reviewedActionVerifierIdentity,
+			);
+	}
 	if (
 		runtime.runbookApprovedBindingResolver === undefined &&
-		runtime.bindingApprovalReceiptVerifier !== undefined
+		(runtime.bindingApprovalReceiptVerifier !== undefined ||
+			runtime.bindingSelectionGrantVerifier !== undefined)
 	) {
 		const verifier = runtime.bindingApprovalReceiptVerifier;
+		const selectionGrantVerifier = runtime.bindingSelectionGrantVerifier;
 		runtime.runbookApprovedBindingResolver = async (input) => {
 			const opened = await inspectBrowserUsePaths(runtime.platformFs, runtime.env);
 			if (!opened.ok) return null;
@@ -1492,6 +1596,7 @@ export async function createProductionBrowserUseRuntime(
 				fs: runtime.platformFs,
 				root: join(opened.paths.resolution.roots.state, "binding-catalog"),
 				verifier,
+				selectionGrantVerifier,
 			});
 			const resolved = await catalog.resolve({
 				binding_ref: input.binding_ref,

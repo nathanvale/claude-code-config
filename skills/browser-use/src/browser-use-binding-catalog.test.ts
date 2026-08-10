@@ -8,6 +8,7 @@ import {
 } from "./browser-use-auth-bindings";
 import { createBindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
 import { createBindingCatalog } from "./browser-use-binding-catalog";
+import type { BrowserUseBindingSelectionGrant } from "./browser-use-binding-selection";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 
 const roots: string[] = [];
@@ -52,7 +53,79 @@ function receipt(
 	};
 }
 
+function selectionGrant(): BrowserUseBindingSelectionGrant {
+	return {
+		grant_id: "selection-grant-1",
+		resolution_key: {
+			binding_ref: "github",
+			service_id: "github",
+			auth_context: "interactive-login",
+			environment: "agent-chrome",
+			profile: "default",
+		},
+		binding: {
+			service_id: "github",
+			auth_context: "interactive-login",
+			allowed_origins: ["https://github.com"],
+			allowed_login_paths: [],
+			vault_id: "vault-1",
+			item_id: "item-6",
+			allowed_auth_methods: ["password", "otp"],
+			binding_revision: 1,
+		},
+		facts: {
+			run_id: "run-selection",
+			service_id: "github",
+			origin: "https://github.com",
+			vault_id: "vault-1",
+			candidate_set_digest: "0123456789abcdef".repeat(4),
+		},
+		issued_at_epoch_ms: 1_000,
+		expires_at_epoch_ms: 91_000,
+		verifier_key_id: "verifier-1",
+		signature: "signed-selection",
+	};
+}
+
 describe("private Binding Catalog", () => {
+	test("commits one first-binding selection and rejects a replay write", async () => {
+		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
+		roots.push(base);
+		const grant = selectionGrant();
+		const catalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root: join(base, "bindings"),
+			selectionGrantVerifier: {
+				verifyStored: async (value) =>
+					typeof value === "object" &&
+					value !== null &&
+					"grant_id" in value &&
+					value.grant_id === grant.grant_id
+						? { ok: true, grant }
+						: { ok: false, code: "grant_signature_invalid" },
+				verifyAndReserve: async () => ({
+					ok: false,
+					code: "not_used_by_catalog",
+				}),
+			},
+		});
+
+		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });
+		expect(await catalog.commitSelectionGrant(grant)).toMatchObject({
+			ok: false,
+			code: "binding_revision_conflict",
+		});
+		expect(await catalog.resolve(grant.resolution_key)).toMatchObject({
+			ok: true,
+			status: "active",
+			binding: { item_id: "item-6", binding_revision: 1 },
+		});
+		expect(await catalog.list()).toMatchObject({
+			ok: true,
+			bindings: [{ binding_ref: "github", revision: 1, status: "active" }],
+		});
+	});
+
 	test("resolves an approved revision and stops after signed revocation", async () => {
 		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
 		roots.push(base);

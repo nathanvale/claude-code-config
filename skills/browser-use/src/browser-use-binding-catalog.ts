@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { BrowserUseBindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
+import type {
+	BrowserUseBindingSelectionGrant,
+	BrowserUseBindingSelectionGrantVerifier,
+} from "./browser-use-binding-selection";
+import { validateBindingSelectionGrantShape } from "./browser-use-binding-selection";
 import {
 	type BrowserUseBindingApprovalReceipt,
 	type BrowserUseBindingResolutionKey,
@@ -123,7 +128,8 @@ function errorCode(error: unknown): string | undefined {
 export function createBindingCatalog(deps: {
 	fs: BrowserUsePlatformFs;
 	root: string;
-	verifier: BrowserUseBindingApprovalReceiptVerifier;
+	verifier?: BrowserUseBindingApprovalReceiptVerifier;
+	selectionGrantVerifier?: BrowserUseBindingSelectionGrantVerifier;
 }) {
 	const receiptsDir = join(deps.root, "receipts");
 	const indexFile = join(deps.root, "active.json");
@@ -164,8 +170,15 @@ export function createBindingCatalog(deps: {
 		}
 	}
 
-	async function loadReceipt(receiptId: string): Promise<
-		| { ok: true; receipt: BrowserUseBindingApprovalReceipt }
+	type LoadedApproval = {
+		approval_id: string;
+		disposition: "approved" | "revoked";
+		resolution_key: BrowserUseBindingResolutionKey;
+		binding: BrowserUseBindingApprovalReceipt["binding"];
+	};
+
+	async function loadApproval(receiptId: string): Promise<
+		| { ok: true; approval: LoadedApproval }
 		| BrowserUseBindingCatalogFailure
 	> {
 		if (!SAFE_RECEIPT_ID.test(receiptId)) return fail("binding_receipt_invalid", "the active receipt id is invalid.");
@@ -176,22 +189,51 @@ export function createBindingCatalog(deps: {
 				return fail("binding_catalog_unsafe", "the active binding receipt failed private-file admission.");
 			}
 			const parsed: unknown = JSON.parse(await deps.fs.readTextFile(path));
-			if (validateBindingApprovalReceiptShape(parsed).length > 0) {
-				return fail("binding_receipt_invalid", "the active binding receipt failed exact-shape admission.");
+			if (validateBindingApprovalReceiptShape(parsed).length === 0) {
+				if (deps.verifier === undefined) {
+					return fail("binding_receipt_invalid", "the active binding receipt verifier is unavailable.");
+				}
+				const receipt = parsed as BrowserUseBindingApprovalReceipt;
+				const verified = deps.verifier.verify(receipt);
+				return verified.ok
+					? {
+							ok: true,
+							approval: {
+								approval_id: receipt.receipt_id,
+								disposition: receipt.disposition,
+								resolution_key: receipt.resolution_key,
+								binding: receipt.binding,
+							},
+						}
+					: fail("binding_receipt_invalid", `the active binding receipt failed offline verification (${verified.code}).`);
 			}
-			const verified = deps.verifier.verify(parsed);
-			return verified.ok
-				? { ok: true, receipt: parsed as BrowserUseBindingApprovalReceipt }
-				: fail("binding_receipt_invalid", `the active binding receipt failed offline verification (${verified.code}).`);
+			if (
+				validateBindingSelectionGrantShape(parsed).length === 0 &&
+				deps.selectionGrantVerifier !== undefined
+			) {
+				const verified = await deps.selectionGrantVerifier.verifyStored(parsed);
+				if (verified.ok) {
+					return {
+						ok: true,
+						approval: {
+							approval_id: verified.grant.grant_id,
+							disposition: "approved",
+							resolution_key: verified.grant.resolution_key,
+							binding: verified.grant.binding,
+						},
+					};
+				}
+			}
+			return fail("binding_receipt_invalid", "the active binding approval failed exact-shape admission or offline verification.");
 		} catch {
 			return fail("binding_receipt_invalid", "the active binding receipt could not be read.");
 		}
 	}
 
-	async function publishReceipt(receipt: BrowserUseBindingApprovalReceipt): Promise<BrowserUseBindingCatalogFailure | undefined> {
-		const contents = `${JSON.stringify(receipt)}\n`;
-		const destination = join(receiptsDir, `${receipt.receipt_id}.json`);
-		const staging = join(receiptsDir, `.${receipt.receipt_id}.staged`);
+	async function publishApproval(approvalId: string, approval: BrowserUseBindingApprovalReceipt | BrowserUseBindingSelectionGrant): Promise<BrowserUseBindingCatalogFailure | undefined> {
+		const contents = `${JSON.stringify(approval)}\n`;
+		const destination = join(receiptsDir, `${approvalId}.json`);
+		const staging = join(receiptsDir, `.${approvalId}.staged`);
 		try {
 			await deps.fs.unlink(staging).catch(() => {});
 			await deps.fs.writeFileDurable(staging, contents, 0o600);
@@ -229,7 +271,7 @@ export function createBindingCatalog(deps: {
 
 	return {
 		async commit(receipt: BrowserUseBindingApprovalReceipt): Promise<{ ok: true } | BrowserUseBindingCatalogFailure> {
-			if (validateBindingApprovalReceiptShape(receipt).length > 0 || !deps.verifier.verify(receipt).ok || !SAFE_RECEIPT_ID.test(receipt.receipt_id)) {
+			if (validateBindingApprovalReceiptShape(receipt).length > 0 || deps.verifier === undefined || !deps.verifier.verify(receipt).ok || !SAFE_RECEIPT_ID.test(receipt.receipt_id)) {
 				return fail("binding_receipt_invalid", "the proposed binding receipt failed admission or offline verification.");
 			}
 			const layout = await ensureLayout();
@@ -251,14 +293,14 @@ export function createBindingCatalog(deps: {
 						return fail("binding_revision_conflict", "a first binding revision must be approved revision 1 with no predecessor.");
 					}
 				} else {
-					const current = await loadReceipt(currentEntry.receipt_id);
+					const current = await loadApproval(currentEntry.receipt_id);
 					if (!current.ok) return current;
 					if (
-						receipt.predecessor_receipt_id !== current.receipt.receipt_id ||
-						receipt.binding.binding_revision !== current.receipt.binding.binding_revision + 1
+						receipt.predecessor_receipt_id !== current.approval.approval_id ||
+						receipt.binding.binding_revision !== current.approval.binding.binding_revision + 1
 					) return fail("binding_revision_conflict", "the receipt does not advance the exact active predecessor revision.");
 				}
-				const publishFailure = await publishReceipt(receipt);
+				const publishFailure = await publishApproval(receipt.receipt_id, receipt);
 				if (publishFailure !== undefined) return publishFailure;
 				const next: CatalogIndex = {
 					...loaded.index,
@@ -276,16 +318,69 @@ export function createBindingCatalog(deps: {
 			}
 		},
 
+		async commitSelectionGrant(grant: BrowserUseBindingSelectionGrant): Promise<{ ok: true } | BrowserUseBindingCatalogFailure> {
+			if (
+				validateBindingSelectionGrantShape(grant).length > 0 ||
+				deps.selectionGrantVerifier === undefined ||
+				!SAFE_RECEIPT_ID.test(grant.grant_id)
+			) {
+				return fail("binding_receipt_invalid", "the proposed binding selection grant failed admission.");
+			}
+			const verified = await deps.selectionGrantVerifier.verifyStored(grant);
+			if (!verified.ok) {
+				return fail("binding_receipt_invalid", `the proposed binding selection grant failed offline verification (${verified.code}).`);
+			}
+			const layout = await ensureLayout();
+			if (layout !== undefined) return layout;
+			try {
+				await deps.fs.createExclusive(lockFile, `${grant.grant_id}\n`, 0o600);
+			} catch (error) {
+				return errorCode(error) === "EEXIST"
+					? fail("binding_catalog_busy", "another binding catalog writer owns the mutation fence.")
+					: fail("binding_catalog_write_failed", "the binding catalog mutation fence could not be acquired.");
+			}
+			try {
+				const loaded = await loadIndex();
+				if (!loaded.ok) return loaded;
+				const digest = resolutionDigestOf(grant.resolution_key);
+				if (loaded.index.active.some((entry) => entry.key_digest === digest)) {
+					return fail("binding_revision_conflict", "a first-binding selection grant cannot replace an active revision.");
+				}
+				if (grant.binding.binding_revision !== 1) {
+					return fail("binding_revision_conflict", "a first-binding selection grant must carry revision 1.");
+				}
+				const publishFailure = await publishApproval(grant.grant_id, grant);
+				if (publishFailure !== undefined) return publishFailure;
+				const next: CatalogIndex = {
+					...loaded.index,
+					generation: loaded.index.generation + 1,
+					active: [
+						...loaded.index.active,
+						{
+							key_digest: digest,
+							resolution_key: grant.resolution_key,
+							receipt_id: grant.grant_id,
+						},
+					].sort((left, right) => left.key_digest.localeCompare(right.key_digest)),
+				};
+				const writeFailure = await writeIndex(next, grant.grant_id);
+				return writeFailure ?? { ok: true };
+			} finally {
+				await deps.fs.unlink(lockFile).catch(() => {});
+				await deps.fs.syncDirectory(deps.root).catch(() => {});
+			}
+		},
+
 		async resolve(key: BrowserUseBindingResolutionKey) {
 			const loaded = await loadIndex();
 			if (!loaded.ok) return loaded;
 			const entry = loaded.index.active.find((candidate) => candidate.key_digest === resolutionDigestOf(key));
 			if (entry === undefined) return { ok: true as const, status: "missing" as const };
-			const loadedReceipt = await loadReceipt(entry.receipt_id);
+			const loadedReceipt = await loadApproval(entry.receipt_id);
 			if (!loadedReceipt.ok) return loadedReceipt;
-			return loadedReceipt.receipt.disposition === "revoked"
-				? { ok: true as const, status: "revoked" as const, revision: loadedReceipt.receipt.binding.binding_revision }
-				: { ok: true as const, status: "active" as const, receipt_id: loadedReceipt.receipt.receipt_id, binding: loadedReceipt.receipt.binding };
+			return loadedReceipt.approval.disposition === "revoked"
+				? { ok: true as const, status: "revoked" as const, revision: loadedReceipt.approval.binding.binding_revision }
+				: { ok: true as const, status: "active" as const, receipt_id: loadedReceipt.approval.approval_id, binding: loadedReceipt.approval.binding };
 		},
 
 		async list() {
@@ -293,12 +388,12 @@ export function createBindingCatalog(deps: {
 			if (!loaded.ok) return loaded;
 			const bindings = [];
 			for (const entry of loaded.index.active) {
-				const loadedReceipt = await loadReceipt(entry.receipt_id);
+				const loadedReceipt = await loadApproval(entry.receipt_id);
 				if (!loadedReceipt.ok) return loadedReceipt;
 				bindings.push({
 					...entry.resolution_key,
-					revision: loadedReceipt.receipt.binding.binding_revision,
-					status: loadedReceipt.receipt.disposition === "approved" ? "active" as const : "revoked" as const,
+					revision: loadedReceipt.approval.binding.binding_revision,
+					status: loadedReceipt.approval.disposition === "approved" ? "active" as const : "revoked" as const,
 				});
 			}
 			return { ok: true as const, bindings };

@@ -1,4 +1,5 @@
 import Darwin
+import AppKit
 import CoreFoundation
 import CryptoKit
 import Foundation
@@ -1557,6 +1558,162 @@ func projectItem(_ raw: Any) -> [String: Any]? {
     return projected
 }
 
+private func maskedBindingSelectionUsername(_ raw: Any?) -> String? {
+    guard let value = raw as? String,
+          !value.isEmpty,
+          value.utf8.count <= 256,
+          !value.contains("\0"),
+          !value.contains("\n"),
+          !value.contains("\r"),
+          !metadataStringIsSecretShaped(value)
+    else { return nil }
+    if let at = value.firstIndex(of: "@") {
+        let domain = value[value.index(after: at)...]
+        guard !domain.isEmpty else { return nil }
+        return "\(value.first!)***@\(domain)"
+    }
+    return "\(value.first!)***"
+}
+
+private func bindingSelectionDigest(_ projected: [[String: Any]]) -> String? {
+    var rows: [[Any]] = []
+    for item in projected {
+        guard let itemID = item["id"] as? String,
+              let vault = item["vault"] as? [String: Any],
+              let vaultID = vault["id"] as? String,
+              let urls = item["urls"] as? [[String: String]]
+        else { return nil }
+        let origins = urls.compactMap { row in
+            row["href"].flatMap(EnvironmentDeliveryOriginSafety.normalizedOrigin)
+        }
+        rows.append([
+            vaultID,
+            itemID,
+            item["state"] as? String ?? "active",
+            origins,
+            [String](),
+            ["password", "otp"],
+        ])
+    }
+    guard let data = try? JSONSerialization.data(
+        withJSONObject: rows,
+        options: [.withoutEscapingSlashes]
+    ) else {
+        return nil
+    }
+    return SHA256.hash(data: data)
+        .map { String(format: "%02x", $0) }
+        .joined()
+}
+
+@MainActor
+private func selectBindingCandidate(
+    labels: [String],
+    origin: String
+) -> Int? {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    application.activate(ignoringOtherApps: true)
+    let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 640, height: 28))
+    picker.addItems(withTitles: labels)
+    let alert = NSAlert()
+    alert.messageText = "Select the login for \(origin)"
+    alert.informativeText = "Review the title and masked username. Browser Use will bind only the selected login."
+    alert.alertStyle = .warning
+    alert.accessoryView = picker
+    alert.addButton(withTitle: "Select and Sign")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+    return picker.indexOfSelectedItem
+}
+
+func bindingSelectionEnvelope(
+    bytes: [UInt8],
+    vaultID: String,
+    origin: String,
+    expectedDigest: String,
+    expectedCount: Int,
+    select: ([String], String) -> Int? = { labels, origin in
+        MainActor.assumeIsolated {
+            selectBindingCandidate(labels: labels, origin: origin)
+        }
+    }
+) -> Data {
+    guard let raw = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [[String: Any]],
+          raw.count == expectedCount,
+          expectedCount > 0
+    else { return envelope(cause: .outputShapeInvalid) }
+    let projected = raw.compactMap(projectItem)
+    guard projected.count == raw.count,
+          projected.allSatisfy({ item in
+              (item["vault"] as? [String: Any])?["id"] as? String == vaultID
+          }),
+          let observedDigest = bindingSelectionDigest(projected),
+          observedDigest == expectedDigest
+    else { return rejectionSelectionEnvelope(code: "selection-candidates-drifted") }
+    var labels: [String] = []
+    for row in raw {
+        guard let title = row["title"] as? String,
+              !title.isEmpty,
+              title.utf8.count <= 512,
+              !title.contains("\0"),
+              !title.contains("\n"),
+              !title.contains("\r"),
+              !metadataStringIsSecretShaped(title)
+        else { return envelope(cause: .outputShapeInvalid) }
+        let masked = maskedBindingSelectionUsername(row["additional_information"])
+            ?? "username not shown"
+        labels.append("\(title) | \(masked) | \(origin)")
+    }
+    guard let index = select(labels, origin) else {
+        return rejectionSelectionEnvelope(code: "presence-cancelled")
+    }
+    guard projected.indices.contains(index) else {
+        return rejectionSelectionEnvelope(code: "selection-ambiguous")
+    }
+    let selected = projected[index]
+    let urls = selected["urls"] as? [[String: String]] ?? []
+    return selectionSuccessEnvelope(
+        selectedItem: [
+            "item_id": selected["id"]!,
+            "vault_id": vaultID,
+            "origins": urls.compactMap { row in
+                row["href"].flatMap(EnvironmentDeliveryOriginSafety.normalizedOrigin)
+            },
+            "login_paths": [String](),
+            "supported_methods": ["password", "otp"],
+            "state": selected["state"] as? String ?? "active",
+        ],
+        candidateDigest: observedDigest
+    )
+}
+
+private func rejectionSelectionEnvelope(code: String) -> Data {
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "ok": false,
+        "rejection": ["code": code],
+    ]
+    return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+        ?? Data("{\"ok\":false,\"schema_version\":1}".utf8)
+}
+
+private func selectionSuccessEnvelope(
+    selectedItem: [String: Any],
+    candidateDigest: String
+) -> Data {
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "ok": true,
+        "selection": [
+            "selected_item": selectedItem,
+            "candidate_set_digest": candidateDigest,
+        ],
+    ]
+    return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+        ?? Data("{\"ok\":false,\"schema_version\":1}".utf8)
+}
+
 func projectMetadata(
     operation: EnvironmentOpMetadataOperation,
     bytes: [UInt8]
@@ -2063,6 +2220,46 @@ public enum EnvironmentOpSupervisor {
             timeoutMilliseconds: timeoutMilliseconds,
             expectedVersion: staged.expectedVersion
         )
+    }
+
+    public static func executeAdmittedBindingSelection(
+        executablePath: String,
+        vaultID: String,
+        origin: String,
+        expectedDigest: String,
+        expectedCount: Int,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32 = 10_000
+    ) -> Data {
+        let staged: StagedEnvironmentOp
+        do {
+            staged = try stageOfficialEnvironmentOp(executablePath)
+        } catch let cause as EnvironmentOpAdmissionCause {
+            return admissionEnvelope(cause)
+        } catch {
+            return admissionEnvelope(.stagingFailed)
+        }
+        defer { try? FileManager.default.removeItem(atPath: staged.directory) }
+        switch EnvironmentOpProcessRunner.run(
+            executablePath: staged.executablePath,
+            arguments: [
+                "item", "list", "--vault", vaultID,
+                "--categories", "Login", "--format=json",
+            ],
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: timeoutMilliseconds
+        ) {
+        case let .blocked(cause):
+            return envelope(cause: cause)
+        case let .success(output):
+            return bindingSelectionEnvelope(
+                bytes: output.stdout,
+                vaultID: vaultID,
+                origin: origin,
+                expectedDigest: expectedDigest,
+                expectedCount: expectedCount
+            )
+        }
     }
 
     @_spi(Testing)

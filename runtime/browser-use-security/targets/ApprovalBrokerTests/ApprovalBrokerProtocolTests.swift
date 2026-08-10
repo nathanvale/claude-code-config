@@ -246,4 +246,30 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
             )
         )
     }
+
+    func testBindingSelectionCommandOwnsPrivatePickerInvocationAndReturnsOnlyGrant() throws {
+        let brokerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ApprovalBroker/ApprovalBroker.swift")
+        let source = try String(contentsOf: brokerURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "static func bindingSelectionGrant("))
+        let end = try XCTUnwrap(
+            source.range(of: "static func write(", range: start.upperBound..<source.endIndex)
+        )
+        let body = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(body.contains(#""binding-selection""#))
+        XCTAssertTrue(body.contains(#""--expected-candidate-digest", expectedDigest"#))
+        XCTAssertTrue(body.contains("completed.wait(timeout: .now() + .seconds(300))"))
+        XCTAssertTrue(body.contains("process.terminate()"))
+        XCTAssertTrue(body.contains("selection[\"candidate_set_digest\"] as? String == expectedDigest"))
+        XCTAssertTrue(body.contains("ApprovalBroker.issueBindingSelectionGrant("))
+        XCTAssertFalse(body.contains("title"))
+        XCTAssertFalse(body.contains("username"))
+
+        let commandStart = try XCTUnwrap(source.range(of: #"case "select-binding":"#))
+        let commandBody = String(source[commandStart.lowerBound...])
+        XCTAssertTrue(commandBody.contains(#"write(["ok": true, "grant": grant])"#))
+        XCTAssertFalse(commandBody.contains(#"write(["ok": true, "candidates":"#))
+    }
 }

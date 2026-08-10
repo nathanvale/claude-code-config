@@ -1,4 +1,5 @@
 @testable import BrowserUseEnvironmentAuth
+import CryptoKit
 import Foundation
 import Testing
 
@@ -16,6 +17,119 @@ struct MetadataProjectionTests {
             "fields": [["label": "password", "value": "fixture-secret"]],
             "notesPlain": "fixture-private-note",
         ]
+    }
+
+    private func selectionDigest(_ ids: [String]) throws -> String {
+        let rows: [[Any]] = ids.map { id in
+            [
+                "vault-1",
+                id,
+                "active",
+                ["https://github.com"],
+                [String](),
+                ["password", "otp"],
+            ]
+        }
+        let data = try JSONSerialization.data(
+            withJSONObject: rows,
+            options: [.withoutEscapingSlashes]
+        )
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    @Test
+    func candidateDigestMatchesTypeScriptJSONContract() throws {
+        #expect(
+            try selectionDigest(["item-1", "item-2"])
+                == "4a68b5859d936dc2fd997c64874cecb17c811499d70564645f0e01c6fe68791b"
+        )
+    }
+
+    @Test
+    func sevenCandidateSelectionKeepsDescriptorsInsidePicker() throws {
+        let ids = (1...7).map { "item-\($0)" }
+        let rows = ids.enumerated().map { index, id -> [String: Any] in
+            var row = item(id: id, urls: ["https://github.com/login"])
+            row["title"] = index == 5 ? "GitHub" : "Other \(index + 1)"
+            row["additional_information"] = index == 5
+                ? "private-user@example.test"
+                : "person\(index + 1)@example.test"
+            return row
+        }
+        var displayed: [String] = []
+        let envelope = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: rows)),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: try selectionDigest(ids),
+            expectedCount: 7,
+            select: { labels, _ in
+                displayed = labels
+                return 5
+            }
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: envelope) as? [String: Any]
+        )
+        let selection = try #require(object["selection"] as? [String: Any])
+        let selected = try #require(selection["selected_item"] as? [String: Any])
+        #expect(object["ok"] as? Bool == true)
+        #expect(displayed.count == 7)
+        #expect(displayed[5].contains("GitHub"))
+        #expect(displayed[5].contains("p***@example.test"))
+        #expect(displayed[5].contains("https://github.com"))
+        #expect(selected["item_id"] as? String == "item-6")
+        #expect(selected["origins"] as? [String] == ["https://github.com"])
+        let output = String(decoding: envelope, as: UTF8.self)
+        #expect(!output.contains("GitHub"))
+        #expect(!output.contains("private-user"))
+    }
+
+    @Test
+    func selectionCancelAndCandidateReorderFailClosed() throws {
+        let ids = ["item-1", "item-2"]
+        let rows = ids.enumerated().map { index, id -> [String: Any] in
+            var row = item(id: id, urls: ["https://github.com/login"])
+            row["title"] = "Candidate \(index + 1)"
+            row["additional_information"] = "person\(index + 1)@example.test"
+            return row
+        }
+        let digest = try selectionDigest(ids)
+        let cancelled = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: rows)),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: digest,
+            expectedCount: 2,
+            select: { _, _ in nil }
+        )
+        let cancelledObject = try #require(
+            JSONSerialization.jsonObject(with: cancelled) as? [String: Any]
+        )
+        let cancelledRejection = try #require(
+            cancelledObject["rejection"] as? [String: Any]
+        )
+        #expect(cancelledObject["ok"] as? Bool == false)
+        #expect(cancelledRejection["code"] as? String == "presence-cancelled")
+
+        let reordered = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: Array(rows.reversed()))),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: digest,
+            expectedCount: 2,
+            select: { _, _ in 0 }
+        )
+        let reorderedObject = try #require(
+            JSONSerialization.jsonObject(with: reordered) as? [String: Any]
+        )
+        let reorderedRejection = try #require(
+            reorderedObject["rejection"] as? [String: Any]
+        )
+        #expect(reorderedObject["ok"] as? Bool == false)
+        #expect(reorderedRejection["code"] as? String == "selection-candidates-drifted")
     }
 
     @Test
