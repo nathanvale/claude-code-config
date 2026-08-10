@@ -2744,8 +2744,15 @@ describe("runbook family — live (U4 wiring)", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(calls).toHaveLength(5);
+		expect(calls).toHaveLength(6);
 		expect(calls.some((call) => call.includes("open"))).toBe(false);
+		expect(calls.at(-1)).toEqual([
+			"/opt/browser-connect/probe",
+			"--session",
+			"browser-use-run-runbook-bound-cursor",
+			"close",
+			"--json",
+		]);
 	});
 
 	test("concurrent bound resumes produce one executor dispatch", async () => {
@@ -3155,6 +3162,14 @@ describe("task run — internal envelope mint (D4)", () => {
 			["open", "https://example.test/", "--json"],
 			["get", "url", "--json"],
 			["snapshot", "-i", "--json"],
+			[],
+		]);
+		expect(scripted.calls.at(-1)).toEqual([
+			"/opt/browser-connect/probe",
+			"--session",
+			`browser-use-${mintCalls[0]?.runId}`,
+			"close",
+			"--json",
 		]);
 	});
 });

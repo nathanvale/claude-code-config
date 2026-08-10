@@ -485,6 +485,17 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				["open", "https://example.test/", "--json"],
 				["get", "url", "--json"],
 				["snapshot", "-i", "--json"],
+				[],
+				[],
+			]);
+			expect(calls.slice(-2)).toEqual([
+				[
+					"--session",
+					"browser-use-run-runbook-process",
+					"close",
+					"--json",
+				],
+				["session", "list", "--json"],
 			]);
 		},
 		TEST_TIMEOUT_MS,
