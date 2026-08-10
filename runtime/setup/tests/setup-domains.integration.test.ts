@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -680,7 +680,9 @@ async function binsUserFixture() {
 		name: "tool",
 		bin: { tool: "./src/cli.ts" },
 	}));
-	await writeFile(join(fixture.source, "runtime/tool/src/cli.ts"), "#!/usr/bin/env bun\nconsole.log(\"tool\");\n");
+	const cli = join(fixture.source, "runtime/tool/src/cli.ts");
+	await writeFile(cli, "#!/usr/bin/env bun\nconsole.log(\"tool\");\n");
+	await chmod(cli, 0o755);
 	const binDir = join(fixture.home, ".bun/bin");
 	await mkdir(binDir, { recursive: true });
 	const binTopology = { pathEnv: binDir };

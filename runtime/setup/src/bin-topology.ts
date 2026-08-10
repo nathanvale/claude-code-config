@@ -95,8 +95,14 @@ async function validateDeclaration(
 		return { finding: declarationFinding(manifestPath, `Bin entry for '${name}' resolves outside its package.`) };
 	}
 	let contents: string;
+	let mode: number;
 	try {
-		contents = await readFile(canonicalEntry, "utf8");
+		const [entryContents, entryStats] = await Promise.all([
+			readFile(canonicalEntry, "utf8"),
+			lstat(canonicalEntry),
+		]);
+		contents = entryContents;
+		mode = entryStats.mode;
 	} catch (error) {
 		return {
 			finding: targetFinding(canonicalEntry, `Bin entry for '${name}' is unreadable: ${error instanceof Error ? error.message : String(error)}`),
@@ -104,6 +110,9 @@ async function validateDeclaration(
 	}
 	if (!contents.startsWith("#!")) {
 		return { finding: targetFinding(canonicalEntry, `Bin entry for '${name}' lacks a '#!' shebang.`) };
+	}
+	if ((mode & 0o111) === 0) {
+		return { finding: targetFinding(canonicalEntry, `Bin entry for '${name}' is not executable.`) };
 	}
 	return { declaration: { name, packageDir: canonicalPackageDir, entry: canonicalEntry } };
 }
