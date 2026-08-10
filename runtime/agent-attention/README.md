@@ -9,6 +9,7 @@ Minimal Apple Reminders approval loop for Codex tasks.
 - One approval meaning per reminder.
 - Preview is the default for reminder creation.
 - A completed reminder can authorize one task delivery.
+- `open_gate_count` reports undelivered gate mappings only.
 - Atomic claim suppresses duplicate delivery.
 - Completed reminders remain in Apple Reminders.
 - Private mappings, claims, and receipts live under
@@ -34,6 +35,7 @@ bun run agent-attention poll
 bun run agent-attention record-delivery \
   --event-id EVENT_ID \
   --tool-result '{"delivered":true}'
+bun run test:agent-attention
 ```
 
 `poll` never sends a task message. A Codex automation owns the supported task
