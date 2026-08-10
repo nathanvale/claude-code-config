@@ -36,7 +36,10 @@ import type {
 	AdapterExecutableResolution,
 	AdapterRuntime,
 } from "../src/adapters/registry.ts";
-import { agentBrowserDefinition } from "../src/adapters/agent-browser.ts";
+import {
+	AGENT_BROWSER_PROBE_SESSION_PREFIX,
+	agentBrowserDefinition,
+} from "../src/adapters/agent-browser.ts";
 import { chromeDevtoolsMcpDefinition } from "../src/adapters/chrome-devtools-mcp.ts";
 import { playwrightCdpDefinition } from "../src/adapters/playwright-cdp.ts";
 
@@ -752,6 +755,26 @@ function memoryWriter(): MemoryWriter {
 
 type DispatcherRun = { exitCode: number; stdout: string; stderr: string };
 
+function fakeAgentBrowserReleaseResult(
+	input: AdapterCommandInput,
+): AdapterCommandResult | undefined {
+	if (input.args.includes("close")) {
+		return {
+			exitCode: 0,
+			stdout: JSON.stringify({ success: true }),
+			stderr: "",
+		};
+	}
+	if (input.args.includes("list")) {
+		return {
+			exitCode: 0,
+			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
+			stderr: "",
+		};
+	}
+	return undefined;
+}
+
 /**
  * A scriptable fake adapter runtime. `provenance` and `probe` are keyed by the
  * executable command and drive checkProvenance / probeAttachment WITHOUT any
@@ -762,7 +785,11 @@ function fakeAdapterRuntime(script: {
 	version?: Record<string, string | undefined>;
 	probeExit?: Record<string, number>;
 	unresolvable?: readonly string[];
-	calls?: { probe: string[]; version: string[] };
+	calls?: {
+		probe: string[];
+		version: string[];
+		commands?: AdapterCommandInput[];
+	};
 }): AdapterRuntime {
 	const unresolvable = new Set(script.unresolvable ?? []);
 	return {
@@ -774,6 +801,7 @@ function fakeAdapterRuntime(script: {
 		runCommand: async (
 			input: AdapterCommandInput,
 		): Promise<AdapterCommandResult> => {
+			script.calls?.commands?.push(input);
 			const executable = input.command.replace("/fake/bin/", "");
 			const isVersion = input.args.includes("--version");
 			if (isVersion) {
@@ -784,7 +812,9 @@ function fakeAdapterRuntime(script: {
 				}
 				return { exitCode: 0, stdout: `${executable} ${version}\n`, stderr: "" };
 			}
-			// Any non-version invocation is the attachment probe.
+			const releaseResult = fakeAgentBrowserReleaseResult(input);
+			if (releaseResult) return releaseResult;
+			// The remaining adapter invocation is the attachment probe.
 			script.calls?.probe.push(executable);
 			const exit = script.probeExit?.[executable] ?? 0;
 			return {
@@ -1122,7 +1152,11 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 	});
 
 	test("the adapter's OWN executable performed the probe (R4)", async () => {
-		const calls = { probe: [] as string[], version: [] as string[] };
+		const calls = {
+			probe: [] as string[],
+			version: [] as string[],
+			commands: [] as AdapterCommandInput[],
+		};
 		const { main: warmChromeMain } = okScript();
 		const run = await runDispatcher(CONNECT_ARGV, {
 			warmChromeMain,
@@ -1137,6 +1171,37 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 		// R4: the probe ran through the adapter's own binary.
 		expect(calls.probe).toEqual(["agent-browser"]);
 		expect(data.attachment.probe_executable).toBe("/fake/bin/agent-browser");
+
+		const probe = calls.commands.find((command) =>
+			command.args.includes("snapshot"),
+		);
+		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
+		expect(sessionFlag).toBeGreaterThanOrEqual(0);
+		const probeSessionName = probe?.args[sessionFlag + 1];
+		expect(probeSessionName).toMatch(
+			new RegExp(
+				`^${AGENT_BROWSER_PROBE_SESSION_PREFIX}-${process.pid}-[a-f0-9]{8}$`,
+			),
+		);
+		if (!probeSessionName) throw new Error("probe session name missing");
+		expect(probe?.args).toEqual([
+			"--cdp",
+			expect.stringMatching(/^ws:\/\//),
+			"--session",
+			probeSessionName,
+			"snapshot",
+		]);
+
+		const release = calls.commands.find((command) =>
+			command.args.includes("close"),
+		);
+		expect(release?.args).toEqual([
+			"--session",
+			probeSessionName,
+			"close",
+			"--json",
+		]);
+		expect(release?.args).not.toContain("--cdp");
 	});
 });
 
@@ -3589,6 +3654,8 @@ describe("browser-connect connect gate: typed adapter evidence (U5 R11/R23)", ()
 						stderr: "",
 					};
 				}
+				const releaseResult = fakeAgentBrowserReleaseResult(input);
+				if (releaseResult) return releaseResult;
 				const result = sequence[Math.min(probes, sequence.length - 1)];
 				probes += 1;
 				return result ?? { exitCode: 0, stdout: "attached", stderr: "" };

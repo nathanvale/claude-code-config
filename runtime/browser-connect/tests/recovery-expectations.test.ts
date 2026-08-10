@@ -185,6 +185,20 @@ function fakeAdapterRuntime(script: {
 				}
 				return { exitCode: 0, stdout: `${executable} ${version}\n`, stderr: "" };
 			}
+			if (input.args.includes("close")) {
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ success: true }),
+					stderr: "",
+				};
+			}
+			if (input.args.includes("list")) {
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
+					stderr: "",
+				};
+			}
 			const exit = script.probeExit?.[executable] ?? 0;
 			return { exitCode: exit, stdout: exit === 0 ? "attached\n" : "", stderr: "" };
 		},
