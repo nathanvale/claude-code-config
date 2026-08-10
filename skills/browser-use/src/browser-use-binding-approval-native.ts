@@ -122,7 +122,10 @@ function selectionRejection(
 				typeof message === "string" &&
 				message.length > 0 &&
 				message.length <= MAXIMUM_NATIVE_FAILURE_MESSAGE_LENGTH &&
-				!/[\u0000-\u001f\u007f]/.test(message) &&
+				![...message].some((character) => {
+					const code = character.charCodeAt(0);
+					return code <= 0x1f || code === 0x7f;
+				}) &&
 				secretShapeFindingOf(message) === undefined
 					? message
 					: "the native binding selection failed closed.",
