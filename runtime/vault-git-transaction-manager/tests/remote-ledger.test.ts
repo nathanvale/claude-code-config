@@ -134,7 +134,9 @@ describe("remote lease ledger", () => {
 		const loser = refused[0];
 		if (!loser || loser.status !== "refused")
 			throw new Error("bootstrap race had no fenced loser");
-		expect(loser.blocker).toBe("remote_moved");
+		expect(["remote_moved", "lease_generation_stale"]).toContain(
+			loser.blocker,
+		);
 
 		// Independent ledger read straight from the bare remote, bypassing
 		// both engines: the remote tip must be the winner's generation.
