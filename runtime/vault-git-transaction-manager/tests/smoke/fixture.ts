@@ -22,12 +22,11 @@ import { admitActivationForTest } from "../activation-fixture.ts";
  * `mk_clone`, `snapshot_refs`/`assert_refs_unchanged`, `assert_ledger_state`,
  * `assert_ledger_owner` — expressed as Bun helpers instead of bash.
  *
- * The plan justified a bash/TAP driver as matching an "existing 102-test janitor
- * harness". No such harness exists; the janitor's tests are `tests/janitor.test.ts`,
- * ordinary Bun tests. With that anchor gone, bash would mean hand-rolling
- * primitives that `live-acceptance.integration.test.ts` already implements in
- * TypeScript. This module lifts that private fixture into a shared one so the
- * matrix reuses proven setup rather than forking it.
+ * The plan justified a bash/TAP driver as matching an existing 102-test Janitor
+ * harness. That harness lives in `dotfiles` and covers the launchd wrapper, not
+ * this runtime. This package uses Bun tests and already owns equivalent fixture
+ * primitives in `live-acceptance.integration.test.ts`. This module lifts that
+ * private fixture into a shared one so the matrix reuses proven setup.
  *
  * Every row builds its own repository under `mktemp -d` and tears it down, so a
  * row that wedges a store cannot poison the next one.

@@ -16,8 +16,8 @@ setDefaultTimeout(180_000);
 afterEach(cleanupSmokeFixtures);
 
 /**
- * Row 3 — AE5: a transaction stranded by a crash is diagnosed and resumed
- * from a genuinely fresh process.
+ * Row 3 — AE5: a transaction stranded in `writing` is diagnosed from a
+ * genuinely fresh process.
  *
  * The plan's objection to existing coverage is correct but narrower than
  * stated. `engine-lifecycle.test.ts` classifies phases by calling `recordPhase`
@@ -25,16 +25,17 @@ afterEach(cleanupSmokeFixtures);
  * SIGKILL-and-resume — but only at the `checking` phase.
  *
  * This row proves the `writing` phase, which `begin` leaves durable, is
- * correctly diagnosed and resumed by separate processes against a real remote.
+ * correctly diagnosed by separate processes against a real remote.
  * Each CLI invocation is its own subprocess, so nothing carries over except
  * what reached the durable receipt store and the remote ledger — exactly the
- * state a crashed process would leave behind.
+ * state a crashed process would leave behind. This row verifies the advertised
+ * `resume` action; it does not invoke that repair or prove AE5 end to end.
  *
  * Note this is the one row where plain Git commands cannot supply the
  * precondition. The phase lives in the manager's private receipt store, not in
  * the repository, so observing it needs the CLI rather than git alone.
  */
-describe("row 3: a stranded transaction resumes in a new process", () => {
+describe("row 3: a stranded transaction is diagnosed in a new process", () => {
 	test("a transaction left writing is diagnosed as writes_in_progress", async () => {
 		const fixture = await mkSmokeFixture();
 		const transactionId = await fixture.begin("notes/event.md");
