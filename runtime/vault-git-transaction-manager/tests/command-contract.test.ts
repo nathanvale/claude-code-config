@@ -34,6 +34,10 @@ import {
 	VAULT_GIT_WRITE_PERMISSIONS,
 	createVaultGitLifecycleResult,
 } from "../src/model.ts";
+import type {
+	VaultGitMutationRequest,
+	VaultGitReadRequest,
+} from "../src/ports.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contractOptions = {
@@ -113,6 +117,17 @@ describe("vault-git command contract", () => {
 		);
 	});
 
+	test("contract construction rejects a drifted command set", () => {
+		const drifted = structuredClone(vaultGitContracts) as Record<
+			string,
+			unknown
+		>;
+		delete drifted.janitor;
+		expect(() => defineVaultGitCommandContracts(drifted as never)).toThrow(
+			CliRuntimeContractError,
+		);
+	});
+
 	test("contract construction rejects unsafe text", () => {
 		const drifted = structuredClone(vaultGitContracts) as Record<
 			string,
@@ -175,6 +190,7 @@ describe("vault-git U1 read-only runtime", () => {
 		).toEqual(["next: wait_for_runtime"]);
 		expect(run.stdout).toContain("write_permission: denied");
 		expect(run.stdout).toContain("changed_state: none");
+		expect(run.stdout).toContain("blockers: runtime_unavailable");
 	});
 
 	test("status JSON exposes the complete safe lifecycle result", () => {
@@ -264,6 +280,19 @@ describe("vault-git U1 read-only runtime", () => {
 		expect(JSON.parse(run.stdout).data.command).toBe("status");
 	});
 
+	test("invalid inline JSON syntax still returns a JSON usage envelope", () => {
+		const run = runVaultGitForTest(["status", "--json=true"], {
+			runId: "run-invalid-inline-json",
+		});
+		expect(run.exitCode).toBe(2);
+		expect(run.stderr).toBe("");
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "invalid_usage" },
+			data: { command: "status", outcome: "invalid_usage" },
+		});
+	});
+
 	test("capability input accepts only a numeric inherited descriptor", () => {
 		expect(
 			parseVaultGitInvocation(["join", "--capability-fd", "7"]),
@@ -273,6 +302,18 @@ describe("vault-git U1 read-only runtime", () => {
 		});
 		expect(() =>
 			parseVaultGitInvocation(["join", "--capability-fd", "owner-secret"]),
+		).toThrow("numeric inherited file descriptor");
+		for (const reserved of ["0", "1", "2"]) {
+			expect(() =>
+				parseVaultGitInvocation(["join", "--capability-fd", reserved]),
+			).toThrow("numeric inherited file descriptor");
+		}
+		expect(() =>
+			parseVaultGitInvocation([
+				"join",
+				"--capability-fd",
+				"99999999999999999999",
+			]),
 		).toThrow("numeric inherited file descriptor");
 		expect(() =>
 			parseVaultGitInvocation(["join", "--capability", "secret"]),
@@ -427,6 +468,22 @@ describe("vault-git Branch Station runtime coverage", () => {
 });
 
 describe("vault-git KTD16 boundaries", () => {
+	const portReadCommands = ["status", "preview", "doctor"] as const;
+	const portMutationCommands = [
+		"begin",
+		"join",
+		"complete",
+		"repair",
+		"tidy",
+		"janitor",
+	] as const;
+	const portCommandTypeAlignment: readonly [
+		ExactUnion<VaultGitReadRequest["command"], (typeof portReadCommands)[number]>,
+		ExactUnion<
+			VaultGitMutationRequest["command"],
+			(typeof portMutationCommands)[number]
+		>,
+	] = [true, true];
 	const srcModules = enumerateSourceModules();
 	const graph = buildModuleGraph(srcModules);
 	const pureLayerLocalImports = new Map<string, ReadonlySet<string>>([
@@ -468,6 +525,13 @@ describe("vault-git KTD16 boundaries", () => {
 		expect(findings).toEqual([]);
 	});
 
+	test("keeps pure port command unions aligned with the facade command partition", () => {
+		expect(portCommandTypeAlignment).toEqual([true, true]);
+		expect([...portReadCommands, ...portMutationCommands].sort()).toEqual(
+			VAULT_GIT_COMMANDS.filter((command) => command !== "commands").sort(),
+		);
+	});
+
 	test("keeps the remote engine behind ports and the Git adapter at the process edge", () => {
 		const findings = [...layeredLocalImports].flatMap(([file, allowed]) => {
 			const imports = graph.get(file);
@@ -478,8 +542,10 @@ describe("vault-git KTD16 boundaries", () => {
 				.map((dependency) => `${file} imports ./${dependency}`);
 		});
 		expect(findings).toEqual([]);
-		expect(graph.get("remote-ledger.ts")?.external).toEqual(["node:crypto"]);
-		expect(graph.get("git-adapter.ts")?.external).toEqual([
+		expect(graph.get("remote-ledger.ts")?.external.toSorted()).toEqual([
+			"node:crypto",
+		]);
+		expect(graph.get("git-adapter.ts")?.external.toSorted()).toEqual([
 			"node:child_process",
 			"node:crypto",
 			"node:fs/promises",
@@ -536,6 +602,12 @@ describe("vault-git KTD16 boundaries", () => {
 		expect(findCycles(localGraph)).toEqual([]);
 	});
 });
+
+type ExactUnion<Left, Right> = [Left] extends [Right]
+	? [Right] extends [Left]
+		? true
+		: false
+	: false;
 
 function argvForFlag(
 	command: (typeof VAULT_GIT_COMMANDS)[number],

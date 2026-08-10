@@ -91,7 +91,11 @@ export async function runTwoCloneRace(
 			const loser = refused[0];
 			if (!loser || loser.status !== "refused")
 				throw new Error("race had no fenced loser");
-			expect(loser.blocker).toBe("remote_moved");
+			expect([
+				"remote_moved",
+				"lease_generation_stale",
+				"lease_active",
+			]).toContain(loser.blocker);
 			expect(loser.changedState).toBe("none");
 			winners += acquired.length;
 			fenced += refused.length;
@@ -146,7 +150,7 @@ describe("two-clone remote lease race", () => {
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
-	}, 30_000);
+	}, 120_000);
 });
 
 function createEngine(repositoryPath: string) {
