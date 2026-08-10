@@ -8492,6 +8492,7 @@ async function runAuthBinding(input: PlatformCommandInput): Promise<number> {
 		fs: input.runtime.platformFs,
 		root: join(opened.paths.resolution.roots.state, "binding-catalog"),
 		verifier,
+		selectionGrantVerifier: input.runtime.bindingSelectionGrantVerifier,
 	});
 
 	if (input.parsed.subcommand === "binding list") {
@@ -8701,7 +8702,7 @@ async function evaluateBindingSelection(
 	const fragmentValue = run.auth_fragment?.fragment;
 	if (
 		validateAuthFragmentShape(fragmentValue).length > 0 ||
-		run.state !== "awaiting-auth"
+		run.state !== "awaiting-approval"
 	) {
 		return selectionBlockedEvaluation("selection_run_context_invalid");
 	}
@@ -8724,6 +8725,31 @@ async function evaluateBindingSelection(
 			blocked_cause: "ambiguous-binding-selection",
 			continuationId: "acquire-native-capability",
 		};
+	}
+	const opened = await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
+	if (!opened.ok) return selectionBlockedEvaluation(opened.refusal.code);
+	const catalogRoot = join(
+		opened.paths.resolution.roots.state,
+		"binding-catalog",
+	);
+	const catalog = createBindingCatalog({
+		fs: input.runtime.platformFs,
+		root: catalogRoot,
+		verifier: input.runtime.bindingApprovalReceiptVerifier,
+		selectionGrantVerifier: verifier,
+	});
+	if ((await input.runtime.platformFs.lstat(catalogRoot)) !== undefined) {
+		const standing = await catalog.resolve({
+			binding_ref: fragment.binding.service_id,
+			service_id: fragment.binding.service_id,
+			auth_context: "interactive-login",
+			environment: fragment.binding.environment,
+			profile: fragment.binding.profile,
+		});
+		if (!standing.ok) return selectionBlockedEvaluation(standing.code);
+		if (standing.status !== "missing") {
+			return selectionBlockedEvaluation("selection_binding_already_recorded");
+		}
 	}
 	const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
 	const before = await port.listLoginItems({ vault_id: vaultId });
@@ -8767,14 +8793,6 @@ async function evaluateBindingSelection(
 	if (!selectionGrantMatchesLiveItem(request, live.item, consumed.grant)) {
 		return selectionBlockedEvaluation("selection_item_drifted");
 	}
-	const opened = await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
-	if (!opened.ok) return selectionBlockedEvaluation(opened.refusal.code);
-	const catalog = createBindingCatalog({
-		fs: input.runtime.platformFs,
-		root: join(opened.paths.resolution.roots.state, "binding-catalog"),
-		verifier: input.runtime.bindingApprovalReceiptVerifier,
-		selectionGrantVerifier: verifier,
-	});
 	const committed = await catalog.commitSelectionGrant(consumed.grant);
 	if (!committed.ok) return selectionBlockedEvaluation(committed.code);
 	return {

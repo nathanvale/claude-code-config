@@ -1558,6 +1558,15 @@ func projectItem(_ raw: Any) -> [String: Any]? {
     return projected
 }
 
+private func orderedProjectedItems(_ items: [[String: Any]]) -> [[String: Any]]? {
+    let identified = items.compactMap { item -> (id: String, item: [String: Any])? in
+        guard let id = boundedString(item["id"]) else { return nil }
+        return (id, item)
+    }
+    guard identified.count == items.count else { return nil }
+    return identified.sorted { $0.id < $1.id }.map(\.item)
+}
+
 private func maskedBindingSelectionUsername(_ raw: Any?) -> String? {
     guard let value = raw as? String,
           !value.isEmpty,
@@ -1643,8 +1652,17 @@ func bindingSelectionEnvelope(
           raw.count == expectedCount,
           expectedCount > 0
     else { return envelope(cause: .outputShapeInvalid) }
-    let projected = raw.compactMap(projectItem)
-    guard projected.count == raw.count,
+    let paired = raw.compactMap { row -> (raw: [String: Any], projected: [String: Any])? in
+        guard let projected = projectItem(row),
+              boundedString(projected["id"]) != nil
+        else { return nil }
+        return (row, projected)
+    }.sorted {
+        (boundedString($0.projected["id"]) ?? "")
+            < (boundedString($1.projected["id"]) ?? "")
+    }
+    let projected = paired.map(\.projected)
+    guard paired.count == raw.count,
           projected.allSatisfy({ item in
               (item["vault"] as? [String: Any])?["id"] as? String == vaultID
           }),
@@ -1652,7 +1670,8 @@ func bindingSelectionEnvelope(
           observedDigest == expectedDigest
     else { return rejectionSelectionEnvelope(code: "selection-candidates-drifted") }
     var labels: [String] = []
-    for row in raw {
+    for pair in paired {
+        let row = pair.raw
         guard let title = row["title"] as? String,
               !title.isEmpty,
               title.utf8.count <= 512,
@@ -1738,7 +1757,8 @@ func projectMetadata(
     case .itemList:
         guard let rows = raw as? [Any] else { return nil }
         let projected = rows.compactMap(projectItem)
-        return projected.count == rows.count ? projected : nil
+        guard projected.count == rows.count else { return nil }
+        return orderedProjectedItems(projected)
     case .itemGet:
         return nil
     case .bindingEvidence:

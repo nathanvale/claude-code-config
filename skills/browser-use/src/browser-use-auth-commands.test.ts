@@ -1015,6 +1015,7 @@ async function makeStore(): Promise<{
 async function installBlockedSelectionRun(
 	store: Awaited<ReturnType<typeof makeStore>>,
 	runId: string,
+	runState: BrowserUseSharedRun["state"] = "awaiting-approval",
 ): Promise<void> {
 	const started = beginAuthTransaction({
 		binding: {
@@ -1047,7 +1048,9 @@ async function installBlockedSelectionRun(
 	if (!blocked.ok) throw new Error("auth fixture failed to block");
 	const created = await createSharedRun(
 		store.deps,
-		blockedRun(runId, "request-binding-selection-grant"),
+		blockedRun(runId, "request-binding-selection-grant", {
+			state: runState,
+		}),
 	);
 	if (!created.ok) throw new Error(`selection run create failed: ${created.code}`);
 	const loaded = await loadSharedRun(store.deps, runId);
@@ -2448,6 +2451,38 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		expect(result.exitCode).toBe(2);
 	});
 
+	test("the selection continuation admits only its awaiting-approval run state", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection-wrong-state", "awaiting-auth");
+		let ceremonyCalls = 0;
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-wrong-state",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async () => {
+						ceremonyCalls += 1;
+						throw new Error("wrong-state run reached the ceremony");
+					},
+				},
+			}),
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_run_context_invalid" },
+		});
+		expect(ceremonyCalls).toBe(0);
+	});
+
 	test("seven private candidates become one signed selection and one binding write without descriptor output", async () => {
 		const store = await makeStore();
 		await installBlockedSelectionRun(store, "run-selection");
@@ -2462,9 +2497,6 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		let exactReads = 0;
 		let ceremonyCalls = 0;
 		let reserveCalls = 0;
-		const reservedGrantIds = new Set<string>();
-		let ceremonyGrantId = "grant-selection-1";
-		let exactItemOverride: BrowserUseVaultItemEvidence | undefined;
 		const privateTitle = "GitHub private title";
 		const privateUsername = "private-user@example.test";
 		let issuedGrant: BrowserUseBindingSelectionGrant | undefined;
@@ -2478,9 +2510,6 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 				getLoginItem: async ({ item_id }) => {
 					exactReads += 1;
 					const item = candidates.find((candidate) => candidate.item_id === item_id);
-					if (exactItemOverride !== undefined) {
-						return { ok: true, item: exactItemOverride };
-					}
 					return item === undefined
 						? { ok: false, rejection: rejection("item-missing") }
 						: { ok: true, item };
@@ -2494,7 +2523,7 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 					expect(privateTitle).toContain("GitHub");
 					expect(privateUsername).toContain("@");
 					issuedGrant = {
-						grant_id: ceremonyGrantId,
+						grant_id: "grant-selection-1",
 						resolution_key: input.resolution_key,
 						binding: {
 							service_id: "github",
@@ -2522,12 +2551,7 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 				}),
 				verifyAndReserve: async ({ grant }) => {
 					reserveCalls += 1;
-					const admitted = grant as BrowserUseBindingSelectionGrant;
-					if (reservedGrantIds.has(admitted.grant_id)) {
-						return { ok: false, code: "grant_consumed" };
-					}
-					reservedGrantIds.add(admitted.grant_id);
-					return { ok: true, grant: admitted };
+					return { ok: true, grant: grant as BrowserUseBindingSelectionGrant };
 				},
 			},
 		});
@@ -2579,38 +2603,13 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		);
 		expect(envelopeOf(replay.stdout).data.evaluation).toMatchObject({
 			status: "selection-blocked",
-			detail: { refusal_code: "grant_consumed" },
+			detail: { refusal_code: "selection_binding_already_recorded" },
 		});
 		expect({ ceremonyCalls, reserveCalls, listCalls, exactReads }).toEqual({
-			ceremonyCalls: 2,
-			reserveCalls: 2,
-			listCalls: 3,
+			ceremonyCalls: 1,
+			reserveCalls: 1,
+			listCalls: 2,
 			exactReads: 1,
-		});
-
-		ceremonyGrantId = "grant-selection-moved";
-		exactItemOverride = { ...candidates[5], state: "moved" };
-		const moved = await runForTest(
-			[
-				"auth",
-				"request-binding-selection-grant",
-				"--vault-id",
-				"vault-1",
-				"--run",
-				"run-selection",
-				"--json",
-			],
-			runtime,
-		);
-		expect(envelopeOf(moved.stdout).data.evaluation).toMatchObject({
-			status: "selection-blocked",
-			detail: { refusal_code: "selection_item_drifted" },
-		});
-		expect({ ceremonyCalls, reserveCalls, listCalls, exactReads }).toEqual({
-			ceremonyCalls: 3,
-			reserveCalls: 3,
-			listCalls: 5,
-			exactReads: 2,
 		});
 		const catalogIndex = JSON.parse(
 			await readFile(
@@ -2624,6 +2623,62 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		) as { generation: number; active: unknown[] };
 		expect(catalogIndex).toMatchObject({ generation: 1 });
 		expect(catalogIndex.active).toHaveLength(1);
+	});
+
+	test("a selected item that moved before the exact read reserves no binding", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection-moved");
+		const candidate = evidenceItem("item-1", {
+			origins: ["https://github.com"],
+		});
+		let exactReads = 0;
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-moved",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({
+					listLoginItems: async () => ({ ok: true, items: [candidate] }),
+					getLoginItem: async () => {
+						exactReads += 1;
+						return { ok: true, item: { ...candidate, state: "moved" } };
+					},
+				}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async (request) => ({
+						ok: true,
+						grant: selectionGrantForTest(request, candidate.item_id),
+					}),
+				},
+				bindingSelectionGrantVerifier: {
+					verifyStored: async (grant) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+					verifyAndReserve: async ({ grant }) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+				},
+			}),
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_item_drifted" },
+		});
+		expect(exactReads).toBe(1);
+		expect(
+			await store.deps.fs.lstat(
+				join(store.deps.paths.resolution.roots.state, "binding-catalog"),
+			),
+		).toBeUndefined();
 	});
 
 	test("cancel and post-selection candidate reorder stay blocked with no catalog mutation", async () => {

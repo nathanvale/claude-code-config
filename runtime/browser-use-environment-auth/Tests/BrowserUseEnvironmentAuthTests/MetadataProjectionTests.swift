@@ -88,7 +88,7 @@ struct MetadataProjectionTests {
     }
 
     @Test
-    func selectionCancelAndCandidateReorderFailClosed() throws {
+    func selectionCancelNormalizesTransportOrderAndCandidateFactDriftFailsClosed() throws {
         let ids = ["item-1", "item-2"]
         let rows = ids.enumerated().map { index, id -> [String: Any] in
             var row = item(id: id, urls: ["https://github.com/login"])
@@ -125,11 +125,33 @@ struct MetadataProjectionTests {
         let reorderedObject = try #require(
             JSONSerialization.jsonObject(with: reordered) as? [String: Any]
         )
-        let reorderedRejection = try #require(
-            reorderedObject["rejection"] as? [String: Any]
+        let reorderedSelection = try #require(
+            reorderedObject["selection"] as? [String: Any]
         )
-        #expect(reorderedObject["ok"] as? Bool == false)
-        #expect(reorderedRejection["code"] as? String == "selection-candidates-drifted")
+        let reorderedItem = try #require(
+            reorderedSelection["selected_item"] as? [String: Any]
+        )
+        #expect(reorderedObject["ok"] as? Bool == true)
+        #expect(reorderedItem["item_id"] as? String == "item-1")
+
+        var driftedRows = rows
+        driftedRows[1]["urls"] = [["href": "https://example.test/login"]]
+        let drifted = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: driftedRows)),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: digest,
+            expectedCount: 2,
+            select: { _, _ in 0 }
+        )
+        let driftedObject = try #require(
+            JSONSerialization.jsonObject(with: drifted) as? [String: Any]
+        )
+        let driftedRejection = try #require(
+            driftedObject["rejection"] as? [String: Any]
+        )
+        #expect(driftedObject["ok"] as? Bool == false)
+        #expect(driftedRejection["code"] as? String == "selection-candidates-drifted")
     }
 
     @Test
@@ -160,14 +182,17 @@ struct MetadataProjectionTests {
         #expect(projected.allSatisfy {
             Set($0.keys) == ["id", "version", "category", "vault", "urls"]
         })
+        #expect(projected.compactMap { $0["id"] as? String } == [
+            "clean", "fragment", "native-app", "query",
+        ])
         let origins = projected.map { row in
             (row["urls"] as? [[String: String]] ?? []).compactMap { $0["href"] }
         }
         #expect(origins == [
+            ["https://fasttrack.test/"],
+            ["https://app.glofox.com/"],
             ["https://native.example.test/"],
             ["https://192.168.1.1/"],
-            ["https://app.glofox.com/"],
-            ["https://fasttrack.test/"],
         ])
     }
 

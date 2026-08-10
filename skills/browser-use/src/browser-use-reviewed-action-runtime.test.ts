@@ -199,6 +199,7 @@ describe("production Reviewed Action verifier wiring", () => {
 		});
 		expect(runtime.runbookHumanIdentityAttestation).toBeDefined();
 		expect(runtime.runbookAuthenticatedStateProof).toBeUndefined();
+		expect(runtime.bindingSelectionCeremony).toBeUndefined();
 
 		await chmod(fixture.verifierPath, 0o644);
 		const unpinned = await createProductionBrowserUseRuntime({

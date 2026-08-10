@@ -35,6 +35,7 @@ import {
 	type AdmissionRuntime,
 	type ProductAdmissionResult,
 	createNativeAbsentRuntime,
+	inspectBindingSelectionNativeCapability,
 } from "@side-quest/browser-use-security";
 import {
 	type BrowserUseOpExecute,
@@ -1462,10 +1463,9 @@ function createP256BindingSelectionGrantVerifier(
 /**
  * Production runtime construction with native-capability wiring (auth plan
  * U3a/U3b). Builds the default runtime, then queries the native security seam:
- * only an `admitted` product yields a real Token Retrieval Port. On this
- * machine the product is unsigned/absent, so `authTokenRetrieval` stays
- * undefined and the public auth command keeps returning the typed
- * `native-capability-absent` evaluation — byte-identical to today. An explicit
+ * only an `admitted` product yields a real Token Retrieval Port. An absent or
+ * invalid product leaves `authTokenRetrieval` undefined and the public auth
+ * command returns the typed `native-capability-absent` evaluation. An explicit
  * `overrides.authTokenRetrieval` (or a caller-supplied port) is honored as-is
  * and never overwritten by the seam probe.
  *
@@ -1529,6 +1529,30 @@ export async function createProductionBrowserUseRuntime(
 			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
 		}
 	}
+	const runtimeHome = runtime.env.HOME;
+	const installedBindingSelectionCapability =
+		runtime.bindingSelectionCeremony === undefined &&
+		runtimeHome !== undefined
+			? await (async () => {
+					const paths = resolveBrowserUsePaths(runtime.env);
+					if (!paths.ok) return undefined;
+					const configRoot = paths.resolution.roots.config;
+					const inspected = await inspectBrowserUseRoot(runtime.platformFs, {
+						kind: "config",
+						path: configRoot,
+					});
+					if (!inspected.ok || !inspected.exists) return undefined;
+					const canonicalConfigRoot = await runtime.platformFs.realpath(configRoot);
+					if (canonicalConfigRoot === undefined) return undefined;
+					const result = await inspectBindingSelectionNativeCapability({
+						home: runtimeHome,
+						configRoot: canonicalConfigRoot,
+					});
+					return result.status === "admitted"
+						? { ...result, configRoot: canonicalConfigRoot }
+						: undefined;
+				})()
+			: undefined;
 	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
 	if (
 		runtime.runbookHumanIdentityAttestation === undefined &&
@@ -1559,16 +1583,15 @@ export async function createProductionBrowserUseRuntime(
 	const selectionOwner = environmentTokenSupervisorDeps(runtime.env);
 	if (
 		runtime.bindingSelectionCeremony === undefined &&
-		brokerPath !== undefined &&
-		brokerPath !== "" &&
+		installedBindingSelectionCapability !== undefined &&
 		selectionOwner?.opPath !== undefined
 	) {
 		runtime.bindingSelectionCeremony = createNativeBindingSelectionCeremony(
-			brokerPath,
+			installedBindingSelectionCapability.brokerPath,
 			{
-				supervisorPath: selectionOwner.supervisorPath,
+				supervisorPath: installedBindingSelectionCapability.supervisorPath,
 				opPath: selectionOwner.opPath,
-				configRoot: selectionOwner.configRoot,
+				configRoot: installedBindingSelectionCapability.configRoot,
 			},
 		);
 	}
