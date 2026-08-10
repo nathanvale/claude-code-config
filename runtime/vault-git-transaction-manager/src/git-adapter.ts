@@ -104,6 +104,10 @@ export interface VaultGitAdapterOptions {
 	readonly timeouts: VaultGitGitTimeouts;
 	/** Git executable override. @defaultValue "git" */
 	readonly gitBinary?: string;
+	/** Exact network hosts admitted by the caller; local remotes need no entry. */
+	readonly allowedRemoteHosts?: readonly string[];
+	/** Explicit admitted transport environment; ambient transport state is scrubbed. */
+	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -126,6 +130,12 @@ export function createGitAdapter(
 	options: VaultGitAdapterOptions,
 ): VaultGitRemotePort {
 	const gitBinary = options.gitBinary ?? "git";
+	const allowedRemoteHosts = normalizeAllowedRemoteHosts(
+		options.allowedRemoteHosts ?? [],
+	);
+	const admittedGitEnvironment = normalizeAdmittedGitEnvironment(
+		options.admittedGitEnvironment ?? {},
+	);
 	const runGit = async (
 		args: readonly string[],
 		timeoutMs: number,
@@ -138,7 +148,11 @@ export function createGitAdapter(
 			cwd: options.repositoryPath,
 			stdin: input,
 			// LC_ALL=C keeps diagnostic messages stable for error classification.
-			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+			env: {
+				...CONTROLLED_GIT_ENVIRONMENT,
+				...admittedGitEnvironment,
+				...env,
+			},
 			timeoutMs,
 		});
 
@@ -188,6 +202,12 @@ export function createGitAdapter(
 	): Promise<VaultGitLedgerReadResult> => {
 		assertSafeRemote(remote);
 		assertLedgerRef(ledgerRef);
+		await assertSafeRemoteTarget(
+			runGit,
+			remote,
+			options.timeouts.localMs,
+			allowedRemoteHosts,
+		);
 		const advertised = await runGit(
 			["ls-remote", "--refs", "--exit-code", remote, ledgerRef],
 			options.timeouts.fetchMs,
@@ -249,6 +269,12 @@ export function createGitAdapter(
 	return {
 		async inspectMain(remote): Promise<VaultGitMainInspection> {
 			assertSafeRemote(remote);
+			await assertSafeRemoteTarget(
+				runGit,
+				remote,
+				options.timeouts.localMs,
+				allowedRemoteHosts,
+			);
 			const advertised = await runGit(
 				["ls-remote", "--refs", "--exit-code", remote, "refs/heads/main"],
 				options.timeouts.fetchMs,
@@ -281,30 +307,28 @@ export function createGitAdapter(
 			if (localHead === remoteHead) {
 				return { status: "ok", alignment: "aligned", localHead, remoteHead };
 			}
-			const behind = await isAncestor(
+			const localToRemote = await inspectAncestry(
 				runGit,
 				localHead,
 				remoteHead,
 				options.timeouts.localMs,
 			);
-			if (behind === "timed_out") return { status: "failed", reason: "timed_out" };
-			if (behind === "unknown") {
+			const remoteToLocal = await inspectAncestry(
+				runGit,
+				remoteHead,
+				localHead,
+				options.timeouts.localMs,
+			);
+			if (localToRemote === "timed_out" || remoteToLocal === "timed_out") {
+				return { status: "failed", reason: "timed_out" };
+			}
+			if (localToRemote === "failed" || remoteToLocal === "failed") {
 				return { status: "failed", reason: "remote_unavailable" };
 			}
-			if (behind === "yes") {
+			if (localToRemote === "ancestor") {
 				return { status: "ok", alignment: "behind", localHead, remoteHead };
 			}
-			const ahead = await isAncestor(
-				runGit,
-				remoteHead,
-				localHead,
-				options.timeouts.localMs,
-			);
-			if (ahead === "timed_out") return { status: "failed", reason: "timed_out" };
-			if (ahead === "unknown") {
-				return { status: "failed", reason: "remote_unavailable" };
-			}
-			if (ahead === "yes") {
+			if (remoteToLocal === "ancestor") {
 				return { status: "ok", alignment: "ahead", localHead, remoteHead };
 			}
 			return { status: "ok", alignment: "diverged", localHead, remoteHead };
@@ -320,6 +344,12 @@ export function createGitAdapter(
 			assertObjectId(request.expectedGeneration);
 			assertSafeCommitField("author", request.author);
 			assertSafeCommitField("message", request.message);
+			await assertSafeRemoteTarget(
+				runGit,
+				request.remote,
+				options.timeouts.localMs,
+				allowedRemoteHosts,
+			);
 			await assertNoConfiguredPushRefspec(
 				runGit,
 				request.remote,
@@ -382,6 +412,7 @@ export function createGitAdapter(
 				[
 					"push",
 					"--porcelain",
+					"--no-verify",
 					request.remote,
 					`${commit}:${request.ledgerRef}`,
 				],
@@ -394,16 +425,36 @@ export function createGitAdapter(
 			if (current.status === "ok" && current.head?.generation === commit) {
 				return { status: "appended", generation: commit };
 			}
-			if (pushed.timedOut) {
-				// A timed-out push may still land after this re-read observed the
-				// old generation; the remote outcome remains unknown.
-				return { status: "refused", reason: "timed_out" };
+			if (
+				current.status === "ok" &&
+				current.head !== null &&
+				current.head.generation !== request.expectedGeneration
+			) {
+				const landedInHistory = await inspectAncestry(
+					runGit,
+					commit,
+					current.head.generation,
+					options.timeouts.localMs,
+				);
+				if (landedInHistory === "ancestor") {
+					// This append changed the remote but no longer owns its tip. Never
+					// collapse that lost acknowledgement to changedState "none".
+					return { status: "refused", reason: "remote_state_unknown" };
+				}
+				if (landedInHistory === "failed" || landedInHistory === "timed_out") {
+					return { status: "refused", reason: "remote_state_unknown" };
+				}
 			}
 			if (
 				current.status === "ok" &&
 				(current.head?.generation ?? null) !== request.expectedGeneration
 			) {
 				return { status: "refused", reason: "remote_moved" };
+			}
+			if (pushed.timedOut) {
+				// A timed-out push may still land after this re-read observed the
+				// old generation; the remote outcome remains unknown.
+				return { status: "refused", reason: "timed_out" };
 			}
 			if (current.status === "ok") {
 				return { status: "refused", reason: "remote_unavailable" };
@@ -419,6 +470,15 @@ export function createGitAdapter(
 			assertObjectId(request.expectedLedgerGeneration);
 			assertSafeCommitField("author", request.author);
 			assertSafeCommitField("message", request.ledgerMessage);
+			// The remote URL is repository configuration and can change between
+			// begin and complete; re-prove the host before the only operation
+			// that force-updates remote main.
+			await assertSafeRemoteTarget(
+				runGit,
+				request.remote,
+				options.timeouts.localMs,
+				allowedRemoteHosts,
+			);
 			await assertNoConfiguredPushRefspec(
 				runGit,
 				request.remote,
@@ -1166,8 +1226,8 @@ async function reconcileAtomicClose(input: {
 	}
 	const mainAncestry =
 		main.commit === input.mainCommit
-			? ("yes" as const)
-			: await isAncestor(
+			? ("ancestor" as const)
+			: await inspectAncestry(
 					input.runGit,
 					input.mainCommit,
 					main.commit,
@@ -1175,14 +1235,14 @@ async function reconcileAtomicClose(input: {
 				);
 	const ledgerAncestry =
 		ledger.commit === input.ledgerCommit
-			? ("yes" as const)
-			: await isAncestor(
+			? ("ancestor" as const)
+			: await inspectAncestry(
 					input.runGit,
 					input.ledgerCommit,
 					ledger.commit,
 					input.timeoutMs,
 				);
-	if (mainAncestry === "yes" && ledgerAncestry === "yes") {
+	if (mainAncestry === "ancestor" && ledgerAncestry === "ancestor") {
 		return { outcome: "closed" };
 	}
 	// Unknown ancestry proves nothing; the outcome stays push_pending rather
@@ -1190,7 +1250,7 @@ async function reconcileAtomicClose(input: {
 	if (mainAncestry === "timed_out" || ledgerAncestry === "timed_out") {
 		return { outcome: "unknown", reason: "timed_out" };
 	}
-	if (mainAncestry === "unknown" || ledgerAncestry === "unknown") {
+	if (mainAncestry === "failed" || ledgerAncestry === "failed") {
 		return { outcome: "unknown", reason: "local_probe_failed" };
 	}
 	return { outcome: "host_contract_breach" };
@@ -1252,6 +1312,19 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 				});
 				const stdout: Buffer[] = [];
 				const stderr: Buffer[] = [];
+				let stdoutBytes = 0;
+				let stderrBytes = 0;
+				const capture = (
+					sink: Buffer[],
+					chunk: Buffer,
+					capturedBytes: number,
+				): number => {
+					const remaining = MAX_CAPTURE_BYTES - capturedBytes;
+					if (remaining <= 0) return capturedBytes;
+					const accepted = chunk.subarray(0, remaining);
+					sink.push(accepted);
+					return capturedBytes + accepted.length;
+				};
 				let timedOut = false;
 				let settled = false;
 				let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -1268,10 +1341,14 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 						timedOut,
 					});
 				};
-				child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-				child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+				child.stdout.on("data", (chunk: Buffer) => {
+					stdoutBytes = capture(stdout, chunk, stdoutBytes);
+				});
+				child.stderr.on("data", (chunk: Buffer) => {
+					stderrBytes = capture(stderr, chunk, stderrBytes);
+				});
 				child.on("error", (error) => {
-					stderr.push(Buffer.from(error.message));
+					stderrBytes = capture(stderr, Buffer.from(error.message), stderrBytes);
 					finish(null);
 				});
 				child.on("close", finish);
@@ -1296,36 +1373,59 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 	};
 }
 
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+
+const CONTROLLED_GIT_ENVIRONMENT = {
+	GIT_CONFIG_COUNT: "2",
+	GIT_CONFIG_GLOBAL: "/dev/null",
+	GIT_CONFIG_KEY_0: "core.hooksPath",
+	GIT_CONFIG_KEY_1: "protocol.ext.allow",
+	GIT_CONFIG_NOSYSTEM: "1",
+	GIT_CONFIG_VALUE_0: "/dev/null",
+	GIT_CONFIG_VALUE_1: "never",
+	GIT_TERMINAL_PROMPT: "0",
+	LC_ALL: "C",
+} as const;
+
 /**
  * Ambient Git redirection variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*,
  * GIT_INDEX_FILE, ...) can silently retarget spawned git away from the
- * adapter-owned repository; only transport-auth and prompt variables survive.
+ * adapter-owned repository. All Git and SSH transport values must arrive in
+ * one explicit process request after adapter construction validates them.
  */
-const PRESERVED_GIT_ENVIRONMENT = new Set([
-	"GIT_TERMINAL_PROMPT",
-	"GIT_SSH",
-	"GIT_SSH_COMMAND",
-	"GIT_ASKPASS",
-	"GIT_CONFIG_NOSYSTEM",
-]);
-
 function scrubbedAmbientEnvironment(): NodeJS.ProcessEnv {
 	const environment: NodeJS.ProcessEnv = { ...process.env };
 	for (const key of Object.keys(environment)) {
-		if (key.startsWith("GIT_") && !PRESERVED_GIT_ENVIRONMENT.has(key)) {
+		if (key.startsWith("GIT_") || AMBIENT_SSH_ENVIRONMENT.has(key))
 			delete environment[key];
-		}
 	}
 	return environment;
 }
 
+const AMBIENT_SSH_ENVIRONMENT = new Set([
+	"SSH_AGENT_PID",
+	"SSH_ASKPASS",
+	"SSH_ASKPASS_REQUIRE",
+	"SSH_AUTH_SOCK",
+]);
+
+const ADMITTED_GIT_ENVIRONMENT = new Set([
+	"GIT_ASKPASS",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_SSH_VARIANT",
+	"SSH_ASKPASS",
+	"SSH_ASKPASS_REQUIRE",
+	"SSH_AUTH_SOCK",
+]);
+
 /**
  * `merge-base --is-ancestor` is tri-state: exit 0 proves ancestry, exit 1
  * proves non-ancestry, and a timeout or any other exit proves nothing. Callers
- * must never treat "unknown" as "no" — that misclassifies transient failures
- * as contract breaches.
+ * must never treat a failure as "not an ancestor" — that misclassifies
+ * transient failures as contract breaches.
  */
-async function isAncestor(
+async function inspectAncestry(
 	runGit: (
 		args: readonly string[],
 		timeoutMs: number,
@@ -1333,15 +1433,15 @@ async function isAncestor(
 	ancestor: string,
 	descendant: string,
 	timeoutMs: number,
-): Promise<"yes" | "no" | "timed_out" | "unknown"> {
+): Promise<"ancestor" | "not_ancestor" | "failed" | "timed_out"> {
 	const result = await runGit(
 		["merge-base", "--is-ancestor", ancestor, descendant],
 		timeoutMs,
 	);
 	if (result.timedOut) return "timed_out";
-	if (result.exitCode === 0) return "yes";
-	if (result.exitCode === 1) return "no";
-	return "unknown";
+	if (result.exitCode === 0) return "ancestor";
+	if (result.exitCode === 1) return "not_ancestor";
+	return "failed";
 }
 
 async function assertNoConfiguredPushRefspec(
@@ -1380,6 +1480,92 @@ async function assertNoConfiguredPushRefspec(
 	);
 }
 
+async function assertSafeRemoteTarget(
+	runGit: (
+		args: readonly string[],
+		timeoutMs: number,
+	) => Promise<VaultGitProcessResult>,
+	remote: string,
+	timeoutMs: number,
+	allowedRemoteHosts: ReadonlySet<string>,
+): Promise<void> {
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get-regexp", "^url\\..*\\.insteadof$"],
+		"configured insteadOf rewrites are not accepted",
+		timeoutMs,
+	);
+	await assertNoExecutableLocalGitConfig(runGit, timeoutMs);
+
+	let configuredTarget = remote;
+	if (isRemoteName(remote)) {
+		const configured = await runGit(
+			["config", "--get-all", `remote.${remote}.url`],
+			timeoutMs,
+		);
+		if (configured.timedOut) {
+			throw new Error("timed out while resolving the configured remote URL");
+		}
+		const targets = configured.stdout.trim().split("\n").filter(Boolean);
+		if (configured.exitCode !== 0 || targets.length !== 1) {
+			throw new Error("configured remote must have one exact URL");
+		}
+		configuredTarget = targets[0] ?? "";
+	}
+
+	const effective = await runGit(["ls-remote", "--get-url", remote], timeoutMs);
+	if (effective.timedOut) {
+		throw new Error("timed out while resolving the effective remote URL");
+	}
+	const effectiveTargets = effective.stdout.trim().split("\n").filter(Boolean);
+	if (effective.exitCode !== 0 || effectiveTargets.length !== 1) {
+		throw new Error("effective remote must resolve to one exact URL");
+	}
+	const effectiveTarget = effectiveTargets[0] ?? "";
+	if (effectiveTarget !== configuredTarget) {
+		throw new Error("effective remote URL differs from the configured target");
+	}
+	assertSafeRemoteEndpoint(configuredTarget, allowedRemoteHosts);
+}
+
+async function assertNoExecutableLocalGitConfig(
+	runGit: (
+		args: readonly string[],
+		timeoutMs: number,
+	) => Promise<VaultGitProcessResult>,
+	timeoutMs: number,
+): Promise<void> {
+	const configured = await runGit(
+		["config", "--local", "--name-only", "--list"],
+		timeoutMs,
+	);
+	if (configured.timedOut) {
+		throw new Error("timed out while checking repository Git configuration");
+	}
+	if (configured.exitCode !== 0 && configured.exitCode !== 1) {
+		throw new Error("could not validate repository Git configuration");
+	}
+	const executableKeys = new Set([
+		"core.askpass",
+		"core.fsmonitor",
+		"core.gitproxy",
+		"core.sshcommand",
+		"credential.helper",
+		"protocol.ext.allow",
+	]);
+	for (const rawKey of configured.stdout.split("\n")) {
+		const key = rawKey.trim().toLowerCase();
+		if (
+			executableKeys.has(key) ||
+			/^remote\..*\.(proxy|receivepack|uploadpack|vcs)$/.test(key)
+		) {
+			throw new Error(
+				"repository Git configuration contains an executable transport helper",
+			);
+		}
+	}
+}
+
 async function refuseConfiguredValue(
 	runGit: (
 		args: readonly string[],
@@ -1405,13 +1591,114 @@ function isMissingLedgerPath(stderr: string): boolean {
 }
 
 function assertSafeRemote(remote: string): void {
+	const safeRemoteName = isRemoteName(remote);
+	const isApprovedUrl = /^(?:https?|ssh|git|file):\/\/[^\s]+$/.test(remote);
+	const isAbsolutePath = /^\/[^\r\n\0]*$/.test(remote);
+	const isScpLike = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^:\s][^\s]*$/.test(
+		remote,
+	);
 	if (
 		remote.trim().length === 0 ||
 		remote.startsWith("-") ||
-		/[\r\n\0]/.test(remote)
+		/[\r\n\0]/.test(remote) ||
+		!(safeRemoteName || isApprovedUrl || isAbsolutePath || isScpLike)
 	) {
 		throw new Error("remote must be one safe Git remote name or URL");
 	}
+}
+
+function isRemoteName(remote: string): boolean {
+	return (
+		/^[A-Za-z0-9._-]+$/.test(remote) && remote !== "." && remote !== ".."
+	);
+}
+
+function assertSafeRemoteEndpoint(
+	target: string,
+	allowedRemoteHosts: ReadonlySet<string>,
+): void {
+	if (/^\/[^\r\n\0]*$/.test(target)) return;
+	if (
+		!target.includes("://") &&
+		/^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^:\s][^\s]*$/.test(target)
+	) {
+		const authority = target.slice(0, target.indexOf(":"));
+		assertAllowedRemoteHost(authority.split("@").at(-1) ?? "", allowedRemoteHosts);
+		return;
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(target);
+	} catch {
+		throw new Error("remote URL uses an unsafe transport or path");
+	}
+	if (parsed.protocol === "file:") {
+		if (
+			parsed.username.length > 0 ||
+			parsed.password.length > 0 ||
+			(parsed.hostname.length > 0 && parsed.hostname !== "localhost")
+		) {
+			throw new Error("remote URL uses an unsafe transport or embedded credentials");
+		}
+		return;
+	}
+	if (!["https:", "ssh:"].includes(parsed.protocol)) {
+		throw new Error("remote URL uses an unsafe transport or path");
+	}
+	if (
+		parsed.password.length > 0 ||
+		(parsed.protocol !== "ssh:" && parsed.username.length > 0)
+	) {
+		throw new Error("remote URL uses an unsafe transport or embedded credentials");
+	}
+	assertAllowedRemoteHost(parsed.hostname, allowedRemoteHosts);
+}
+
+function assertAllowedRemoteHost(
+	host: string,
+	allowedRemoteHosts: ReadonlySet<string>,
+): void {
+	if (!allowedRemoteHosts.has(host.toLowerCase())) {
+		throw new Error("remote host is not admitted by adapter construction");
+	}
+}
+
+function normalizeAllowedRemoteHosts(
+	hosts: readonly string[],
+): ReadonlySet<string> {
+	const normalized = new Set<string>();
+	for (const host of hosts) {
+		const value = host.trim().toLowerCase();
+		const labels = value.split(".");
+		if (
+			value.length > 253 ||
+			labels.some(
+				(label) =>
+					!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+			)
+		) {
+			throw new Error("allowed remote hosts must be exact DNS names");
+		}
+		normalized.add(value);
+	}
+	return normalized;
+}
+
+function normalizeAdmittedGitEnvironment(
+	environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+	const normalized: Record<string, string> = {};
+	for (const [key, value] of Object.entries(environment)) {
+		if (
+			!ADMITTED_GIT_ENVIRONMENT.has(key) ||
+			value.length === 0 ||
+			/[\r\n\0]/.test(value)
+		) {
+			throw new Error("admitted Git environment contains an unsafe entry");
+		}
+		normalized[key] = value;
+	}
+	return normalized;
 }
 
 function assertLedgerRef(ledgerRef: string): void {
@@ -1532,6 +1819,9 @@ async function isSafeOwnedPath(
 		return false;
 	}
 	const segments = path.split("/");
+	// Keep at least as strict as isOwnedPath in store.ts: a nested or
+	// differently-cased `.git` admitted here would be rejected there, escaping
+	// begin() as a raw throw instead of an owned_path_not_admitted refusal.
 	if (
 		segments.some(
 			(segment) =>
