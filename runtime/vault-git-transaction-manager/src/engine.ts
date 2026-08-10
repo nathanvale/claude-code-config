@@ -29,6 +29,7 @@ import {
 	acquireRemoteLease,
 	buildVaultGitReleaseLedgerContent,
 	observeRemoteLedger,
+	releaseRemoteLease,
 	validateRemoteLease,
 	type RemoteLedgerEngine,
 } from "./remote-ledger.ts";
@@ -437,8 +438,30 @@ export function createVaultGitTransactionEngine(
 				return admitted;
 			}
 			request.onLeaseAcquired?.();
+			// Every exit below this point holds the remote lease. Decision 24
+			// requires the worker to report and exit, so a refusal must hand the
+			// lease back: `recordPhase` only appends a local receipt, and an
+			// abandoned lease blocks every host until it ages into `lease_stale`
+			// and an operator runs the takeover ceremony.
+			const abandonLease = async (): Promise<void> => {
+				const current = await options.store.load().catch(() => null);
+				if (current?.status !== "loaded") return;
+				const { transactionId, leaseGeneration } = current.receipt;
+				if (!transactionId || !leaseGeneration) return;
+				try {
+					await releaseRemoteLease(options.ledger, {
+						remote: request.remote,
+						transactionId,
+						expectedGeneration: leaseGeneration,
+					});
+				} catch {
+					// A failed release leaves the lease to expire on its own; the
+					// refusal below still reports the outcome the caller must act on.
+				}
+			};
 			const loaded = await options.store.load();
 			if (loaded.status !== "loaded") {
+				await abandonLease();
 				return refusal(
 					"human_required",
 					"human_required",
@@ -447,10 +470,22 @@ export function createVaultGitTransactionEngine(
 					"Inspect the hygiene receipt before any checker repair.",
 				);
 			}
-			const capability = await options.store.readCapability(
-				loaded.receipt.receiptId,
-				"owner",
-			);
+			let capability: Uint8Array;
+			try {
+				capability = await options.store.readCapability(
+					loaded.receipt.receiptId,
+					"owner",
+				);
+			} catch {
+				await abandonLease();
+				return refusal(
+					"human_required",
+					"human_required",
+					"capability_invalid",
+					"reload_capability",
+					"Reload the hygiene owner capability through the internal launcher.",
+				);
+			}
 			let applied = false;
 			try {
 				// The clean-tree proof from preflight predates lease acquisition; a
@@ -465,13 +500,15 @@ export function createVaultGitTransactionEngine(
 				applied = false;
 			}
 			if (!applied) {
-				return engine.recordPhase({
+				const recorded = await engine.recordPhase({
 					transactionId: admitted.transactionId,
 					remote: request.remote,
 					capability,
 					phase: "repairable",
 					nextSafeAction: "run_doctor",
 				});
+				await abandonLease();
+				return recorded;
 			}
 			return engine.complete({
 				transactionId: admitted.transactionId,
@@ -914,6 +951,18 @@ export function createVaultGitTransactionEngine(
 			if (input.remote !== loaded.remote) {
 				return refusal("active", loaded.phase, "transaction_mismatch", "inspect_status", "Use the remote admitted by this transaction.");
 			}
+			// Closure is evidence-gated: the plan admits only
+			// `Committing -> Closed: atomic main + ledger release verified` and
+			// `Repairable -> Closed: deterministic restore + release`. This
+			// transition owns no commit evidence (see below), so it cannot supply
+			// that proof. Recording `closed` here would leave the remote lease
+			// held while the local receipt reads terminal, which blocks every
+			// later writer and stops doctor and repair from reconciling.
+			// Refuse before fencing so an unreachable remote cannot mask an
+			// unsupported transition behind a lease or transport blocker.
+			if (input.phase === "closed") {
+				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Closure requires verified atomic close; complete or repair the transaction instead of recording closed.");
+			}
 			const fenced = await fence(loaded, input.remote);
 			if (fenced) return fenced;
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
@@ -951,7 +1000,10 @@ async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, 
 function copyPaths(paths: readonly VaultGitOwnedPathReceipt[]): VaultGitOwnedPathReceipt[] { return paths.map((path) => ({ ...path })); }
 
 function result(status: VaultGitEngineResult["status"], state: VaultGitTransactionState, receipt: VaultGitReceipt, writePermission: VaultGitWritePermission, changedState: VaultGitEngineResult["changedState"], actionId: VaultGitEngineNextActionId, summary: string, blocker?: VaultGitBlockerId): VaultGitEngineResult {
-	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety: state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : "same_input_safe", nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
+	// Decision 19: a push_pending commit is never automatically retried or
+	// reclaimed, so it must not advertise the same input as safe to resend.
+	const retrySafety: VaultGitRetrySafety = state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : state === "push_pending" ? "same_input_unsafe" : "same_input_safe";
+	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety, nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
 }
 
 function refusal(state: VaultGitTransactionState, phase: VaultGitTransactionPhase, blocker: VaultGitBlockerId, actionId: VaultGitEngineNextActionId, summary: string, changedState: VaultGitEngineResult["changedState"] = "none", retrySafety?: VaultGitRetrySafety): VaultGitEngineResult {

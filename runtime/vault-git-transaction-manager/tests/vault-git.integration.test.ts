@@ -498,6 +498,19 @@ describe("vault-git catalog-driven process boundary", () => {
 				["admitted", "refused"],
 				["completed", "refused"],
 			]).toContainEqual(statuses);
+			// The loser must refuse because the ledger fenced it, not for any
+			// incidental reason. Without this the pair could both refuse on an
+			// unrelated fault and still satisfy the shape assertion above.
+			const loser = beginResult.status === "refused" ? beginResult : hygieneResult;
+			const winner = beginResult.status === "refused" ? hygieneResult : beginResult;
+			expect(winner.status).not.toBe("refused");
+			expect([
+				"lease_active",
+				"lease_generation_stale",
+				"remote_moved",
+			]).toContain(loser.blocker ?? "missing_blocker");
+			// The loser may record a local receipt, but must not reach the remote.
+			expect(loser.changedState).not.toBe("remote");
 			expect(leaseAcquisitions).toBe(
 				hygieneResult.status === "completed" ? 1 : 0,
 			);
@@ -509,6 +522,64 @@ describe("vault-git catalog-driven process boundary", () => {
 			expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
 				hygieneResult.status === "completed" ? "hygiene rewrite" : "baseline",
 			);
+		},
+		60_000,
+	);
+
+	test(
+		"a refused hygiene transaction hands back the remote lease",
+		async () => {
+			const fixture = await createFixture();
+			const hygiene = await createVaultGitCliComposition({
+				repositoryPath: fixture.clone,
+				checkRepositoryPath: fixture.clone,
+				stateRoot: join(fixture.root, "state-hygiene-refused"),
+				repositoryIdentity: "fixture-vault",
+				actor: "agent-hygiene",
+				host: "host-hygiene",
+			});
+			const refused = await hygiene.engine.runHygieneTransaction({
+				paths: ["notes/a.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+				summary: "chore(vault): apply deterministic hygiene",
+				// The checker declines, which is the ordinary outcome of every
+				// staleness gate rather than an exceptional one.
+				async apply() {
+					return false;
+				},
+			});
+			// A declined checker records `repairable` and reports that transition
+			// as advanced; the transaction did not complete.
+			expect(refused.phase).toBe("repairable");
+			// Decision 24: the worker reports and exits. If it exits still holding
+			// the lease, the next writer refuses with lease_active and then
+			// lease_stale, taking the vault read-only on every host until an
+			// operator runs the takeover ceremony.
+			const ledger = JSON.parse(
+				fixture.gitBare([
+					"show",
+					"refs/heads/vault-system/transaction-ledger:ledger.json",
+				]),
+			) as { lease?: { state?: string } };
+			expect(ledger.lease?.state).toBe("released");
+
+			// The proof that matters: a fresh writer is admitted afterwards.
+			const foreground = await createVaultGitCliComposition({
+				repositoryPath: fixture.clone,
+				checkRepositoryPath: fixture.clone,
+				stateRoot: join(fixture.root, "state-foreground-after"),
+				repositoryIdentity: "fixture-vault",
+				actor: "agent-foreground",
+				host: "host-foreground",
+			});
+			const next = await foreground.engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/a.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			});
+			expect(next.status).toBe("admitted");
 		},
 		60_000,
 	);

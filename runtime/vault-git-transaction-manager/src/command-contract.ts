@@ -566,6 +566,8 @@ export function parseVaultGitInvocation(
 				summary = parsed;
 				break;
 			}
+			default:
+				throw usageError(`Unhandled declared flag for ${command}: ${flag}`);
 		}
 	}
 	if (command === "commands" && !json) throw usageError("commands requires --json");

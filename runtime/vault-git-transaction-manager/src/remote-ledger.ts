@@ -624,29 +624,48 @@ async function requireAlignedMain(
 			remoteHead: inspected.remoteHead,
 		};
 	}
-	const blocker: VaultGitBlockerId = pushPending
-		? "push_pending"
-		: inspected.alignment === "behind"
-			? "main_behind"
-			: inspected.alignment === "ahead"
-				? "main_ahead"
-				: inspected.alignment === "diverged"
-					? "main_diverged"
-					: "vault_unconfigured";
-	return refusal(
-		blocker,
-		inspected.alignment === "ahead" && !pushPending
-			? "operator_required"
-			: "same_input_unsafe",
-		inspected.alignment === "ahead" && !pushPending
-			? "request_operator_takeover"
-			: "inspect_status",
-		pushPending
-			? "Inspect and recover the pending publication before admission."
-			: inspected.alignment === "ahead"
-				? "Ask an operator to reconcile unpublished main history."
-				: "Inspect main alignment before retrying admission.",
-	);
+	const refusalByAlignment = {
+		aligned: [
+			"vault_unconfigured",
+			"same_input_unsafe",
+			"inspect_status",
+			"Inspect main alignment before retrying admission.",
+		],
+		behind: [
+			"main_behind",
+			"same_input_unsafe",
+			"inspect_status",
+			"Inspect main alignment before retrying admission.",
+		],
+		ahead: [
+			"main_ahead",
+			"operator_required",
+			"request_operator_takeover",
+			"Ask an operator to reconcile unpublished main history.",
+		],
+		diverged: [
+			"main_diverged",
+			"same_input_unsafe",
+			"inspect_status",
+			"Inspect main alignment before retrying admission.",
+		],
+		local_missing: [
+			"vault_unconfigured",
+			"same_input_unsafe",
+			"inspect_status",
+			"Inspect main alignment before retrying admission.",
+		],
+	} as const;
+	const details = pushPending
+		? ([
+				"push_pending",
+				"same_input_unsafe",
+				"inspect_status",
+				"Inspect and recover the pending publication before admission.",
+			] as const)
+		: refusalByAlignment[inspected.alignment];
+	const [blocker, retrySafety, actionId, summary] = details;
+	return refusal(blocker, retrySafety, actionId, summary);
 }
 
 function requireExpectedGeneration(
@@ -902,7 +921,11 @@ function isOwnedPath(value: unknown): value is string {
 	const segments = value.split("/");
 	if (segments[0] === ".git") return false;
 	return segments.every(
-		(segment) => segment.length > 0 && segment !== "." && segment !== "..",
+		(segment) =>
+			segment.length > 0 &&
+			segment !== "." &&
+			segment !== ".." &&
+			segment.toLowerCase() !== ".git",
 	);
 }
 
