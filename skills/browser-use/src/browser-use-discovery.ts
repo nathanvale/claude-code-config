@@ -37,7 +37,10 @@ import type {
 	TargetDiscoveryMode,
 } from "./discovery-model";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
-import { releaseAgentBrowserSession } from "@side-quest/browser-connect/agent-browser-session";
+import {
+	type AdapterReleaseResult,
+	findAdapterDefinition,
+} from "@side-quest/browser-connect/adapters";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
@@ -63,6 +66,7 @@ import {
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import { deriveSessionName } from "./browser-use-adapter-session-lease";
 import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 // ---------------------------------------------------------------------------
@@ -158,9 +162,13 @@ export async function runTargetsList(input: {
 	// the success — carries it, so the top-level run_id always agrees with
 	// binding.run_id.
 	let runId = input.runId;
-	const fail = (failure: TargetDiscoveryFailure) =>
+	const fail = (
+		failure: TargetDiscoveryFailure,
+		release?: AdapterSessionReleaseDebt,
+	) =>
 		emitTargetDiscoveryFailure({
 			failure,
+			release,
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
@@ -291,7 +299,7 @@ export async function runTargetsList(input: {
 		});
 	}
 	const discovery = await discoverPages(runtime, handoff);
-	if (!discovery.ok) return fail(discovery.failure);
+	if (!discovery.ok) return fail(discovery.failure, discovery.release);
 
 	const showUrl = flags["--show-url"] !== undefined;
 	const targetEnvelopeId = targetEnvelopeIdOf({
@@ -318,14 +326,17 @@ export async function runTargetsList(input: {
 	);
 
 	if (candidates.length === 0) {
-		return fail({
-			code: "target_discovery_no_candidates",
-			message:
-				"No Browser Target Candidates were discovered through the attached adapter.",
-			actionId: "open_browser_target",
-			exitCode: TARGET_DISCOVERY_EXIT_CODE,
-			recoverability: "retry",
-		});
+		return fail(
+			{
+				code: "target_discovery_no_candidates",
+				message:
+					"No Browser Target Candidates were discovered through the attached adapter.",
+				actionId: "open_browser_target",
+				exitCode: TARGET_DISCOVERY_EXIT_CODE,
+				recoverability: "retry",
+			},
+			discovery.release,
+		);
 	}
 
 	const binding: TargetDiscoveryBinding = {
@@ -340,7 +351,9 @@ export async function runTargetsList(input: {
 			: {}),
 	};
 
-	const envelope: TargetDiscoveryEnvelope = {
+	const envelope: TargetDiscoveryEnvelope & {
+		release?: AdapterSessionReleaseDebt;
+	} = {
 		contract: BROWSER_USE_TARGETS_CONTRACT_ID,
 		schema_version: BROWSER_USE_TARGETS_SCHEMA_VERSION,
 		mode,
@@ -350,6 +363,7 @@ export async function runTargetsList(input: {
 		binding,
 		candidate_count: candidates.length,
 		candidates,
+		...(discovery.release ? { release: discovery.release } : {}),
 	};
 
 	return emitTargetDiscoverySuccess({
@@ -640,9 +654,40 @@ function isLoopbackHost(hostname: string): boolean {
 
 // --- Live target listing through the attached adapter -----------------------
 
+type AdapterSessionReleaseDebt = Extract<
+	AdapterReleaseResult,
+	{ released: false }
+>;
+
 type DiscoverResult =
-	| { ok: true; pages: RawPage[] }
-	| { ok: false; failure: TargetDiscoveryFailure };
+	| { ok: true; pages: RawPage[]; release?: AdapterSessionReleaseDebt }
+	| {
+			ok: false;
+			failure: TargetDiscoveryFailure;
+			release?: AdapterSessionReleaseDebt;
+	  };
+
+async function releaseAgentBrowserLease(
+	runtime: BrowserUseRuntime,
+	facts: EnvelopeTransportFacts,
+): Promise<AdapterReleaseResult> {
+	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
+	if (!releaseSession) {
+		return {
+			released: false,
+			cause: "command-failed",
+			detail: "The agent-browser adapter has no registered session release mechanic.",
+		};
+	}
+	return releaseSession(
+		{
+			env: runtime.env,
+			resolveExecutable: () => ({ resolved: true, path: facts.probeExecutable }),
+			runCommand: runtime.runCommand,
+		},
+		{ sessionName: deriveSessionName(facts.runId) },
+	);
+}
 
 // The envelope-derived invocation slots discovery needs (R1): the transport
 // gate keys on the adapter id; the spawn carries the pinned binary and the
@@ -766,6 +811,9 @@ async function discoverAgentBrowserPages(
 		};
 	}
 	let result: Awaited<ReturnType<BrowserUseRuntime["runCommand"]>> | undefined;
+	let outcome: DiscoverResult = transportFailure(
+		"The agent-browser tab list call failed.",
+	);
 	try {
 		result = await runtime.runCommand({
 			command: facts.probeExecutable,
@@ -784,7 +832,7 @@ async function discoverAgentBrowserPages(
 		// A throw here is a spawn failure (e.g. the pinned probe is missing):
 		// route to dependency recovery, matching the chrome-devtools
 		// dependency_missing mapping, not a generic retry.
-		return {
+		outcome = {
 			ok: false,
 			failure: {
 				code: "target_discovery_dependency_missing",
@@ -796,57 +844,52 @@ async function discoverAgentBrowserPages(
 			},
 		};
 	}
-	if (result === undefined) {
-		return transportFailure("The agent-browser tab list call failed.");
+	if (result !== undefined) {
+		outcome = (() => {
+			// A timeout has its own taxonomy so the operator can distinguish a slow
+			// endpoint from a hard failure, mirroring the chrome-devtools timeout path.
+			if (result.timedOut === true) {
+				return {
+					ok: false,
+					failure: {
+						code: "target_discovery_transport_timeout",
+						message:
+							"The agent-browser tab list call timed out before the browser targets were listed.",
+						actionId: "inspect_target_discovery_diagnostics",
+						exitCode: TARGET_DISCOVERY_EXIT_CODE,
+						recoverability: "retry",
+					},
+				};
+			}
+			if (result.exitCode !== 0) {
+				return transportFailure("The agent-browser tab list call failed.");
+			}
+			if (result.stdout.trim() === "") return { ok: true, pages: [] };
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(result.stdout);
+			} catch {
+				return transportFailure(
+					"The agent-browser tab list call returned unparsable output.",
+				);
+			}
+			// agent-browser reports a dead/flaky CDP link as exit 0 with
+			// {success:false} (the native lane reads the same envelope as a connection
+			// signal). That is a transport failure, NOT an empty candidate set: letting
+			// it fall through to an empty page list would tell the caller "no targets,
+			// open a tab" when the real repair is to re-mint the handoff. Fail here
+			// before the mapper collapses it to [].
+			if (!agentBrowserEnvelopeSucceeded(parsed)) {
+				return transportFailure(
+					"The agent-browser tab list call reported a failure response.",
+				);
+			}
+			return { ok: true, pages: extractAgentBrowserPages(parsed) };
+		})();
 	}
-	const released = await releaseAgentBrowserSession(runtime, {
-		executablePath: facts.probeExecutable,
-		sessionName: `browser-use-${facts.runId}`,
-	});
-	// A timeout has its own taxonomy so the operator can distinguish a slow
-	// endpoint from a hard failure, mirroring the chrome-devtools timeout path.
-	if (result.timedOut === true) {
-		return {
-			ok: false,
-			failure: {
-				code: "target_discovery_transport_timeout",
-				message:
-					"The agent-browser tab list call timed out before the browser targets were listed.",
-				actionId: "inspect_target_discovery_diagnostics",
-				exitCode: TARGET_DISCOVERY_EXIT_CODE,
-				recoverability: "retry",
-			},
-		};
-	}
-	if (result.exitCode !== 0) {
-		return transportFailure("The agent-browser tab list call failed.");
-	}
-	if (result.stdout.trim() === "") return { ok: true, pages: [] };
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(result.stdout);
-	} catch {
-		return transportFailure(
-			"The agent-browser tab list call returned unparsable output.",
-		);
-	}
-	// agent-browser reports a dead/flaky CDP link as exit 0 with
-	// {success:false} (the native lane reads the same envelope as a connection
-	// signal). That is a transport failure, NOT an empty candidate set: letting
-	// it fall through to an empty page list would tell the caller "no targets,
-	// open a tab" when the real repair is to re-mint the handoff. Fail here
-	// before the mapper collapses it to [].
-	if (!agentBrowserEnvelopeSucceeded(parsed)) {
-		return transportFailure(
-			"The agent-browser tab list call reported a failure response.",
-		);
-	}
-	if (!released.released) {
-		return transportFailure(
-			"The agent-browser tab list call ended without releasing its adapter session.",
-		);
-	}
-	return { ok: true, pages: extractAgentBrowserPages(parsed) };
+
+	const release = await releaseAgentBrowserLease(runtime, facts);
+	return release.released ? outcome : { ...outcome, release };
 }
 
 // True only for a well-formed agent-browser envelope that reports success. A
@@ -1047,6 +1090,7 @@ function emitTargetDiscoverySuccess(input: {
 
 function emitTargetDiscoveryFailure(input: {
 	failure: TargetDiscoveryFailure;
+	release?: AdapterSessionReleaseDebt;
 	outputMode: OutputMode;
 	stdout: CliWriter;
 	stderr: CliWriter;
@@ -1065,7 +1109,11 @@ function emitTargetDiscoveryFailure(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: failure.exitCode,
-			data: { command: "targets-list", result_kind: "browser_targets" },
+			data: {
+				command: "targets-list",
+				result_kind: "browser_targets",
+				...(input.release ? { release: input.release } : {}),
+			},
 			runtime_actions: [targetDiscoveryAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
 			error: createCliRuntimeError({

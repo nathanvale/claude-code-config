@@ -21,6 +21,10 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	type AdapterReleaseResult,
+	findAdapterDefinition,
+} from "@side-quest/browser-connect/adapters";
+import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
 	type BrowserUseCommand,
@@ -75,6 +79,7 @@ import {
 	runScopedKey,
 } from "./browser-use-selection";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import { deriveSessionName } from "./browser-use-adapter-session-lease";
 import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
 
 // ---------------------------------------------------------------------------
@@ -129,8 +134,18 @@ export type ScreenshotArtifact = {
 
 /** Result of adapter-agnostic screenshot-media capture for a bound target. */
 export type BrowserUseScreenshotMediaCaptureResult =
-	| { ok: true; artifact: ScreenshotArtifact; focus: boolean }
-	| { ok: false; code: string; message: string };
+	| {
+			ok: true;
+			artifact: ScreenshotArtifact;
+			focus: boolean;
+			release?: AdapterSessionReleaseDebt;
+	  }
+	| {
+			ok: false;
+			code: string;
+			message: string;
+			release?: AdapterSessionReleaseDebt;
+	  };
 
 /**
  * Capture one PNG through the existing screenshot-media Browser Operation lane.
@@ -191,11 +206,13 @@ export async function captureBrowserUseScreenshotMedia(input: {
 				ok: true,
 				artifact: input.artifact,
 				focus: input.handoff.adapter === "agent-browser",
+				...(captured.release ? { release: captured.release } : {}),
 			}
 		: {
 				ok: false,
 				code: captured.failure.code,
 				message: captured.failure.message,
+				...(captured.release ? { release: captured.release } : {}),
 			};
 }
 
@@ -247,11 +264,16 @@ export async function runOperate(input: {
 	// the success — carries it, so the top-level run_id agrees with
 	// binding.run_id.
 	let runId = input.runId;
-	const fail = (failure: OperationFailure, sideEffects: OperationSideEffects = {}) =>
+	const fail = (
+		failure: OperationFailure,
+		sideEffects: OperationSideEffects = {},
+		release?: AdapterSessionReleaseDebt,
+	) =>
 		emitOperationFailure({
 			failure,
 			command: parsed.command,
 			sideEffects,
+			release,
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
@@ -312,12 +334,17 @@ export async function runOperate(input: {
 		bringToFront,
 	});
 	if (!operationCall.ok) {
-		return fail(operationCall.failure, { focus: operationCall.focus });
+		return fail(
+			operationCall.failure,
+			{ focus: operationCall.focus },
+			operationCall.release,
+		);
 	}
 	if (operationCall.result.exitCode !== 0) {
 		return fail(
 			operationTransportExitedFailure("The adapter Browser Operation call failed."),
 			{ focus: bringToFront },
+			operationCall.release,
 		);
 	}
 
@@ -333,6 +360,7 @@ export async function runOperate(input: {
 		runId,
 		durationMs: input.durationMs(),
 		transportResult: operationCall.result,
+		release: operationCall.release,
 		...(operationInputs.inputs.screenshot
 			? { screenshot: operationInputs.inputs.screenshot }
 			: {}),
@@ -868,8 +896,44 @@ type OperationLaneInput = {
 };
 
 type OperationLaneResult =
-	| { ok: true; result: McporterCommandResult }
-	| { ok: false; failure: OperationFailure; focus: boolean };
+	| {
+			ok: true;
+			result: McporterCommandResult;
+			release?: AdapterSessionReleaseDebt;
+	  }
+	| {
+			ok: false;
+			failure: OperationFailure;
+			focus: boolean;
+			release?: AdapterSessionReleaseDebt;
+	  };
+
+type AdapterSessionReleaseDebt = Extract<
+	AdapterReleaseResult,
+	{ released: false }
+>;
+
+async function releaseAgentBrowserOperationSession(
+	runtime: BrowserUseRuntime,
+	handoff: HandoffFacts,
+): Promise<AdapterReleaseResult> {
+	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
+	if (!releaseSession) {
+		return {
+			released: false,
+			cause: "command-failed",
+			detail: "The agent-browser adapter has no registered session release mechanic.",
+		};
+	}
+	return releaseSession(
+		{
+			env: runtime.env,
+			resolveExecutable: () => ({ resolved: true, path: handoff.probeExecutable }),
+			runCommand: runtime.runCommand,
+		},
+		{ sessionName: deriveSessionName(handoff.runId) },
+	);
+}
 
 async function runOperationLane(
 	input: OperationLaneInput,
@@ -915,6 +979,19 @@ async function runAgentBrowserOperation(
 			focus: false,
 		};
 	}
+	const operationOutcome = await runAgentBrowserOperationSession(input);
+	const release = await releaseAgentBrowserOperationSession(
+		input.runtime,
+		input.handoff,
+	);
+	return release.released
+		? operationOutcome
+		: { ...operationOutcome, release };
+}
+
+async function runAgentBrowserOperationSession(
+	input: OperationLaneInput,
+): Promise<OperationLaneResult> {
 	const baseArgs = [
 		"--cdp",
 		input.handoff.endpointWs,
@@ -1232,6 +1309,7 @@ function emitOperationFailure(input: {
 	failure: OperationFailure;
 	command: BrowserUseCommand;
 	sideEffects: OperationSideEffects;
+	release?: AdapterSessionReleaseDebt;
 	outputMode: OutputMode;
 	stdout: CliWriter;
 	stderr: CliWriter;
@@ -1254,6 +1332,7 @@ function emitOperationFailure(input: {
 				command: input.command,
 				result_kind: "browser_operation",
 				side_effects: { focus: input.sideEffects.focus === true },
+				...(input.release ? { release: input.release } : {}),
 			},
 			runtime_actions: [operationAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
@@ -1284,6 +1363,7 @@ function emitOperationSuccess(input: {
 	runId: string;
 	durationMs: number;
 	transportResult: McporterCommandResult;
+	release?: AdapterSessionReleaseDebt;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 	focusSideEffect: boolean;
@@ -1333,6 +1413,7 @@ function emitOperationSuccess(input: {
 				side_effects: {
 					focus: input.focusSideEffect,
 				},
+				...(input.release ? { release: input.release } : {}),
 				...operationPayload(input),
 			},
 			runtime_actions: [operationAction("inspect_operation_result")],
