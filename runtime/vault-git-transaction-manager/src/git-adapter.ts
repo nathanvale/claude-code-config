@@ -364,6 +364,19 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 				});
 				const stdout: Buffer[] = [];
 				const stderr: Buffer[] = [];
+				let stdoutBytes = 0;
+				let stderrBytes = 0;
+				const capture = (
+					sink: Buffer[],
+					chunk: Buffer,
+					capturedBytes: number,
+				): number => {
+					const remaining = MAX_CAPTURE_BYTES - capturedBytes;
+					if (remaining <= 0) return capturedBytes;
+					const accepted = chunk.subarray(0, remaining);
+					sink.push(accepted);
+					return capturedBytes + accepted.length;
+				};
 				let timedOut = false;
 				let settled = false;
 				let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -380,10 +393,14 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 						timedOut,
 					});
 				};
-				child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-				child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+				child.stdout.on("data", (chunk: Buffer) => {
+					stdoutBytes = capture(stdout, chunk, stdoutBytes);
+				});
+				child.stderr.on("data", (chunk: Buffer) => {
+					stderrBytes = capture(stderr, chunk, stderrBytes);
+				});
 				child.on("error", (error) => {
-					stderr.push(Buffer.from(error.message));
+					stderrBytes = capture(stderr, Buffer.from(error.message), stderrBytes);
 					finish(null);
 				});
 				child.on("close", finish);
@@ -407,6 +424,8 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 		},
 	};
 }
+
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Ambient Git redirection variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*,

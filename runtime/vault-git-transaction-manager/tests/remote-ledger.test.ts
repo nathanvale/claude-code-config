@@ -324,6 +324,19 @@ describe("remote lease ledger", () => {
 	test("refuses unavailable remotes, malformed ledgers, and unsafe destinations", async () => {
 		const fixture = await createFixture();
 		const engine = createEngine(fixture.cloneA, "2026-08-09T00:00:00.000Z");
+		for (const ownedPath of ["notes/.git/config", "notes/.GIT/config"]) {
+			await expect(
+				acquireRemoteLease(engine, {
+					remote: "origin",
+					expectedGeneration: null,
+					actor: "agent-a",
+					host: "laptop",
+					event: "note_created",
+					ownedPaths: [ownedPath],
+					leaseDurationMs: 60_000,
+				}),
+			).rejects.toThrow("repository-relative leaf paths");
+		}
 		const unavailable = await acquireRemoteLease(engine, {
 			remote: join(fixture.root, "missing.git"),
 			expectedGeneration: null,

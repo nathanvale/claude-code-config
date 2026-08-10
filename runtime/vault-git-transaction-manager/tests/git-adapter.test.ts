@@ -291,6 +291,23 @@ describe("git adapter process environment", () => {
 });
 
 describe("node process port", () => {
+	test("caps stdout and stderr capture independently", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-capture-cap-"));
+		fixtureRoots.push(root);
+		const result = await createNodeProcessPort().run({
+			command: process.execPath,
+			args: [
+				"-e",
+				'process.stdout.write("o".repeat(9 * 1024 * 1024)); process.stderr.write("e".repeat(9 * 1024 * 1024));',
+			],
+			cwd: root,
+			timeoutMs: 10_000,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(Buffer.byteLength(result.stdout)).toBe(8 * 1024 * 1024);
+		expect(Buffer.byteLength(result.stderr)).toBe(8 * 1024 * 1024);
+	});
+
 	test("survives a child that exits before consuming stdin", async () => {
 		const root = await mkdtemp(join(tmpdir(), "vault-git-epipe-"));
 		fixtureRoots.push(root);

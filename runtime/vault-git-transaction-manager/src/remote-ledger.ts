@@ -816,7 +816,11 @@ function isOwnedPath(value: unknown): value is string {
 		return false;
 	const segments = value.split("/");
 	return segments.every(
-		(segment) => segment.length > 0 && segment !== "." && segment !== "..",
+		(segment) =>
+			segment.length > 0 &&
+			segment !== "." &&
+			segment !== ".." &&
+			segment.toLowerCase() !== ".git",
 	);
 }
 
