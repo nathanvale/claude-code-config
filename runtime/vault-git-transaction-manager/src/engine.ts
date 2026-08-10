@@ -104,6 +104,17 @@ export interface VaultGitEngineNextAction {
 	readonly summary: string;
 }
 
+/** Optional non-mutating transaction selector for one inspection pass. */
+export interface VaultGitInspectInput {
+	/**
+	 * Refuse when the current receipt is bound to another transaction.
+	 * Mirrors doctor's correlation handling: receipts persisted before lease
+	 * acknowledgement carry no transaction id, so mismatch enforcement applies
+	 * only once the receipt binds one.
+	 */
+	readonly transactionId?: string;
+}
+
 /** Capability-free transaction-engine result. */
 export interface VaultGitEngineResult {
 	readonly status:
@@ -150,7 +161,7 @@ export interface VaultGitTransactionEngine {
 	/** Request owner-only completion checks for the active transaction. */
 	complete(input: VaultGitOwnerInput): Promise<VaultGitEngineResult>;
 	/** Classify current transaction state without mutation. */
-	inspect(): Promise<VaultGitEngineResult>;
+	inspect(input?: VaultGitInspectInput): Promise<VaultGitEngineResult>;
 	/** Record one owner-only durable phase transition. */
 	recordPhase(input: VaultGitRecordPhaseInput): Promise<VaultGitEngineResult>;
 	/** Reconcile receipt, local, and remote evidence without canonical mutation. */
@@ -618,10 +629,17 @@ export function createVaultGitTransactionEngine(
 			return result("advanced", "push_pending", publicationReceipt, "owner", "partial", "run_doctor", "Run doctor to reconcile exact remote refs before any repair.", "push_pending");
 		},
 
-		async inspect() {
+		async inspect(input = {}) {
 			const loaded = await loadReceipt();
 			if (loaded === null) return inspected("absent", "blocked", "begin_transaction", "Begin one transaction before canonical writes.");
 			if ("status" in loaded) return loaded;
+			if (
+				input.transactionId !== undefined &&
+				loaded.transactionId !== null &&
+				input.transactionId !== loaded.transactionId
+			) {
+				return refusal("human_required", loaded.phase, "transaction_mismatch", "inspect_status", "Inspect the active transaction id.");
+			}
 			// Terminal phases are durable local facts; a remote failure must
 			// never downgrade them to "unknown".
 			const phaseState = stateForPhase(loaded.phase);

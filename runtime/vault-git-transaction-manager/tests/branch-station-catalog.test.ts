@@ -15,7 +15,7 @@ import {
 const stations: readonly BranchStation[] = vaultGitBranchStationCatalog;
 
 describe("vault-git Branch Station Catalog", () => {
-	test("declares every U1 read, discovery, refusal, and usage station", () => {
+	test("declares every complete CLI read, mutation, refusal, and usage station", () => {
 		expect(VAULT_GIT_STATION_IDS).toEqual([
 			"status.dashboard",
 			"status.read_only",
@@ -23,10 +23,13 @@ describe("vault-git Branch Station Catalog", () => {
 			"preview.read_only",
 			"doctor.read_only",
 			"commands.discovery",
-			"begin.unavailable",
-			"join.unavailable",
-			"complete.unavailable",
-			"repair.unavailable",
+			"begin.admitted",
+			"join.joined",
+			"complete.completed",
+			"complete.join_role_refused",
+			"repair.action_required",
+			"repair.join_role_refused",
+			"repair.stale_takeover_usage",
 			"tidy.invalid_usage",
 			"tidy.unavailable",
 			"janitor.unavailable",
@@ -75,17 +78,13 @@ describe("vault-git Branch Station Catalog", () => {
 		expect(projectVaultGitStationMap(evidence).findings).toEqual([]);
 	});
 
-	test("keeps every mutating station at a no-write unavailable outcome", () => {
-		const mutating = stations.filter((station) =>
-			["begin", "join", "complete", "repair", "tidy", "janitor"].includes(
-				station.command,
-			),
+	test("keeps only U7 worker stations at runtime_unavailable", () => {
+		const unavailable = stations.filter(
+			(station) => station.expectedErrorCode === "runtime_unavailable",
 		);
-		for (const station of mutating) {
-			if (station.intent === "usage_failure") continue;
-			expect(station.expectedEnvelopeStatus).toBe("error");
-			expect(station.expectedErrorCode).toBe("runtime_unavailable");
-			expect(station.mutationExpectation).toBe("refuses_before_state_access");
-		}
+		expect(unavailable.map((station) => station.id)).toEqual([
+			"tidy.unavailable",
+			"janitor.unavailable",
+		]);
 	});
 });

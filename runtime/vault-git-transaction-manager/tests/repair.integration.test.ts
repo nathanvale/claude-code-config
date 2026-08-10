@@ -361,6 +361,19 @@ describe("deterministic push_pending repair", () => {
 		});
 		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
 
+		// R26a: reconcile-quarantine mutates quarantine state, so it refuses
+		// without the owner capability before reading any evidence.
+		const missingCapability = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+		});
+		expect(missingCapability).toMatchObject({
+			status: "refused",
+			blocker: "capability_invalid",
+			changedState: "none",
+		});
+
 		writeFileSync(
 			join(fixture.clone, "candidate.md"),
 			"tampered after takeover\n",
@@ -369,6 +382,7 @@ describe("deterministic push_pending repair", () => {
 			action: "reconcile-quarantine",
 			transactionId: fixture.transactionId,
 			remote: "origin",
+			capability: fixture.ownerCapability,
 		});
 		expect(refusedReconcile).toMatchObject({
 			status: "refused",
@@ -386,6 +400,7 @@ describe("deterministic push_pending repair", () => {
 			action: "reconcile-quarantine",
 			transactionId: fixture.transactionId,
 			remote: "origin",
+			capability: fixture.ownerCapability,
 		});
 		expect(reconciled).toMatchObject({
 			status: "repaired",

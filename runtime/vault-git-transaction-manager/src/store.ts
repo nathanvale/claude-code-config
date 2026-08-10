@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
+import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import {
 	chmod,
 	link,
@@ -11,6 +12,7 @@ import {
 	rename,
 	unlink,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 
@@ -280,6 +282,22 @@ export interface VaultGitCapabilityLaunchRequest {
 	readonly args: readonly string[];
 	readonly cwd: string;
 	readonly timeoutMs: number;
+	/** Non-secret child environment. Capability bytes are never inserted here. */
+	readonly env?: NodeJS.ProcessEnv;
+	/** Inherited descriptor number. @defaultValue 3 */
+	readonly descriptor?: number;
+}
+
+/** Internal stale-takeover token launch request. */
+export interface VaultGitDoctorTokenLaunchRequest {
+	readonly transactionId: string;
+	readonly ledgerGeneration: string;
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly cwd: string;
+	readonly timeoutMs: number;
+	/** Non-secret child environment. Doctor token bytes are never inserted here. */
+	readonly env?: NodeJS.ProcessEnv;
 	/** Inherited descriptor number. @defaultValue 3 */
 	readonly descriptor?: number;
 }
@@ -599,6 +617,40 @@ export async function launchCapabilityProcess(
 	store: VaultGitReceiptStore,
 	request: VaultGitCapabilityLaunchRequest,
 ): Promise<VaultGitCapabilityLaunchResult> {
+	const capability = await store.readCapability(request.receiptId, request.role);
+	return launchPrivateBytesProcess(capability, request);
+}
+
+/**
+ * Launch stale-takeover repair with a single-use private doctor token on an FD.
+ *
+ * @param store - Private receipt and doctor-token store
+ * @param request - Fresh proof selector and bounded subprocess request
+ * @returns Captured ordinary output and exit state
+ * @throws {Error} When proof material is absent or descriptor delivery fails
+ */
+export async function launchDoctorTokenProcess(
+	store: VaultGitReceiptStore,
+	request: VaultGitDoctorTokenLaunchRequest,
+): Promise<VaultGitCapabilityLaunchResult> {
+	const token = await store.readDoctorToken(
+		request.transactionId,
+		request.ledgerGeneration,
+	);
+	return launchPrivateBytesProcess(token, request);
+}
+
+async function launchPrivateBytesProcess(
+	privateBytes: Uint8Array,
+	request: {
+		readonly command: string;
+		readonly args: readonly string[];
+		readonly cwd: string;
+		readonly timeoutMs: number;
+		readonly env?: NodeJS.ProcessEnv;
+		readonly descriptor?: number;
+	},
+): Promise<VaultGitCapabilityLaunchResult> {
 	const descriptor = request.descriptor ?? 3;
 	if (!Number.isSafeInteger(descriptor) || descriptor < 3 || descriptor > 64) {
 		throw new Error("capability descriptor must be between 3 and 64");
@@ -606,23 +658,66 @@ export async function launchCapabilityProcess(
 	if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs <= 0) {
 		throw new Error("capability launch timeout must be positive");
 	}
-	const capability = await store.readCapability(request.receiptId, request.role);
-	// Only the requested capability descriptor is piped; unread intermediate
-	// pipes would block a child that writes to them.
-	const stdio: Array<"ignore" | "pipe"> = ["ignore", "pipe", "pipe"];
+	// Deliver capability bytes on an inherited descriptor backed by an
+	// owner-only unlinked temp file. Bun's socket-backed extra "pipe" stdio
+	// entries intermittently fail (spawn ENOENT) or hang; a regular-file
+	// descriptor has neither failure mode, and the bytes never appear in
+	// argv, environment, or ordinary output. Intermediate slots stay "ignore"
+	// so an unread pipe cannot block a child that writes to them.
+	const privateDir = mkdtempSync(join(tmpdir(), "vault-git-cap-"));
+	const privatePath = join(privateDir, "material");
+	let capabilityFd: number | undefined;
+	try {
+		writeFileSync(privatePath, privateBytes, { mode: 0o600 });
+		capabilityFd = openSync(privatePath, "r");
+	} catch (error) {
+		rmSync(privateDir, { recursive: true, force: true });
+		throw new Error("capability delivery failed", { cause: error });
+	}
+	const stdio: Array<"ignore" | "pipe" | number> = ["ignore", "pipe", "pipe"];
 	while (stdio.length < descriptor) stdio.push("ignore");
-	stdio.push("pipe");
+	stdio.push(capabilityFd);
 	return new Promise((resolve, reject) => {
+		const openedFd = capabilityFd as number;
+		const releasePrivateMaterial = (): void => {
+			try {
+				closeSync(openedFd);
+			} catch {
+				// Already closed; descriptor release is idempotent here.
+			}
+			rmSync(privateDir, { recursive: true, force: true });
+		};
+		// The child runs as its own process-group leader so a timeout kill
+		// reaches spawned grandchildren (git subprocesses) instead of orphaning
+		// them mid-transaction.
 		const child = spawn(
 			request.command,
 			[...request.args, "--capability-fd", String(descriptor)],
-			{ cwd: request.cwd, stdio },
+			{ cwd: request.cwd, env: request.env ?? process.env, stdio, detached: true },
 		);
+		// The child inherited its own duplicate at spawn; the parent copy and
+		// the on-disk bytes are released immediately.
+		releasePrivateMaterial();
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
 		let timedOut = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		const killProcessGroup = (): void => {
+			const pid = child.pid;
+			if (pid !== undefined) {
+				try {
+					process.kill(-pid, "SIGKILL");
+				} catch {
+					// ESRCH: the process group already exited.
+				}
+			}
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// Already exited; the direct kill is idempotent here.
+			}
+		};
 		const finish = (result: VaultGitCapabilityLaunchResult): void => {
 			if (settled) return;
 			settled = true;
@@ -633,28 +728,16 @@ export async function launchCapabilityProcess(
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			child.kill("SIGKILL");
+			killProcessGroup();
 			reject(error);
 		};
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => { stdout += chunk; });
 		child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
-		const capabilityPipe = child.stdio[descriptor];
-		if (!capabilityPipe || !("write" in capabilityPipe)) {
-			fail(new Error("capability descriptor unavailable"));
-			return;
-		}
-		// The error listener must exist before end(): a child that exits without
-		// reading the descriptor raises EPIPE, which would otherwise crash the
-		// process as an unhandled stream error.
-		capabilityPipe.on("error", (error) => {
-			fail(new Error("capability delivery failed", { cause: error }));
-		});
-		capabilityPipe.end(capability);
 		timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			killProcessGroup();
 		}, request.timeoutMs);
 		child.once("error", (error) => {
 			fail(error instanceof Error ? error : new Error(String(error)));

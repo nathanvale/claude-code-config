@@ -152,11 +152,19 @@ export async function repairVaultGitTransaction(
 		return refused(input.action, "human_required", "closed", "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
 	}
 
+	if (input.action === "stale-lease-takeover") {
+		// The single-use private doctor token is the takeover authority; the
+		// executor validates and burns it before any mutation.
+		return staleLeaseTakeover(options, input, receipt);
+	}
+	// R26a: only the owner capability may complete, repair, or release. Every
+	// remaining action can mutate receipt or quarantine state, so owner
+	// authorization precedes dispatch, including close-verified and
+	// reconcile-quarantine.
+	const authorization = await authorizeOwner(options, receipt, input.capability);
+	if (authorization) return { ...authorization, action: input.action };
 	if (input.action === "reconcile-quarantine") {
 		return reconcileQuarantine(options, input, receipt);
-	}
-	if (input.action === "stale-lease-takeover") {
-		return staleLeaseTakeover(options, input, receipt);
 	}
 
 	const doctor = await diagnoseVaultGitTransaction(options, {
@@ -165,10 +173,6 @@ export async function repairVaultGitTransaction(
 	});
 	if (doctor.repairAction !== input.action) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
-	}
-	if (input.action !== "close-verified") {
-		const authorization = await authorizeOwner(options, receipt, input.capability);
-		if (authorization) return { ...authorization, action: input.action };
 	}
 
 	if (input.action === "close-verified") {

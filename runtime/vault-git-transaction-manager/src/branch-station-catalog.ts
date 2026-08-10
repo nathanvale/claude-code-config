@@ -13,7 +13,7 @@ import {
 const CATALOG_PATH =
 	"runtime/vault-git-transaction-manager/src/branch-station-catalog.ts";
 
-/** Stable U1 Branch Station ids. */
+/** Stable complete-CLI Branch Station ids. */
 export const VAULT_GIT_STATION_IDS = [
 	"status.dashboard",
 	"status.read_only",
@@ -21,30 +21,36 @@ export const VAULT_GIT_STATION_IDS = [
 	"preview.read_only",
 	"doctor.read_only",
 	"commands.discovery",
-	"begin.unavailable",
-	"join.unavailable",
-	"complete.unavailable",
-	"repair.unavailable",
+	"begin.admitted",
+	"join.joined",
+	"complete.completed",
+	"complete.join_role_refused",
+	"repair.action_required",
+	"repair.join_role_refused",
+	"repair.stale_takeover_usage",
 	"tidy.invalid_usage",
 	"tidy.unavailable",
 	"janitor.unavailable",
 ] as const;
 
-/** Package-owned U1 Branch Station Catalog. */
+/** Package-owned complete-CLI Branch Station Catalog. */
 export const vaultGitBranchStationCatalog = [
-	station("status.dashboard", "status", "success", "bare invocation renders the bounded read-only dashboard", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
-	station("status.read_only", "status", "success", "explicit status returns read-only lifecycle state", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
-	station("status.invalid_usage", "status", "usage_failure", "unknown command or unsupported flag fails before state access", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
-	station("preview.read_only", "preview", "success", "preview reports the unavailable scaffold without authority", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
-	station("doctor.read_only", "doctor", "success", "doctor reports the unavailable scaffold without repair", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
+	station("status.dashboard", "status", "success", "bare invocation renders one bounded configured dashboard action", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
+	station("status.read_only", "status", "success", "explicit status inspects manager state without mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
+	station("status.invalid_usage", "status", "usage_failure", "unknown command or foreign flag fails before composition", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("preview.read_only", "preview", "success", "preview uses the same read-only engine inspection", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
+	station("doctor.read_only", "doctor", "success", "doctor classifies evidence without canonical mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("commands.discovery", "commands", "success", "machine discovery projects the live command contracts", 0, "ok", VAULT_GIT_COMMANDS_CONTRACT_ID, "read_only_projection"),
-	station("begin.unavailable", "begin", "refusal", "transaction admission runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
-	station("join.unavailable", "join", "refusal", "nested join runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
-	station("complete.unavailable", "complete", "refusal", "owner completion runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
-	station("repair.unavailable", "repair", "refusal", "deterministic repair runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
+	station("begin.admitted", "begin", "success", "aligned main and absent ledger admit one owner transaction", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "remote_lease_and_local_receipt", undefined, "complete_transaction"),
+	station("join.joined", "join", "success", "join capability extends owned paths without owner authority", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "local_receipt_only", undefined, "continue_outer_transaction"),
+	station("complete.completed", "complete", "success", "owner capability checks commits and atomically closes", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "atomic_remote_close", undefined, "none"),
+	station("complete.join_role_refused", "complete", "refusal", "join capability cannot complete or release", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_completion", "capability_role_mismatch", "use_owner_capability"),
+	station("repair.action_required", "repair", "usage_failure", "repair without an engine-owned action fails usage", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("repair.join_role_refused", "repair", "refusal", "join capability cannot execute an admitted repair", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_repair", "capability_role_mismatch", "use_owner_capability"),
+	station("repair.stale_takeover_usage", "repair", "usage_failure", "stale takeover requires explicit prior-writer attestation", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
 	station("tidy.invalid_usage", "tidy", "usage_failure", "tidy omits the exact now subcommand", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
-	station("tidy.unavailable", "tidy", "refusal", "immediate hygiene worker runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
-	station("janitor.unavailable", "janitor", "refusal", "Janitor runtime is not implemented", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_state_access", "runtime_unavailable", "inspect_status"),
+	station("tidy.unavailable", "tidy", "refusal", "immediate worker remains gated on the U7 policy owner", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_worker_start", "runtime_unavailable", "wait_for_runtime"),
+	station("janitor.unavailable", "janitor", "refusal", "Janitor invocation remains gated on the U7 policy owner", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_worker_start", "runtime_unavailable", "wait_for_runtime"),
 ] as const satisfies readonly BranchStation[];
 
 /** Find catalog drift against live command discovery. */

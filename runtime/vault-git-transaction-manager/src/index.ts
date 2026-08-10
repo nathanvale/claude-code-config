@@ -10,5 +10,11 @@ export * from "./repair.ts";
 export * from "./command-contract.ts";
 /** Package-owned Branch Station Catalog. */
 export * from "./branch-station-catalog.ts";
-/** CLI entry point. */
-export { main, renderVaultGitHelp } from "./cli.ts";
+/** CLI entry point and production composition. */
+export {
+	createVaultGitCliComposition,
+	main,
+	renderVaultGitHelp,
+	type VaultGitCliComposition,
+	type VaultGitCliCompositionInput,
+} from "./cli.ts";

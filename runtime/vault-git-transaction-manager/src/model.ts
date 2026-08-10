@@ -333,6 +333,7 @@ export const VAULT_GIT_RESULT_OUTCOMES = [
 	"invalid_usage",
 	"admitted",
 	"joined",
+	"advanced",
 	"completed",
 	"repaired",
 	"refused",
@@ -340,17 +341,6 @@ export const VAULT_GIT_RESULT_OUTCOMES = [
 
 /** One package-owned lifecycle result outcome. */
 export type VaultGitResultOutcome = (typeof VAULT_GIT_RESULT_OUTCOMES)[number];
-
-/** Stable next-action ids emitted by the U1 command surface. */
-export const VAULT_GIT_NEXT_ACTION_IDS = [
-	"wait_for_runtime",
-	"inspect_status",
-	"inspect_commands",
-	"change_input",
-] as const;
-
-/** One safe continuation selected for the current result. */
-export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];
 
 /** Stable next-action ids emitted by the U3 transaction engine. */
 export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
@@ -371,6 +361,17 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 /** One engine-emitted safe continuation id. */
 export type VaultGitEngineNextActionId =
 	(typeof VAULT_GIT_ENGINE_NEXT_ACTION_IDS)[number];
+
+/** Stable next-action ids emitted by the complete CLI and transaction engine. */
+export const VAULT_GIT_NEXT_ACTION_IDS = [
+	...VAULT_GIT_ENGINE_NEXT_ACTION_IDS,
+	"wait_for_runtime",
+	"inspect_commands",
+	"change_input",
+] as const;
+
+/** One safe continuation selected for the current result. */
+export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];
 
 /** Exact remote branch used as the append-only lease sequencer. */
 export const VAULT_GIT_LEDGER_REF =
@@ -411,6 +412,14 @@ export interface VaultGitLifecycleResultPayload {
 	readonly retry_safety: VaultGitRetrySafety;
 	/** Stable blockers with no private evidence or paths. */
 	readonly blockers: readonly VaultGitBlockerId[];
+	/** Public transaction correlation when one exists. */
+	readonly transaction_id?: string;
+	/** Read-side transaction state when classification produced one. */
+	readonly transaction_state?: VaultGitTransactionState;
+	/** Exact doctor-admitted repair action when one exists. */
+	readonly repair_action?: VaultGitRepairAction;
+	/** Closed doctor finding when the doctor command produced one. */
+	readonly finding?: VaultGitDoctorFinding;
 	/** Exactly one next safe action. */
 	readonly next_action: VaultGitNextAction;
 }
