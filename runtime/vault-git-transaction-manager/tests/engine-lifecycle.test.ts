@@ -161,10 +161,38 @@ describe("transaction engine lifecycle", () => {
 		fixture.remote.failReads = false;
 		fixture.remote.generation = GENERATION;
 
-		for (const [phase, expected] of [["push_pending", "push_pending"], ["repairable", "repairable"], ["human_required", "human_required"], ["closed", "closed"]] as const) {
+		for (const [phase, expected] of [["push_pending", "push_pending"], ["repairable", "repairable"], ["human_required", "human_required"]] as const) {
 			await fixture.engine.recordPhase({ phase, transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "inspect_status" });
 			expect((await fixture.engine.inspect()).state).toBe(expected);
 		}
+	});
+
+	test("recordPhase refuses closed because it carries no atomic-close proof", async () => {
+		const fixture = await engineFixture();
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(await fixture.engine.recordPhase({ phase: "closed", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "none" })).toMatchObject({
+			status: "refused",
+			blocker: "receipt_conflict",
+			nextAction: { id: "inspect_status" },
+		});
+		// The receipt must stay non-terminal so doctor and repair can still
+		// reconcile it, and the remote lease must stay owned rather than
+		// stranded behind a local receipt that claims to be finished.
+		const loaded = await fixture.store.load();
+		if (loaded.status !== "loaded") throw new Error("receipt missing");
+		expect(loaded.receipt.phase).toBe("writing");
+		expect(loaded.receipt.commitId ?? null).toBeNull();
+		expect((await fixture.engine.inspect()).state).toBe("active");
+
+		// The refusal precedes fencing, so an unreachable remote still reports
+		// the unsupported transition rather than a transport or lease blocker.
+		fixture.remote.failReads = true;
+		expect(await fixture.engine.recordPhase({ phase: "closed", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "none" })).toMatchObject({
+			status: "refused",
+			blocker: "receipt_conflict",
+		});
 	});
 
 	test("recordPhase refuses the join capability with a role mismatch", async () => {
@@ -210,7 +238,9 @@ describe("transaction engine lifecycle", () => {
 		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
 		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
 		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
-		for (const phase of ["push_pending", "repairable", "human_required", "closed"] as const) {
+		// `closed` is excluded deliberately: it is refused here because it would
+		// need the atomic-close evidence this transition never carries.
+		for (const phase of ["push_pending", "repairable", "human_required"] as const) {
 			const recorded = await fixture.engine.recordPhase({ phase, transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "inspect_status" });
 			expect(recorded.status).toBe("advanced");
 			const loaded = await fixture.store.load();
@@ -253,11 +283,11 @@ describe("transaction engine lifecycle", () => {
 		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
 		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
 		const joinCapability = await fixture.store.readCapability(begun.receiptId, "join");
-		await fixture.engine.recordPhase({ phase: "closed", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "none" });
+		await fixture.engine.recordPhase({ phase: "human_required", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "request_operator_review" });
 		expect(await fixture.engine.join({ transactionId: begun.transactionId, requestedPaths: ["notes/child.md"], remote: "origin", capability: joinCapability })).toMatchObject({
 			status: "refused",
 			blocker: "receipt_conflict",
-			phase: "closed",
+			phase: "human_required",
 			nextAction: { id: "inspect_status" },
 		});
 	});
@@ -323,9 +353,9 @@ describe("transaction engine lifecycle", () => {
 		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
 		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
 		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
-		await fixture.engine.recordPhase({ phase: "closed", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "none" });
+		await fixture.engine.recordPhase({ phase: "human_required", transactionId: begun.transactionId, remote: "origin", capability: owner, nextSafeAction: "request_operator_review" });
 		fixture.remote.failReads = true;
-		expect(await fixture.engine.inspect()).toMatchObject({ state: "closed", phase: "closed" });
+		expect(await fixture.engine.inspect()).toMatchObject({ state: "human_required", phase: "human_required" });
 	});
 });
 
