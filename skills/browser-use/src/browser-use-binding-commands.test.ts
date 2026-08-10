@@ -93,6 +93,7 @@ describe("auth binding lifecycle CLI", () => {
 		const catalog = createBindingCatalog({
 			fs,
 			root: `${opened.paths.resolution.roots.state}/binding-catalog`,
+			now: () => grant.issued_at_epoch_ms,
 			selectionGrantVerifier: selectionVerifier,
 		});
 		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });

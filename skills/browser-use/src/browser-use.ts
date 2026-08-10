@@ -127,6 +127,7 @@ import {
 	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
 import {
+	type BrowserUseBindingSelectionGrant,
 	type BrowserUseBindingSelectionRequest,
 	bindingSelectionCandidateDigestOf,
 } from "./browser-use-binding-selection";
@@ -217,6 +218,7 @@ import type {
 	BrowserUseAuthContext,
 	BrowserUseBindingResolutionKey,
 	BrowserUseItemBinding,
+	BrowserUseVaultItemEvidence,
 } from "./browser-use-auth-bindings";
 import {
 	isBrowserUseAuthContext,
@@ -8670,8 +8672,8 @@ function selectionBlockedEvaluation(code: string): AuthReadinessEvaluation {
 
 function selectionGrantMatchesLiveItem(
 	request: BrowserUseBindingSelectionRequest,
-	item: import("./browser-use-auth-bindings").BrowserUseVaultItemEvidence,
-	grant: import("./browser-use-binding-selection").BrowserUseBindingSelectionGrant,
+	item: BrowserUseVaultItemEvidence,
+	grant: BrowserUseBindingSelectionGrant,
 ): boolean {
 	return (
 		grant.resolution_key.binding_ref === request.resolution_key.binding_ref &&
@@ -8737,6 +8739,7 @@ async function evaluateBindingSelection(
 		root: catalogRoot,
 		verifier: input.runtime.bindingApprovalReceiptVerifier,
 		selectionGrantVerifier: verifier,
+		now: input.runtime.now,
 	});
 	if ((await input.runtime.platformFs.lstat(catalogRoot)) !== undefined) {
 		const standing = await catalog.resolve({

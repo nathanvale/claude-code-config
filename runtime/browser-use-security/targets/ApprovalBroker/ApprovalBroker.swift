@@ -16,6 +16,7 @@
 // Secure Enclave key and LAContext presence check require a signed binary.
 
 import CryptoKit
+import Darwin
 import Foundation
 import LocalAuthentication
 import AppKit
@@ -318,6 +319,44 @@ private struct AdmittedSigningKey {
 }
 
 private enum ApprovalBrokerCommandSupport {
+    private static let embeddedSupervisorName = "browser-use-op-supervisor"
+    private static let embeddedSupervisorRequirement =
+        "anchor apple generic and identifier \"com.nathanvow.browser-use-environment-auth.supervisor\" "
+        + "and certificate leaf[subject.OU] = \"6428AK7884\""
+    private static let selectionPipeByteLimit = 1_048_576
+    private static let selectionPipeReadSize = 64 * 1_024
+
+    private final class CappedPipeCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes = Data()
+        private var exceededLimit = false
+        private var readFailed = false
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            let remaining = max(0, selectionPipeByteLimit - bytes.count)
+            if chunk.count > remaining {
+                exceededLimit = true
+            }
+            if remaining > 0 {
+                bytes.append(contentsOf: chunk.prefix(remaining))
+            }
+        }
+
+        func markReadFailed() {
+            lock.lock()
+            readFailed = true
+            lock.unlock()
+        }
+
+        func snapshot() -> (bytes: Data, isUsable: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (bytes, !exceededLimit && !readFailed)
+        }
+    }
+
     private static let humanIdentityBoundFactKeys: Set<String> = [
         "service_id",
         "auth_context",
@@ -838,6 +877,75 @@ private enum ApprovalBrokerCommandSupport {
         return path
     }
 
+    /// Admit only the signed supervisor nested inside this exact broker bundle.
+    ///
+    /// The request-carried path is evidence, not authority. The process target
+    /// comes from `Bundle.main`, and its Apple-issued signing identity is pinned
+    /// before any private picker arguments are dispatched.
+    private static func admittedEmbeddedSupervisor(
+        callerPath: String
+    ) throws -> URL {
+        let expectedURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Helpers", isDirectory: true)
+            .appendingPathComponent(embeddedSupervisorName, isDirectory: false)
+            .standardizedFileURL
+        guard callerPath == expectedURL.path else {
+            throw PromotionCommandError.invalidInput
+        }
+
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(expectedURL as CFURL, [], &staticCode) == errSecSuccess,
+              let code = staticCode
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            embeddedSupervisorRequirement as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess,
+              let requirement
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        guard SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess else {
+            throw PromotionCommandError.invalidInput
+        }
+        return expectedURL
+    }
+
+    private static func startDraining(
+        _ handle: FileHandle,
+        into capture: CappedPipeCapture,
+        group: DispatchGroup
+    ) {
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            do {
+                while let chunk = try handle.read(upToCount: selectionPipeReadSize),
+                      !chunk.isEmpty {
+                    capture.append(chunk)
+                }
+            } catch {
+                capture.markReadFailed()
+            }
+        }
+    }
+
+    private static func stopTimedOutProcess(
+        _ process: Process,
+        completed: DispatchSemaphore
+    ) {
+        process.terminate()
+        if completed.wait(timeout: .now() + .seconds(5)) == .timedOut {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            _ = completed.wait(timeout: .now() + .seconds(5))
+        }
+    }
+
     static func bindingSelectionGrant(
         request: [String: Any]
     ) throws -> [String: Any] {
@@ -883,8 +991,12 @@ private enum ApprovalBrokerCommandSupport {
             else { throw PromotionCommandError.invalidInput }
         }
 
+        let admittedSupervisorURL = try admittedEmbeddedSupervisor(
+            callerPath: supervisorPath
+        )
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: supervisorPath)
+        process.executableURL = admittedSupervisorURL
         process.arguments = [
             "binding-selection",
             "--config-root", configRoot,
@@ -902,14 +1014,30 @@ private enum ApprovalBrokerCommandSupport {
         let completed = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in completed.signal() }
         try process.run()
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
+        let outputCapture = CappedPipeCapture()
+        let errorCapture = CappedPipeCapture()
+        let drains = DispatchGroup()
+        startDraining(output.fileHandleForReading, into: outputCapture, group: drains)
+        startDraining(errors.fileHandleForReading, into: errorCapture, group: drains)
         if completed.wait(timeout: .now() + .seconds(300)) == .timedOut {
-            process.terminate()
+            stopTimedOutProcess(process, completed: completed)
+            try? output.fileHandleForReading.close()
+            try? errors.fileHandleForReading.close()
+            _ = drains.wait(timeout: .now() + .seconds(5))
             throw PromotionCommandError.selectionNoResponse
         }
-        let bytes = output.fileHandleForReading.readDataToEndOfFile()
-        _ = errors.fileHandleForReading.readDataToEndOfFile()
-        guard bytes.count <= 1_048_576,
-              let envelope = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        guard drains.wait(timeout: .now() + .seconds(5)) == .success else {
+            try? output.fileHandleForReading.close()
+            try? errors.fileHandleForReading.close()
+            throw PromotionCommandError.selectionNoResponse
+        }
+        let outputResult = outputCapture.snapshot()
+        let errorResult = errorCapture.snapshot()
+        guard outputResult.isUsable,
+              errorResult.isUsable,
+              let envelope = try? JSONSerialization.jsonObject(with: outputResult.bytes) as? [String: Any]
         else { throw PromotionCommandError.selectionNoResponse }
         if process.terminationStatus != 0 || envelope["ok"] as? Bool != true {
             let rejection = envelope["rejection"] as? [String: Any]

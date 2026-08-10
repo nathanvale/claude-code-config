@@ -83,6 +83,9 @@ keeps the map complete in both directions.
   both directions and the maintainer doc set is complete.
 - `tests/admission.test.ts`: proves manifest drift (replace/resign/remove/widen/
   version-skew/stale/placeholder) invalidates admission with the right code.
+- `tests/binding-selection-capability.test.ts`: proves the fixed local picker
+  capability admits only a safe signed layout, exact entitlements and version,
+  nested supervisor identity, and matching owner-only verifier pin.
 - `tests/runtime.test.ts`: proves the prod and in-memory adapters share the
   `native-capability-absent` output shape byte-for-byte and drive `main`.
 

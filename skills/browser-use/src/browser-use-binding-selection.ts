@@ -61,6 +61,7 @@ export type BrowserUseBindingSelectionCeremonyPort = {
 
 /** Presence-free verifier plus atomic one-use reservation owner. */
 export type BrowserUseBindingSelectionGrantVerifier = {
+	/** Verify exact shape, verifier identity, and signature; stored grants remain readable after expiry. */
 	verifyStored(grant: unknown): Promise<
 		| { ok: true; grant: BrowserUseBindingSelectionGrant }
 		| { ok: false; code: string }

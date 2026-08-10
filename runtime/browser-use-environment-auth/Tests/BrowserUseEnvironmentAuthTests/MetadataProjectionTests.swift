@@ -26,7 +26,7 @@ struct MetadataProjectionTests {
                 id,
                 "active",
                 ["https://github.com"],
-                [String](),
+                ["/login"],
                 ["password", "otp"],
             ]
         }
@@ -43,7 +43,7 @@ struct MetadataProjectionTests {
     func candidateDigestMatchesTypeScriptJSONContract() throws {
         #expect(
             try selectionDigest(["item-1", "item-2"])
-                == "4a68b5859d936dc2fd997c64874cecb17c811499d70564645f0e01c6fe68791b"
+                == "f20cc45bdc28ac77a0d760002f4a9b25d0952902413a422d850838c5c410d8fd"
         )
     }
 
@@ -82,7 +82,8 @@ struct MetadataProjectionTests {
         #expect(displayed[5].contains("https://github.com"))
         #expect(selected["item_id"] as? String == "item-6")
         #expect(selected["origins"] as? [String] == ["https://github.com"])
-        let output = String(decoding: envelope, as: UTF8.self)
+        #expect(selected["login_paths"] as? [String] == ["/login"])
+        let output = try #require(String(data: envelope, encoding: .utf8))
         #expect(!output.contains("GitHub"))
         #expect(!output.contains("private-user"))
     }
@@ -152,6 +153,48 @@ struct MetadataProjectionTests {
         )
         #expect(driftedObject["ok"] as? Bool == false)
         #expect(driftedRejection["code"] as? String == "selection-candidates-drifted")
+
+        var pathDriftedRows = rows
+        pathDriftedRows[1]["urls"] = [["href": "https://github.com/session"]]
+        let pathDrifted = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: pathDriftedRows)),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: digest,
+            expectedCount: 2,
+            select: { _, _ in 0 }
+        )
+        let pathDriftedObject = try #require(
+            JSONSerialization.jsonObject(with: pathDrifted) as? [String: Any]
+        )
+        let pathDriftedRejection = try #require(
+            pathDriftedObject["rejection"] as? [String: Any]
+        )
+        #expect(pathDriftedObject["ok"] as? Bool == false)
+        #expect(pathDriftedRejection["code"] as? String == "selection-candidates-drifted")
+    }
+
+    @Test
+    func atPrefixedUsernameKeepsOnlyMaskedDomain() throws {
+        var row = item(id: "item-1", urls: ["https://github.com/login"])
+        row["title"] = "Fixture"
+        row["additional_information"] = "@corp.example"
+        var displayed: [String] = []
+
+        _ = bindingSelectionEnvelope(
+            bytes: [UInt8](try JSONSerialization.data(withJSONObject: [row])),
+            vaultID: "vault-1",
+            origin: "https://github.com",
+            expectedDigest: try selectionDigest(["item-1"]),
+            expectedCount: 1,
+            select: { labels, _ in
+                displayed = labels
+                return nil
+            }
+        )
+
+        let label = try #require(displayed.first)
+        #expect(label == "Fixture | ***@corp.example | https://github.com")
     }
 
     @Test

@@ -130,4 +130,67 @@ describe("native binding selection ceremony adapter", () => {
 			});
 		}
 	});
+
+	test("rejects each relative private-owner path before invoking the broker", async () => {
+		const broker = await executable(
+			JSON.stringify({ ok: true, grant: grant() }),
+		);
+		const owner = {
+			supervisorPath: "/private/native/supervisor",
+			opPath: "/private/native/op",
+			configRoot: "/private/native/config",
+		};
+		for (const field of Object.keys(owner) as (keyof typeof owner)[]) {
+			const ceremony = createNativeBindingSelectionCeremony(broker, {
+				...owner,
+				[field]: "relative/path",
+			});
+			expect(await ceremony.requestBindingSelection(request)).toEqual({
+				ok: false,
+				rejection: {
+					code: "broker-unavailable",
+					message: "the native selection owner paths must be absolute.",
+				},
+			});
+		}
+	});
+
+	test("rejects an ok envelope carrying an invalid grant", async () => {
+		const broker = await executable(
+			JSON.stringify({ ok: true, grant: { grant_id: "incomplete" } }),
+		);
+		const ceremony = createNativeBindingSelectionCeremony(broker, {
+			supervisorPath: "/private/native/supervisor",
+			opPath: "/private/native/op",
+			configRoot: "/private/native/config",
+		});
+		expect(await ceremony.requestBindingSelection(request)).toEqual({
+			ok: false,
+			rejection: {
+				code: "broker-unavailable",
+				message: "the native selection owner returned an invalid grant.",
+			},
+		});
+	});
+
+	test("bounds native failure messages and falls back for unsafe text", async () => {
+		for (const message of ["x".repeat(1_025), "read op://vault/item/password"]) {
+			const broker = await executable(
+				JSON.stringify({ ok: false, code: "presence-cancelled", message }),
+				{ exitCode: 20 },
+			);
+			const ceremony = createNativeBindingSelectionCeremony(broker, {
+				supervisorPath: "/private/native/supervisor",
+				opPath: "/private/native/op",
+				configRoot: "/private/native/config",
+			});
+			expect(await ceremony.requestBindingSelection(request)).toEqual({
+				ok: false,
+				rejection: {
+					code: "presence-cancelled",
+					message: "the native binding selection failed closed.",
+				},
+			});
+		}
+	});
 });

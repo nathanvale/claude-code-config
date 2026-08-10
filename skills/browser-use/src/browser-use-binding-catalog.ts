@@ -130,6 +130,7 @@ export function createBindingCatalog(deps: {
 	root: string;
 	verifier?: BrowserUseBindingApprovalReceiptVerifier;
 	selectionGrantVerifier?: BrowserUseBindingSelectionGrantVerifier;
+	now?: () => number;
 }) {
 	const receiptsDir = join(deps.root, "receipts");
 	const indexFile = join(deps.root, "active.json");
@@ -348,6 +349,16 @@ export function createBindingCatalog(deps: {
 				}
 				if (grant.binding.binding_revision !== 1) {
 					return fail("binding_revision_conflict", "a first-binding selection grant must carry revision 1.");
+				}
+				const commitAt = deps.now?.() ?? Date.now();
+				if (
+					commitAt < verified.grant.issued_at_epoch_ms ||
+					commitAt >= verified.grant.expires_at_epoch_ms
+				) {
+					return fail(
+						"binding_receipt_invalid",
+						"the proposed binding selection grant expired before catalog commit.",
+					);
 				}
 				const publishFailure = await publishApproval(grant.grant_id, grant);
 				if (publishFailure !== undefined) return publishFailure;

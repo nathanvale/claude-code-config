@@ -42,10 +42,7 @@ async function fixture() {
 	const info = join(app, "Contents", "Info.plist");
 	const configRoot = join(home, ".config", "browser-use");
 	const verifierPath = join(configRoot, "reviewed-action-verifier.json");
-	const publicKey = Buffer.concat([
-		Buffer.from([4]),
-		Buffer.alloc(64, 7),
-	]);
+	const publicKey = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]);
 	const verifier = {
 		contract: "browser-use.reviewed-action-verifier",
 		schema_version: "1",
@@ -53,15 +50,29 @@ async function fixture() {
 		public_key: publicKey.toString("base64"),
 	};
 	await mkdir(join(app, "Contents", "MacOS"), { recursive: true, mode: 0o755 });
-	await mkdir(join(app, "Contents", "Helpers"), { recursive: true, mode: 0o755 });
+	await mkdir(join(app, "Contents", "Helpers"), {
+		recursive: true,
+		mode: 0o755,
+	});
 	await mkdir(configRoot, { recursive: true, mode: 0o700 });
 	await chmod(join(home, ".config"), 0o700);
 	await writeFile(broker, "broker", { mode: 0o755 });
 	await writeFile(supervisor, "supervisor", { mode: 0o755 });
 	await writeFile(profile, "profile", { mode: 0o644 });
 	await writeFile(info, "plist", { mode: 0o644 });
-	await writeFile(verifierPath, `${JSON.stringify(verifier)}\n`, { mode: 0o600 });
-	return { home, app, broker, supervisor, configRoot, verifierPath, verifier };
+	await writeFile(verifierPath, `${JSON.stringify(verifier)}\n`, {
+		mode: 0o600,
+	});
+	return {
+		home,
+		productRoot,
+		app,
+		broker,
+		supervisor,
+		configRoot,
+		verifierPath,
+		verifier,
+	};
 }
 
 function admittedRunner(
@@ -107,7 +118,12 @@ describe("installed binding-selection native capability", () => {
 		expect(
 			await inspectBindingSelectionNativeCapability(
 				{ home, configRoot: join(home, ".config", "browser-use") },
-				{ run: async (command) => { seen.push(command); return { exitCode: 1, stdout: "", stderr: "" }; } },
+				{
+					run: async (command) => {
+						seen.push(command);
+						return { exitCode: 1, stdout: "", stderr: "" };
+					},
+				},
 			),
 		).toEqual({ status: "native-capability-absent" });
 		expect(seen).toEqual([]);
@@ -179,6 +195,50 @@ describe("installed binding-selection native capability", () => {
 		});
 	});
 
+	test("rejects an incompatible installed product version", async () => {
+		const value = await fixture();
+		expect(
+			await inspectBindingSelectionNativeCapability(
+				{ home: value.home, configRoot: value.configRoot },
+				{
+					run: async (command) =>
+						command.kind === "verify-product-version"
+							? { exitCode: 0, stdout: "0.1.0\n", stderr: "" }
+							: admittedRunner(value, [])(command),
+				},
+			),
+		).toEqual({
+			status: "not-admitted",
+			code: "product-version-incompatible",
+		});
+	});
+
+	test("rejects a malformed owner-only verifier pin", async () => {
+		const value = await fixture();
+		await writeFile(value.verifierPath, "{}\n", { mode: 0o600 });
+		expect(
+			await inspectBindingSelectionNativeCapability(
+				{ home: value.home, configRoot: value.configRoot },
+				{ run: admittedRunner(value, []) },
+			),
+		).toEqual({ status: "not-admitted", code: "verifier-pin-invalid" });
+	});
+
+	test("rejects a malformed verifier response from the installed broker", async () => {
+		const value = await fixture();
+		expect(
+			await inspectBindingSelectionNativeCapability(
+				{ home: value.home, configRoot: value.configRoot },
+				{
+					run: async (command) =>
+						command.kind === "broker-verifier"
+							? { exitCode: 0, stdout: '{"ok":true}', stderr: "" }
+							: admittedRunner(value, [])(command),
+				},
+			),
+		).toEqual({ status: "not-admitted", code: "broker-verifier-invalid" });
+	});
+
 	test("rejects a broker verifier that differs from the owner-only pin", async () => {
 		const value = await fixture();
 		const differentPublicKey = Buffer.concat([
@@ -208,6 +268,19 @@ describe("installed binding-selection native capability", () => {
 		await writeFile(replacement, "replacement", { mode: 0o755 });
 		await rm(value.supervisor);
 		await symlink(replacement, value.supervisor);
+		const seen: BrowserUseNativeAdmissionCommand[] = [];
+		expect(
+			await inspectBindingSelectionNativeCapability(
+				{ home: value.home, configRoot: value.configRoot },
+				{ run: admittedRunner(value, seen) },
+			),
+		).toEqual({ status: "not-admitted", code: "installed-layout-unsafe" });
+		expect(seen).toEqual([]);
+	});
+
+	test("rejects a writable installed-product ancestor before any native command", async () => {
+		const value = await fixture();
+		await chmod(value.productRoot, 0o777);
 		const seen: BrowserUseNativeAdmissionCommand[] = [];
 		expect(
 			await inspectBindingSelectionNativeCapability(

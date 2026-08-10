@@ -2630,6 +2630,8 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		await installBlockedSelectionRun(store, "run-selection-moved");
 		const candidate = evidenceItem("item-1", {
 			origins: ["https://github.com"],
+			login_paths: [],
+			supported_methods: ["password", "otp"],
 		});
 		let exactReads = 0;
 		const result = await runForTest(

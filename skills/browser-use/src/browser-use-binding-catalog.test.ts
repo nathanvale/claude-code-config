@@ -95,6 +95,7 @@ describe("private Binding Catalog", () => {
 		const catalog = createBindingCatalog({
 			fs: createDefaultPlatformFs(),
 			root: join(base, "bindings"),
+			now: () => grant.expires_at_epoch_ms - 1,
 			selectionGrantVerifier: {
 				verifyStored: async (value) =>
 					typeof value === "object" &&
@@ -124,6 +125,56 @@ describe("private Binding Catalog", () => {
 			ok: true,
 			bindings: [{ binding_ref: "github", revision: 1, status: "active" }],
 		});
+	});
+
+	test("rejects expiry before publication but keeps an admitted stored grant resolvable", async () => {
+		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
+		roots.push(base);
+		const grant = selectionGrant();
+		let now = grant.expires_at_epoch_ms - 1;
+		const root = join(base, "bindings");
+		const verifier = {
+			verifyStored: async () => ({ ok: true as const, grant }),
+			verifyAndReserve: async () => ({
+				ok: false as const,
+				code: "not_used_by_catalog",
+			}),
+		};
+		const catalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root,
+			now: () => now,
+			selectionGrantVerifier: verifier,
+		});
+
+		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });
+		now = grant.expires_at_epoch_ms;
+		expect(await catalog.resolve(grant.resolution_key)).toMatchObject({
+			ok: true,
+			status: "active",
+			binding: { item_id: "item-6" },
+		});
+
+		const expiredRoot = join(base, "expired-bindings");
+		const expiredCatalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root: expiredRoot,
+			now: () => grant.expires_at_epoch_ms,
+			selectionGrantVerifier: verifier,
+		});
+		expect(await expiredCatalog.commitSelectionGrant(grant)).toEqual({
+			ok: false,
+			code: "binding_receipt_invalid",
+			message: "the proposed binding selection grant expired before catalog commit.",
+		});
+		expect(
+			await createDefaultPlatformFs().lstat(
+				join(expiredRoot, "receipts", `${grant.grant_id}.json`),
+			),
+		).toBeUndefined();
+		expect(
+			await createDefaultPlatformFs().lstat(join(expiredRoot, "active.json")),
+		).toBeUndefined();
 	});
 
 	test("resolves an approved revision and stops after signed revocation", async () => {

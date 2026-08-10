@@ -5,6 +5,7 @@ import type {
 } from "./browser-use-auth-approval";
 import {
 	type BrowserUseBindingApprovalReceipt,
+	secretShapeFindingOf,
 	validateBindingApprovalReceiptShape,
 } from "./browser-use-auth-bindings";
 import type {
@@ -17,6 +18,8 @@ import { validateBindingSelectionGrantShape } from "./browser-use-binding-select
 
 const MAXIMUM_BROKER_OUTPUT_BYTES = 1_048_576;
 const BROKER_BIND_TIMEOUT_MS = 5 * 60_000;
+const BROKER_SELECTION_TIMEOUT_MS = BROKER_BIND_TIMEOUT_MS + 15_000;
+const MAXIMUM_NATIVE_FAILURE_MESSAGE_LENGTH = 1_024;
 
 type NativeBindingEnvelope =
 	| { ok: true; receipt: BrowserUseBindingApprovalReceipt }
@@ -99,7 +102,7 @@ export function createNativeBindingApprovalBroker(
 
 function selectionRejection(
 	code: string,
-	message: string,
+	message: unknown,
 ): { ok: false; rejection: BrowserUseBindingSelectionRejection } {
 	const admitted = [
 		"biometric-capability-missing",
@@ -111,7 +114,20 @@ function selectionRejection(
 	].includes(code)
 		? (code as BrowserUseBindingSelectionRejection["code"])
 		: "broker-unavailable";
-	return { ok: false, rejection: { code: admitted, message } };
+	return {
+		ok: false,
+		rejection: {
+			code: admitted,
+			message:
+				typeof message === "string" &&
+				message.length > 0 &&
+				message.length <= MAXIMUM_NATIVE_FAILURE_MESSAGE_LENGTH &&
+				!/[\u0000-\u001f\u007f]/.test(message) &&
+				secretShapeFindingOf(message) === undefined
+					? message
+					: "the native binding selection failed closed.",
+		},
+	};
 }
 
 /** Subprocess adapter for one descriptor-private native binding selection ceremony. */
@@ -144,7 +160,7 @@ export function createNativeBindingSelectionCeremony(
 					stdout: "pipe",
 					stderr: "pipe",
 					env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
-					timeout: BROKER_BIND_TIMEOUT_MS,
+					timeout: BROKER_SELECTION_TIMEOUT_MS,
 					maxBuffer: MAXIMUM_BROKER_OUTPUT_BYTES,
 				});
 				child.stdin.write(

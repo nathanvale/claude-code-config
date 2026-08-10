@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, parse } from "node:path";
 
 const MAXIMUM_NATIVE_OUTPUT_BYTES = 1_048_576;
 const NATIVE_ADMISSION_TIMEOUT_MS = 30_000;
@@ -17,10 +17,8 @@ export const BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION = {
 	productVersion: "0.1.1",
 } as const;
 
-const approvalBrokerRequirement =
-	`anchor apple generic and identifier "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.approvalBrokerIdentifier}" and certificate leaf[subject.OU] = "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.signingTeamIdentifier}"`;
-const environmentSupervisorRequirement =
-	`anchor apple generic and identifier "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.environmentSupervisorIdentifier}" and certificate leaf[subject.OU] = "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.signingTeamIdentifier}"`;
+const approvalBrokerRequirement = `anchor apple generic and identifier "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.approvalBrokerIdentifier}" and certificate leaf[subject.OU] = "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.signingTeamIdentifier}"`;
+const environmentSupervisorRequirement = `anchor apple generic and identifier "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.environmentSupervisorIdentifier}" and certificate leaf[subject.OU] = "${BROWSER_USE_BINDING_SELECTION_NATIVE_ADMISSION.signingTeamIdentifier}"`;
 
 /** One bounded native command used by the installed-capability admission owner. */
 export type BrowserUseNativeAdmissionCommand = {
@@ -87,7 +85,36 @@ type AdmittedPathMetadata = {
 	ino: number;
 };
 
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]) {
+async function ancestorsAreAdmitted(path: string): Promise<boolean> {
+	const processUid = process.getuid?.();
+	let current = dirname(path);
+	const root = parse(current).root;
+	try {
+		while (true) {
+			if ((await realpath(current)) !== current) return false;
+			const metadata = await lstat(current);
+			if (
+				!metadata.isDirectory() ||
+				metadata.isSymbolicLink() ||
+				(metadata.mode & 0o022) !== 0 ||
+				(processUid !== undefined &&
+					metadata.uid !== processUid &&
+					metadata.uid !== 0)
+			) {
+				return false;
+			}
+			if (current === root) return true;
+			current = dirname(current);
+		}
+	} catch {
+		return false;
+	}
+}
+
+function exactKeys(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+) {
 	const actual = Object.keys(value).sort();
 	const sortedExpected = [...expected].sort();
 	return (
@@ -128,7 +155,11 @@ function brokerVerifierOf(
 ): BrowserUseInstalledVerifierIdentity | undefined {
 	try {
 		const parsed = JSON.parse(stdout) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed)
+		) {
 			return undefined;
 		}
 		const record = parsed as Record<string, unknown>;
@@ -167,15 +198,26 @@ function brokerEntitlementsAdmitted(stdout: string): boolean {
 	);
 }
 
-function pinnedVerifierOf(bytes: string): BrowserUseInstalledVerifierIdentity | undefined {
+function pinnedVerifierOf(
+	bytes: string,
+): BrowserUseInstalledVerifierIdentity | undefined {
 	try {
 		const parsed = JSON.parse(bytes) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed)
+		) {
 			return undefined;
 		}
 		const record = parsed as Record<string, unknown>;
 		if (
-			!exactKeys(record, ["contract", "schema_version", "key_id", "public_key"]) ||
+			!exactKeys(record, [
+				"contract",
+				"schema_version",
+				"key_id",
+				"public_key",
+			]) ||
 			record.contract !== VERIFIER_CONTRACT ||
 			record.schema_version !== VERIFIER_SCHEMA_VERSION
 		) {
@@ -197,9 +239,16 @@ async function admittedPathMetadata(
 	executable = kind === "file" && !privateFile,
 ): Promise<AdmittedPathMetadata | undefined> {
 	try {
-		if (!isAbsolute(path) || (await realpath(path)) !== path) return undefined;
+		if (
+			!isAbsolute(path) ||
+			(await realpath(path)) !== path ||
+			!(await ancestorsAreAdmitted(path))
+		) {
+			return undefined;
+		}
 		const metadata = await lstat(path);
-		const expectedKind = kind === "file" ? metadata.isFile() : metadata.isDirectory();
+		const expectedKind =
+			kind === "file" ? metadata.isFile() : metadata.isDirectory();
 		const processUid = process.getuid?.();
 		if (
 			!expectedKind ||
@@ -225,7 +274,12 @@ async function metadataUnchanged(
 	privateFile = false,
 	executable = kind === "file" && !privateFile,
 ) {
-	const current = await admittedPathMetadata(path, kind, privateFile, executable);
+	const current = await admittedPathMetadata(
+		path,
+		kind,
+		privateFile,
+		executable,
+	);
 	return current?.dev === baseline.dev && current.ino === baseline.ino;
 }
 

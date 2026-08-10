@@ -1408,6 +1408,9 @@ function createP256BindingSelectionGrantVerifier(
 	let publicKey: ReturnType<typeof createPublicKey> | undefined;
 	try {
 		const raw = Buffer.from(identity.public_key, "base64");
+		if (raw.length !== 65 || raw[0] !== 0x04) {
+			throw new Error("invalid P-256 uncompressed public key");
+		}
 		publicKey = createPublicKey({
 			key: {
 				kty: "EC",
