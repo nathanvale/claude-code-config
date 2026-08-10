@@ -274,6 +274,7 @@ export function createGitAdapter(
 					runGit,
 					remote,
 					options.timeouts.localMs,
+					allowedRemoteHosts,
 				);
 				await assertNoConfiguredPushRefspec(
 					runGit,
@@ -1976,46 +1977,6 @@ async function isSafeOwnedPath(
 		if (metadata === null) break;
 	}
 	return true;
-}
-
-async function assertSafeRemoteTarget(
-	runGit: (
-		args: readonly string[],
-		timeoutMs: number,
-	) => Promise<VaultGitProcessResult>,
-	remote: string,
-	timeoutMs: number,
-): Promise<void> {
-	const configuredUrl = /^[A-Za-z0-9._-]+$/.test(remote)
-		? await runGit(["config", "--get", `remote.${remote}.url`], timeoutMs)
-		: null;
-	if (configuredUrl?.timedOut) throw new Error("timed out while checking remote URL");
-	if (configuredUrl && configuredUrl.exitCode !== 0) {
-		throw new Error("configured remote URL is unavailable");
-	}
-	// ls-remote --get-url resolves the EFFECTIVE URL after url.*.insteadOf
-	// rewriting without contacting the remote; validating only the configured
-	// value would let an insteadOf rewrite smuggle in an unsafe transport.
-	const effectiveUrl = await runGit(["ls-remote", "--get-url", remote], timeoutMs);
-	if (effectiveUrl.timedOut) {
-		throw new Error("timed out while resolving the effective remote URL");
-	}
-	if (effectiveUrl.exitCode !== 0) {
-		throw new Error("effective remote URL is unavailable");
-	}
-	const targets = [
-		configuredUrl ? configuredUrl.stdout.trim() : remote,
-		effectiveUrl.stdout.trim(),
-	];
-	for (const target of targets) {
-		if (
-			target.startsWith("ext::") ||
-			/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(target) ||
-			/[\r\n\0]/.test(target)
-		) {
-			throw new Error("remote URL uses an unsafe transport or embedded credentials");
-		}
-	}
 }
 
 function isMissingFilesystemEntry(error: unknown): boolean {

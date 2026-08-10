@@ -119,29 +119,60 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		}
 	});
 
-	test("two clones admit exactly one writer and fence the stale generation", async () => {
-		const laptop = await createFixture();
-		const mini = await createSibling(laptop, "mac-mini");
-		const [first, second] = await Promise.all([
-			laptop.run(beginArgs("notes/event.md")),
-			mini.run(beginArgs("notes/event.md")),
-		]);
-		const results = [first, second];
-		expect(results.filter((result) => result.exitCode === 0)).toHaveLength(1);
-		const refusal = results.find((result) => result.exitCode !== 0);
-		expect(refusal).toBeDefined();
-		expect(parseCliProcessJson(refusal as CliProcessResult)).toMatchObject({
-			status: "error",
-			data: { outcome: "refused" },
-		});
-		expect(
-			["remote_moved", "lease_active", "lease_generation_stale"],
-		).toContain(
-			(parseCliProcessJson(refusal as CliProcessResult) as {
-				error?: { code?: string };
-			}).error?.code ?? "missing_refusal_code",
-		);
-	});
+	test(
+		"two clones admit exactly one writer and fence the stale generation",
+		async () => {
+			// Decision 10 and the plan's success criteria require exactly one
+			// winner across 20 repeated races, proven at the process boundary.
+			// A single run can pass without the two processes ever overlapping.
+			for (let attempt = 0; attempt < 20; attempt += 1) {
+				const laptop = await createFixture();
+				const mini = await createSibling(laptop, "mac-mini");
+				const [first, second] = await Promise.all([
+					laptop.run(beginArgs("notes/event.md")),
+					mini.run(beginArgs("notes/event.md")),
+				]);
+				const results = [first, second];
+				expect(results.filter((result) => result.exitCode === 0)).toHaveLength(1);
+				expect(results.filter((result) => result.exitCode !== 0)).toHaveLength(1);
+				const refusal = results.find(
+					(result) => result.exitCode !== 0,
+				) as CliProcessResult;
+				const parsed = parseCliProcessJson(refusal) as {
+					error?: { code?: string };
+					data?: { changed_state?: string };
+				};
+				expect(parsed).toMatchObject({
+					status: "error",
+					data: { outcome: "refused" },
+				});
+				// `lease_active` is not a fencing outcome: it is what the loser
+				// reports when it observed an already-held lease without racing
+				// for it, so accepting it lets a no-race run satisfy this proof.
+				expect(["remote_moved", "lease_generation_stale"]).toContain(
+					parsed.error?.code ?? "missing_refusal_code",
+				);
+				// A local receipt is expected; reaching the remote is not.
+				expect(parsed.data?.changed_state).not.toBe("remote");
+				// The winner must own the ledger tip; without this nothing proves
+				// the successful exit code corresponds to a real acquisition.
+				const ledger = JSON.parse(
+					laptop.gitBare("show", `${VAULT_GIT_LEDGER_REF}:ledger.json`),
+				) as { lease?: { state?: string; transaction_id?: string } };
+				expect(ledger.lease?.state).toBe("held");
+				const winner = results.find(
+					(result) => result.exitCode === 0,
+				) as CliProcessResult;
+				const winnerData = parseCliProcessJson(winner) as {
+					data?: { transaction_id?: string };
+				};
+				expect(ledger.lease?.transaction_id).toBe(
+					winnerData.data?.transaction_id,
+				);
+			}
+		},
+		300_000,
+	);
 
 	test("remote main movement stops completion with deliberate replay guidance", async () => {
 		const fixture = await createFixture();
