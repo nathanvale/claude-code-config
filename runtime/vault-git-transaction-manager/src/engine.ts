@@ -683,7 +683,10 @@ async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, 
 function copyPaths(paths: readonly VaultGitOwnedPathReceipt[]): VaultGitOwnedPathReceipt[] { return paths.map((path) => ({ ...path })); }
 
 function result(status: VaultGitEngineResult["status"], state: VaultGitTransactionState, receipt: VaultGitReceipt, writePermission: VaultGitWritePermission, changedState: VaultGitEngineResult["changedState"], actionId: VaultGitEngineNextActionId, summary: string, blocker?: VaultGitBlockerId): VaultGitEngineResult {
-	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety: state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : "same_input_safe", nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
+	// Decision 19: a push_pending commit is never automatically retried or
+	// reclaimed, so it must not advertise the same input as safe to resend.
+	const retrySafety: VaultGitRetrySafety = state === "human_required" || state === "superseded" || state === "expired" ? "operator_required" : state === "push_pending" ? "same_input_unsafe" : "same_input_safe";
+	return { status, state, phase: receipt.phase, writePermission, changedState, retrySafety, nextAction: { id: actionId, summary }, transactionId: receipt.transactionId ?? undefined, receiptId: receipt.receiptId, diagnosticsReference: receipt.diagnosticsReference, ...(blocker ? { blocker } : {}) };
 }
 
 function refusal(state: VaultGitTransactionState, phase: VaultGitTransactionPhase, blocker: VaultGitBlockerId, actionId: VaultGitEngineNextActionId, summary: string, changedState: VaultGitEngineResult["changedState"] = "none", retrySafety?: VaultGitRetrySafety): VaultGitEngineResult {

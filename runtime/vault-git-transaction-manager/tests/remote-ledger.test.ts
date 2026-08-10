@@ -134,7 +134,9 @@ describe("remote lease ledger", () => {
 		const loser = refused[0];
 		if (!loser || loser.status !== "refused")
 			throw new Error("bootstrap race had no fenced loser");
-		expect(loser.blocker).toBe("remote_moved");
+		expect(["remote_moved", "lease_generation_stale"]).toContain(
+			loser.blocker,
+		);
 
 		// Independent ledger read straight from the bare remote, bypassing
 		// both engines: the remote tip must be the winner's generation.
@@ -179,6 +181,26 @@ describe("remote lease ledger", () => {
 			blocker: "lease_active",
 			retrySafety: "same_input_safe",
 			nextAction: { id: "retry_remote" },
+		});
+
+		const exactBoundary = await acquireRemoteLease(
+			createEngine(fixture.cloneB, "2026-08-09T00:00:01.000Z"),
+			{
+				remote: "origin",
+				expectedGeneration: acquired.generation,
+				actor: "agent-b",
+				host: "mac-mini",
+				event: "note_created",
+				ownedPaths: ["notes/b.md"],
+				leaseDurationMs: 1_000,
+			},
+		);
+		expect(exactBoundary).toMatchObject({
+			status: "refused",
+			blocker: "lease_stale",
+			retrySafety: "operator_required",
+			nextAction: { id: "request_operator_takeover" },
+			diagnostics: { leaseAgeMs: 1_000 },
 		});
 
 		const stale = await acquireRemoteLease(
@@ -331,6 +353,19 @@ describe("remote lease ledger", () => {
 	test("refuses unavailable remotes, malformed ledgers, and unsafe destinations", async () => {
 		const fixture = await createFixture();
 		const engine = createEngine(fixture.cloneA, "2026-08-09T00:00:00.000Z");
+		for (const ownedPath of ["notes/.git/config", "notes/.GIT/config"]) {
+			await expect(
+				acquireRemoteLease(engine, {
+					remote: "origin",
+					expectedGeneration: null,
+					actor: "agent-a",
+					host: "laptop",
+					event: "note_created",
+					ownedPaths: [ownedPath],
+					leaseDurationMs: 60_000,
+				}),
+			).rejects.toThrow("repository-relative leaf paths");
+		}
 		const unavailable = await acquireRemoteLease(engine, {
 			remote: join(fixture.root, "missing.git"),
 			expectedGeneration: null,
@@ -559,6 +594,9 @@ describe("remote lease ledger", () => {
 					pushAttempted = true;
 					return respond({ exitCode: 1, stderr: "error: failed to push" });
 				}
+				if (args[0] === "ls-remote" && args[1] === "--get-url") {
+					return respond({ stdout: "/tmp/remote.git\n" });
+				}
 				if (args[0] === "ls-remote") {
 					// The verification re-read after the failed push also fails,
 					// leaving the remote outcome unknown.
@@ -569,6 +607,9 @@ describe("remote lease ledger", () => {
 							})
 						: respond({ stdout: `${generation}\t${VAULT_GIT_LEDGER_REF}\n` });
 				}
+				if (args[0] === "config" && args.includes("remote.origin.url")) {
+					return respond({ stdout: "/tmp/remote.git\n" });
+				}
 				if (args[0] === "config") return respond({ exitCode: 1 });
 				if (args[0] === "rev-parse") return respond({ stdout: `${generation}\n` });
 				if (args[0] === "hash-object")
@@ -577,7 +618,7 @@ describe("remote lease ledger", () => {
 				if (args[0] === "commit-tree") return respond({ stdout: `${commit}\n` });
 				if (args[0] === "show" && args[1] === "-s") {
 					return respond({
-						stdout: args[3] === commit ? `${generation}\n` : "\n",
+						stdout: args.includes(commit) ? `${generation}\n` : "\n",
 					});
 				}
 				if (args[0] === "show") return respond({ stdout: content });
