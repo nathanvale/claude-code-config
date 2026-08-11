@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
+import {
+	VAULT_GIT_LEDGER_REF,
+	createVaultGitActivationRestriction,
+	nextVaultGitReceipt,
+} from "./model.ts";
 import type {
 	VaultGitActivationRestriction,
 	VaultGitBlockerId,
@@ -11,13 +15,15 @@ import type {
 	VaultGitTransactionPhase,
 	VaultGitTransactionState,
 } from "./model.ts";
-import type {
-	VaultGitRepositoryPort,
-	VaultGitRuntimePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitRepositoryPort,
+	type VaultGitRuntimePort,
 } from "./ports.ts";
 import {
 	observeRemoteLedger,
 	type RemoteLedgerEngine,
+	validateRemoteLease,
 } from "./remote-ledger.ts";
 import type {
 	VaultGitDoctorProof,
@@ -104,6 +110,8 @@ const summaries = {
 	takeoverInterrupted:
 		"Run doctor again for a fresh stale-lease proof; the interrupted takeover never reached the remote.",
 	reconcile: "Reconcile preserved local evidence before clearing quarantine.",
+	retryActivation:
+		"Retry read-only Doctor after live repository identity revalidation is available.",
 	none: "No transaction action remains.",
 } as const;
 
@@ -187,7 +195,26 @@ export async function diagnoseVaultGitTransaction(
 	let identity: Awaited<ReturnType<VaultGitRepositoryPort["resolveCanonicalIdentity"]>>;
 	try {
 		identity = await options.repository.resolveCanonicalIdentity();
-	} catch {
+	} catch (error) {
+		if (error instanceof VaultRepositoryIdentityUnavailableError) {
+			return report(
+				"active",
+				receipt.phase,
+				"activation_missing",
+				"same_input_safe",
+				"run_doctor",
+				summaries.retryActivation,
+				receipt.diagnosticsReference,
+				{
+					...common,
+					blocker: "activation_blocked",
+					activationRestriction: createVaultGitActivationRestriction({
+						stoppedAction: "vault_write",
+						cause: "revalidation_unavailable",
+					}),
+				},
+			);
+		}
 		return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "inspect_configured_vault", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "vault_identity_changed" });
 	}
 	if (identity.identity !== options.repositoryIdentity) {
@@ -223,6 +250,20 @@ export async function diagnoseVaultGitTransaction(
 			if (reconciled.status === "unknown") {
 				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
 			}
+		}
+		const validated = await validateRemoteLease(options.ledger, {
+			remote: receipt.remote,
+			expectedGeneration: receipt.leaseGeneration,
+			transactionId: receipt.transactionId,
+		});
+		if (validated.status === "refused") {
+			if (
+				validated.blocker === "lease_generation_stale" ||
+				validated.blocker === "lease_owner_unknown"
+			) {
+				return report("superseded", receipt.phase, "lease_superseded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: validated.blocker });
+			}
+			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: validated.blocker });
 		}
 		const localCommit = await options.repository.inspectLocalCommit(
 			receipt.expectedMainCommit,
@@ -528,6 +569,9 @@ function report(
 			: {}),
 		...(extra.takeoverTokenIssued
 			? { takeoverTokenIssued: true as const }
+			: {}),
+		...(extra.activationRestriction
+			? { activationRestriction: extra.activationRestriction }
 			: {}),
 	};
 }

@@ -1,6 +1,11 @@
-import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
+import {
+	VAULT_GIT_LEDGER_REF,
+	createVaultGitActivationRestriction,
+	nextVaultGitReceipt,
+} from "./model.ts";
 import type {
 	VaultGitActivationRestriction,
+	VaultGitActivationRestrictionCause,
 	VaultGitBlockerId,
 	VaultGitEngineNextActionId,
 	VaultGitReceipt,
@@ -9,7 +14,11 @@ import type {
 	VaultGitTransactionPhase,
 	VaultGitTransactionState,
 } from "./model.ts";
-import type { VaultGitAtomicCloseResult } from "./ports.ts";
+import type {
+	VaultGitActivationValidationPort,
+	VaultGitActivationValidationResult,
+	VaultGitAtomicCloseResult,
+} from "./ports.ts";
 import {
 	buildVaultGitDoctorProof,
 	diagnoseVaultGitTransaction,
@@ -19,9 +28,17 @@ import {
 	acquireRemoteLease,
 	buildVaultGitReleaseLedgerContent,
 	observeRemoteLedger,
+	type RemoteLease,
 	supersedeRemoteLease,
+	validateRemoteLease,
 } from "./remote-ledger.ts";
 import type { VaultGitDoctorProof } from "./store.ts";
+
+/** Dependencies for deterministic repair, including final activation authority. */
+export interface VaultGitRepairOptions extends VaultGitDoctorOptions {
+	/** Live activation revalidation immediately before a remote close. */
+	readonly activationAuthority: VaultGitActivationValidationPort;
+}
 
 /** Input for one named deterministic repair. */
 export interface VaultGitRepairInput {
@@ -92,6 +109,19 @@ const summaries = {
 	reconcile: "Reconcile preserved local evidence before clearing quarantine.",
 } as const;
 
+const activationRetrySafety: Record<
+	VaultGitActivationRestrictionCause,
+	VaultGitRetrySafety
+> = {
+	admission_missing: "same_input_safe",
+	human_capability_required: "operator_required",
+	evidence_changed: "same_input_unsafe",
+	binding_changed: "same_input_unsafe",
+	invalidated: "same_input_unsafe",
+	revoked: "operator_required",
+	revalidation_unavailable: "same_input_safe",
+};
+
 /**
  * Create the deterministic repair executor.
  *
@@ -107,7 +137,7 @@ const summaries = {
  * ```
  */
 export function createVaultGitRepair(
-	options: VaultGitDoctorOptions,
+	options: VaultGitRepairOptions,
 ): VaultGitRepairEngine {
 	return {
 		async run(input) {
@@ -125,7 +155,7 @@ export function createVaultGitRepair(
  * @throws Never for expected repair ambiguity
  */
 export async function repairVaultGitTransaction(
-	options: VaultGitDoctorOptions,
+	options: VaultGitRepairOptions,
 	input: VaultGitRepairInput,
 ): Promise<VaultGitRepairResult> {
 	const loaded = await options.store.load();
@@ -230,8 +260,9 @@ export async function repairVaultGitTransaction(
 		} else if (
 			observed.lease &&
 			observed.generation &&
-			// The fresh doctor pass above already proved exact intent binding;
-			// an omitted transaction id adopts the lease it classified.
+			matchesAcquisitionIntent(receipt, observed.lease) &&
+			doctor.transactionId !== undefined &&
+			observed.lease.transactionId === doctor.transactionId &&
 			(input.transactionId === undefined ||
 				observed.lease.transactionId === input.transactionId)
 		) {
@@ -258,6 +289,22 @@ export async function repairVaultGitTransaction(
 		receipt.phase === "committing" &&
 		identity.localMainHead !== receipt.localMainHead
 	) {
+		if (!options.repository.inspectLocalCommit || !receipt.transactionId) {
+			return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+		}
+		const recoveredCommit = await options.repository.inspectLocalCommit(
+			identity.localMainHead,
+		);
+		if (
+			recoveredCommit.status !== "ok" ||
+			recoveredCommit.parents.length !== 1 ||
+			recoveredCommit.parents[0] !== receipt.localMainHead ||
+			!recoveredCommit.message
+				.split(/\r?\n/)
+				.some((line) => line === `Vault-Transaction: ${receipt.transactionId}`)
+		) {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		}
 		receipt = nextVaultGitReceipt(receipt, {
 			phase: "push_pending",
 			transition: "push_outcome_unknown",
@@ -273,6 +320,13 @@ export async function repairVaultGitTransaction(
 	if (identity.localMainHead !== receipt.localMainHead) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
+	const resumeFence = await validateRepairWriteAuthority(
+		options,
+		input.action,
+		receipt,
+		"active",
+	);
+	if (resumeFence) return resumeFence;
 	if (receipt.phase === "writing") {
 		return repaired(input.action, "active", "writing", "none", "complete_transaction", summaries.complete, diagnostics);
 	}
@@ -286,8 +340,69 @@ export async function repairVaultGitTransaction(
 	return repaired(input.action, "active", "writing", "local", "complete_transaction", summaries.complete, diagnostics);
 }
 
+function matchesAcquisitionIntent(
+	receipt: VaultGitReceipt,
+	lease: RemoteLease,
+): boolean {
+	return (
+		lease.state === "held" &&
+		lease.actor === receipt.actor &&
+		lease.host === receipt.host &&
+		lease.event === receipt.event &&
+		JSON.stringify(lease.ownedPaths) ===
+			JSON.stringify(receipt.ownedPaths.map((entry) => entry.path)) &&
+		lease.localMainHead === receipt.localMainHead &&
+		lease.remoteMainHead === receipt.remoteMainHead &&
+		lease.leaseDurationMs === receipt.leaseDurationMs
+	);
+}
+
+async function validateRepairWriteAuthority(
+	options: VaultGitRepairOptions,
+	action: VaultGitRepairAction,
+	receipt: VaultGitReceipt,
+	state: VaultGitTransactionState,
+): Promise<VaultGitRepairResult | null> {
+	if (!receipt.transactionId || !receipt.leaseGeneration) {
+		return refused(action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, receipt.diagnosticsReference);
+	}
+	const validated = await validateRemoteLease(options.ledger, {
+		remote: receipt.remote,
+		expectedGeneration: receipt.leaseGeneration,
+		transactionId: receipt.transactionId,
+	});
+	if (validated.status === "refused") {
+		const superseded =
+			validated.blocker === "lease_generation_stale" ||
+			validated.blocker === "lease_owner_unknown";
+		return refused(
+			action,
+			superseded ? "superseded" : "human_required",
+			receipt.phase,
+			validated.blocker,
+			"request_operator_review",
+			summaries.operator,
+			receipt.diagnosticsReference,
+		);
+	}
+	const activationRestriction = await validateRepairActivation(options);
+	if (!activationRestriction) return null;
+	return {
+		status: "refused",
+		action,
+		state,
+		phase: receipt.phase,
+		changedState: "none",
+		retrySafety: activationRetrySafety[activationRestriction.cause.id],
+		nextAction: activationRestriction.nextAction,
+		diagnosticsReference: receipt.diagnosticsReference,
+		blocker: "activation_blocked",
+		activationRestriction,
+	};
+}
+
 async function publishPrepared(
-	options: VaultGitDoctorOptions,
+	options: VaultGitRepairOptions,
 	action: VaultGitRepairAction,
 	history: readonly VaultGitReceipt[],
 	receipt: VaultGitReceipt,
@@ -315,6 +430,13 @@ async function publishPrepared(
 			?.recordedAt ?? receipt.recordedAt;
 	const releaseContent = buildVaultGitReleaseLedgerContent(receipt, preparedAt);
 	let current = receipt;
+	const authorityFence = await validateRepairWriteAuthority(
+		options,
+		action,
+		receipt,
+		"push_pending",
+	);
+	if (authorityFence) return authorityFence;
 	let publication: VaultGitAtomicCloseResult;
 	try {
 		publication = await options.ledger.git.atomicClose({
@@ -367,6 +489,23 @@ async function publishPrepared(
 		return refused(action, "human_required", "human_required", "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial");
 	}
 	return refused(action, "push_pending", "push_pending", "push_pending", "request_operator_review", summaries.retry, diagnostics, "partial", "same_input_unsafe");
+}
+
+async function validateRepairActivation(
+	options: VaultGitRepairOptions,
+): Promise<VaultGitActivationRestriction | null> {
+	let validation: VaultGitActivationValidationResult;
+	try {
+		validation = await options.activationAuthority.validate("continuation");
+	} catch {
+		validation = { status: "denied", reason: "revalidation_unavailable" };
+	}
+	if (validation.status === "admitted") return null;
+	return createVaultGitActivationRestriction({
+		stoppedAction: "vault_write",
+		cause:
+			validation.status === "revoked" ? "revoked" : validation.reason,
+	});
 }
 
 async function staleLeaseTakeover(

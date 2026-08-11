@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
@@ -25,8 +26,11 @@ export interface ResolveVaultGitActivationIdentitiesOptions {
 	readonly runtimeBinaryPath: string;
 	readonly runtimeVersion: string;
 	readonly executablePath: string;
+	/** Exact source closure executed by the production entrypoint. */
+	readonly executableSourcePaths?: readonly string[];
 	readonly gitBinaryPath: string;
 	readonly sshBinaryPath: string;
+	readonly sshIdentityFilePath: string;
 	readonly sshIdentityPublicKeyPath: string;
 	readonly sshKnownHostsPath: string;
 	readonly process: VaultGitProcessPort;
@@ -47,6 +51,7 @@ export interface ResolvedVaultGitActivationIdentities {
 /** Exact SSH assets used to build the admitted Git transport closure. */
 export interface VaultGitSshTransportOptions {
 	readonly sshBinaryPath: string;
+	readonly sshIdentityFilePath: string;
 	readonly sshIdentityPublicKeyPath: string;
 	readonly sshKnownHostsPath: string;
 }
@@ -55,12 +60,13 @@ export interface VaultGitSshTransportOptions {
 export async function resolveVaultGitSshTransportEnvironment(
 	options: VaultGitSshTransportOptions,
 ): Promise<Readonly<Record<string, string>>> {
-	const [ssh, publicKey, knownHosts] = await Promise.all([
+	const [ssh, privateKey, publicKey, knownHosts] = await Promise.all([
 		realpath(options.sshBinaryPath),
+		resolvePrivateKeyPath(options.sshIdentityFilePath),
 		realpath(options.sshIdentityPublicKeyPath),
-		realpath(options.sshKnownHostsPath),
+		resolveKnownHostsBinding(options.sshKnownHostsPath),
 	]);
-	if (![ssh, publicKey, knownHosts].every(isSingleLine)) {
+	if (![ssh, privateKey, publicKey, knownHosts.path].every(isSingleLine)) {
 		throw new Error("activation SSH transport configuration invalid");
 	}
 	const command = [
@@ -68,8 +74,8 @@ export async function resolveVaultGitSshTransportEnvironment(
 		"-F /dev/null",
 		"-o BatchMode=yes",
 		"-o IdentitiesOnly=yes",
-		`-o ${shellWord(`IdentityFile=${publicKey}`)}`,
-		`-o ${shellWord(`UserKnownHostsFile=${knownHosts}`)}`,
+		`-o ${shellWord(`IdentityFile=${privateKey}`)}`,
+		`-o ${shellWord(`UserKnownHostsFile=${knownHosts.path}`)}`,
 		"-o GlobalKnownHostsFile=/dev/null",
 		"-o StrictHostKeyChecking=yes",
 	].join(" ");
@@ -160,7 +166,10 @@ export async function resolveVaultGitActivationIdentities(
 		}),
 		executableIdentity: deriveVaultGitActivationIdentity({
 			owner: "executable",
-			components: [files.executable.path, files.executable.hash],
+			components: files.executable.flatMap((binding) => [
+				binding.path,
+				binding.hash,
+			]),
 		}),
 		privateStateIdentity: deriveVaultGitActivationIdentity({
 			owner: "private-state",
@@ -179,8 +188,11 @@ export async function resolveVaultGitActivationIdentities(
 			components: [
 				files.ssh.path,
 				files.ssh.hash,
+				files.privateKey.path,
+				...files.privateKey.metadata,
 				files.publicKey.hash,
-				files.knownHosts.hash,
+				files.knownHosts.path,
+				...files.knownHosts.metadata,
 			],
 		}),
 	});
@@ -191,26 +203,107 @@ interface IdentityFileBinding {
 	readonly hash: string;
 }
 
+interface OwnerOnlyFileBinding {
+	readonly path: string;
+	readonly metadata: readonly string[];
+}
+
 async function resolveIdentityFiles(
 	options: ResolveVaultGitActivationIdentitiesOptions,
 ): Promise<{
 	readonly runtime: IdentityFileBinding;
-	readonly executable: IdentityFileBinding;
+	readonly executable: readonly IdentityFileBinding[];
 	readonly git: IdentityFileBinding;
 	readonly ssh: IdentityFileBinding;
+	readonly privateKey: OwnerOnlyFileBinding;
 	readonly publicKey: IdentityFileBinding;
-	readonly knownHosts: IdentityFileBinding;
+	readonly knownHosts: OwnerOnlyFileBinding;
 }> {
-	const [runtime, executable, git, ssh, publicKey, knownHosts] =
+	const [runtime, executable, git, ssh, privateKey, publicKey, knownHosts] =
 		await Promise.all([
 			fileBinding(options.runtimeBinaryPath),
-			fileBinding(options.executablePath),
+			executableBindings(options),
 			fileBinding(options.gitBinaryPath),
 			fileBinding(options.sshBinaryPath),
+			resolvePrivateKeyBinding(options.sshIdentityFilePath),
 			fileBinding(options.sshIdentityPublicKeyPath),
-			fileBinding(options.sshKnownHostsPath),
+			resolveKnownHostsBinding(options.sshKnownHostsPath),
 		]);
-	return { runtime, executable, git, ssh, publicKey, knownHosts };
+	return { runtime, executable, git, ssh, privateKey, publicKey, knownHosts };
+}
+
+async function resolvePrivateKeyPath(path: string): Promise<string> {
+	return (await resolvePrivateKeyBinding(path)).path;
+}
+
+async function resolveKnownHostsBinding(
+	path: string,
+): Promise<OwnerOnlyFileBinding> {
+	return resolveOwnerOnlyFileBinding(
+		path,
+		"activation SSH known-hosts configuration invalid",
+		(metadata) => (metadata.mode & 0o777n) === 0o600n,
+	);
+}
+
+async function resolvePrivateKeyBinding(
+	path: string,
+): Promise<OwnerOnlyFileBinding> {
+	return resolveOwnerOnlyFileBinding(
+		path,
+		"activation SSH private identity configuration invalid",
+		isOwnerOnlyRegularFile,
+	);
+}
+
+async function resolveOwnerOnlyFileBinding(
+	path: string,
+	message: string,
+	validMode: (metadata: BigIntStats) => boolean,
+): Promise<OwnerOnlyFileBinding> {
+	const configured = await lstat(path, { bigint: true });
+	if (!isRegularNonSymlink(configured) || !validMode(configured)) {
+		throw new Error(message);
+	}
+	const uid = process.getuid?.();
+	if (uid !== undefined && configured.uid !== BigInt(uid)) {
+		throw new Error(message);
+	}
+	const canonical = await realpath(path);
+	const metadata = await lstat(canonical, { bigint: true });
+	if (
+		!isRegularNonSymlink(metadata) ||
+		!validMode(metadata) ||
+		metadata.dev !== configured.dev ||
+		metadata.ino !== configured.ino ||
+		(uid !== undefined && metadata.uid !== BigInt(uid))
+	) {
+		throw new Error(message);
+	}
+	return {
+		path: canonical,
+		metadata: [
+			metadata.dev.toString(10),
+			metadata.ino.toString(10),
+			metadata.mode.toString(8),
+			metadata.uid.toString(10),
+			metadata.gid.toString(10),
+			metadata.size.toString(10),
+			metadata.mtimeNs.toString(10),
+			metadata.ctimeNs.toString(10),
+		],
+	};
+}
+
+function isOwnerOnlyRegularFile(metadata: BigIntStats): boolean {
+	return (
+		(metadata.mode & 0o077n) === 0n &&
+		(metadata.mode & 0o400n) !== 0n
+	);
+}
+
+function isRegularNonSymlink(metadata: BigIntStats): boolean {
+	return !metadata.isSymbolicLink() && metadata.isFile();
 }
 
 async function fileBinding(path: string): Promise<IdentityFileBinding> {
@@ -220,6 +313,29 @@ async function fileBinding(path: string): Promise<IdentityFileBinding> {
 		path: canonical,
 		hash: createHash("sha256").update(bytes).digest("hex"),
 	};
+}
+
+async function executableBindings(
+	options: ResolveVaultGitActivationIdentitiesOptions,
+): Promise<readonly IdentityFileBinding[]> {
+	const sourcePaths = options.executableSourcePaths ?? [options.executablePath];
+	if (sourcePaths.length === 0) {
+		throw new Error("activation executable source closure invalid");
+	}
+	const [entrypoint, ...bindings] = await Promise.all([
+		realpath(options.executablePath),
+		...sourcePaths.map(fileBinding),
+	]);
+	bindings.sort((left, right) =>
+		left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+	);
+	if (
+		!bindings.some((binding) => binding.path === entrypoint) ||
+		new Set(bindings.map((binding) => binding.path)).size !== bindings.length
+	) {
+		throw new Error("activation executable source closure invalid");
+	}
+	return bindings;
 }
 
 async function resolvePrivateStateBinding(
@@ -274,13 +390,17 @@ function validateConfiguration(
 		options.stateRoot,
 		options.runtimeBinaryPath,
 		options.executablePath,
+		...(options.executableSourcePaths ?? []),
 		options.gitBinaryPath,
 		options.sshBinaryPath,
+		options.sshIdentityFilePath,
 		options.sshIdentityPublicKeyPath,
 		options.sshKnownHostsPath,
 	];
 	const valid = [
 		paths.every(isAbsolute),
+		options.executableSourcePaths === undefined ||
+			options.executableSourcePaths.length > 0,
 		REMOTE_NAME.test(options.remoteName),
 		isSingleLine(options.hostId),
 		isSingleLine(options.runtimeVersion),

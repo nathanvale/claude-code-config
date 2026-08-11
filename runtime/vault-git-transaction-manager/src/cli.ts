@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 import { createHash } from "node:crypto";
-import { readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -51,6 +51,7 @@ import {
 } from "./git-adapter.ts";
 import {
 	VAULT_GIT_REPAIR_ACTIONS,
+	createVaultGitActivationRestriction,
 	createVaultGitLifecycleResult,
 	type VaultGitLifecycleResultPayload,
 	type VaultGitNextActionId,
@@ -67,18 +68,18 @@ import {
 	resolveVaultGitSshTransportEnvironment,
 } from "./activation-identity.ts";
 import { createVaultGitActivationPreparer } from "./activation-preparation.ts";
+import { parseVaultGitPreparedEvidence } from "./activation-contract.ts";
 import {
 	projectVaultGitActivationRestrictionJson,
 	renderVaultGitActivationRestriction,
 } from "./activation-restriction.ts";
-import type {
-	VaultGitCheckerPort,
-	VaultGitProcessPort,
-	VaultGitRuntimePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitCheckerPort,
+	type VaultGitProcessPort,
+	type VaultGitRuntimePort,
 } from "./ports.ts";
-import type {
-	VaultGitDoctorResult,
-} from "./doctor.ts";
+import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitRepairResult } from "./repair.ts";
 import {
 	createReceiptStore,
@@ -91,7 +92,71 @@ import {
 import { evaluateVaultGitWorkerPolicy } from "./worker-policy.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
+// Production owns this exact closure. Runtime import-graph discovery would make
+// admission depend on parser and loader behavior instead of one reviewable list.
+const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
+	"activation-authority.ts",
+	"activation-contract.ts",
+	"activation-identity.ts",
+	"activation-preparation.ts",
+	"activation-restriction.ts",
+	"activation-result.ts",
+	"branch-station-catalog.ts",
+	"cli.ts",
+	"clock.ts",
+	"command-contract.ts",
+	"commit-policy.ts",
+	"doctor.ts",
+	"engine.ts",
+	"git-adapter.ts",
+	"janitor.ts",
+	"model.ts",
+	"ports.ts",
+	"remote-ledger.ts",
+	"remote-safety.ts",
+	"repair.ts",
+	"repository-identity.ts",
+	"store.ts",
+	"worker-policy.ts",
+] as const;
+const CLI_FACADE_EXECUTABLE_SOURCE_NAMES = [
+	"baseline-exit-drift.ts",
+	"cli-diagnostics.ts",
+	"cli-writer.ts",
+	"command-contract.ts",
+	"command-discovery.ts",
+	"command-facade.ts",
+	"command-metadata.ts",
+	"index.ts",
+	"runtime-envelope.ts",
+	"runtime-text-safety.ts",
+	"station-map.ts",
+	"usage.ts",
+] as const;
+const VAULT_GIT_PACKAGE_ROOT = dirname(dirname(CLI_PATH));
+const CLI_FACADE_PACKAGE_ROOT = resolve(
+	VAULT_GIT_PACKAGE_ROOT,
+	"../cli-command-facade",
+);
+const REPOSITORY_ROOT = resolve(VAULT_GIT_PACKAGE_ROOT, "../..");
+
+/**
+ * Exact source-linked production closure supplied to live activation identity.
+ * @internal
+ */
+export const VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS = Object.freeze([
+	...PRODUCTION_EXECUTABLE_SOURCE_NAMES.map((name) =>
+		join(VAULT_GIT_PACKAGE_ROOT, "src", name),
+	),
+	join(VAULT_GIT_PACKAGE_ROOT, "package.json"),
+	...CLI_FACADE_EXECUTABLE_SOURCE_NAMES.map((name) =>
+		join(CLI_FACADE_PACKAGE_ROOT, "src", name),
+	),
+	join(CLI_FACADE_PACKAGE_ROOT, "package.json"),
+	join(REPOSITORY_ROOT, "bun.lock"),
+].sort());
 const DEFAULT_REMOTE = "origin";
+const DEFAULT_LEGACY_STATE_IDENTITY = "configured-super-vault";
 const DEFAULT_LEASE_DURATION_MS = 15 * 60_000;
 const DEFAULT_TIMEOUTS = {
 	fetchMs: 15_000,
@@ -118,9 +183,13 @@ export interface VaultGitCliCompositionInput {
 	readonly stateRoot: string;
 	/** Optional explicit identity seam for isolated tests and embedded callers. */
 	readonly repositoryIdentity?: string;
+	/** Pre-canonical private-state namespace retained across composition upgrades. */
+	readonly privateStateNamespaceIdentity?: string;
 	readonly actor: string;
 	readonly host: string;
 	readonly remote?: string;
+	/** Exact network hosts admitted by both preparation and write-side Git. */
+	readonly allowedRemoteHosts?: readonly string[];
 	readonly leaseDurationMs?: number;
 	readonly process?: VaultGitProcessPort;
 	readonly runtime?: VaultGitRuntimePort;
@@ -138,8 +207,11 @@ export interface VaultGitCliActivationIdentityInput {
 	readonly runtimeBinaryPath: string;
 	readonly runtimeVersion: string;
 	readonly executablePath: string;
+	/** Explicit deterministic production source closure. */
+	readonly executableSourcePaths: readonly string[];
 	readonly gitBinaryPath: string;
 	readonly sshBinaryPath: string;
+	readonly sshIdentityFilePath: string;
 	readonly sshIdentityPublicKeyPath: string;
 	readonly sshKnownHostsPath: string;
 }
@@ -155,7 +227,9 @@ export interface VaultGitCliOptions {
 	/** Precomposed live runtime. */
 	readonly composition?: VaultGitCliComposition;
 	/** Lazy configured-vault composition seam. */
-	readonly resolveComposition?: () => Promise<VaultGitCliComposition | null>;
+	readonly resolveComposition?: (
+		command: Exclude<VaultGitCommand, "commands">,
+	) => Promise<VaultGitCliComposition | null>;
 	/** Capability FD reader seam. */
 	readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 	/** Disable the public-to-internal FD launcher in in-process tests. */
@@ -205,6 +279,26 @@ export interface VaultGitCliRun {
 export async function createVaultGitCliComposition(
 	input: VaultGitCliCompositionInput,
 ): Promise<VaultGitCliComposition> {
+	return createVaultGitCliCompositionFromSelection(input);
+}
+
+type VaultGitPrivateStateSelection = {
+	readonly repositoryId: string;
+	readonly repositoryIdentity?: string;
+	readonly store?: VaultGitReceiptStore;
+};
+
+class VaultGitPrivateStateConflictError extends Error {
+	constructor() {
+		super("canonical and legacy private-state namespaces are both populated");
+		this.name = "VaultGitPrivateStateConflictError";
+	}
+}
+
+async function createVaultGitCliCompositionFromSelection(
+	input: VaultGitCliCompositionInput,
+	selection?: VaultGitPrivateStateSelection,
+): Promise<VaultGitCliComposition> {
 	const [repositoryPath, checkRepositoryPath] = await Promise.all([
 		realpath(input.repositoryPath),
 		realpath(input.checkRepositoryPath),
@@ -226,9 +320,20 @@ export async function createVaultGitCliComposition(
 			timeoutMs: DEFAULT_TIMEOUTS.localMs,
 			...(gitBinary ? { gitBinary } : {}),
 		});
-	const repositoryIdentity =
-		input.repositoryIdentity ??
-		(await resolveRepositoryIdentity()).identity;
+	let repositoryIdentity = input.repositoryIdentity ?? selection?.repositoryIdentity;
+	if (repositoryIdentity === undefined) {
+		try {
+			repositoryIdentity = (await resolveRepositoryIdentity()).identity;
+		} catch (error) {
+			if (
+				!selection?.store ||
+				!(error instanceof VaultRepositoryIdentityUnavailableError)
+			) {
+				throw error;
+			}
+			repositoryIdentity = `vault-git-recovery:v1:${selection.store.repositoryId}`;
+		}
+	}
 	const runtime =
 		input.runtime ??
 		createNodeVaultGitRuntime({ actor: input.actor, host: input.host });
@@ -238,8 +343,7 @@ export async function createVaultGitCliComposition(
 		repositoryIdentity,
 		...(input.repositoryIdentity === undefined
 			? {
-					resolveRepositoryIdentity: async () =>
-						(await resolveRepositoryIdentity()).identity,
+					resolveRepositoryIdentity,
 				}
 			: {}),
 		process: processPort,
@@ -256,14 +360,37 @@ export async function createVaultGitCliComposition(
 		repositoryPath,
 		process: processPort,
 		timeouts,
+		...(input.allowedRemoteHosts
+			? { allowedRemoteHosts: input.allowedRemoteHosts }
+			: {}),
 		...(gitBinary ? { gitBinary } : {}),
 		...(admittedGitEnvironment ? { admittedGitEnvironment } : {}),
 	});
-	const store = createReceiptStore({
-		stateRoot: input.stateRoot,
-		repositoryIdentity,
-	});
-	const checker = createVaultCheckerPort(repositoryPath, processPort);
+	const selectedStore =
+		selection?.store ??
+		createReceiptStore({ stateRoot: input.stateRoot, repositoryIdentity });
+	if (selection && selectedStore.repositoryId !== selection.repositoryId) {
+		throw new VaultGitPrivateStateConflictError();
+	}
+	const store =
+		selection === undefined
+			? await selectPrivateStateStore(
+			createReceiptStore({
+				stateRoot: input.stateRoot,
+				repositoryIdentity,
+			}),
+			createReceiptStore({
+				stateRoot: input.stateRoot,
+				repositoryIdentity:
+					input.privateStateNamespaceIdentity ?? DEFAULT_LEGACY_STATE_IDENTITY,
+			}),
+			)
+			: selectedStore;
+	const checker = createVaultCheckerPort(
+		repositoryPath,
+		processPort,
+		input.activationIdentity?.runtimeBinaryPath ?? process.execPath,
+	);
 	const activationAuthority =
 		input.activationAuthority ??
 		createConfiguredActivationAuthority({
@@ -304,6 +431,121 @@ export async function createVaultGitCliComposition(
 	};
 }
 
+/**
+ * Compose the read-only recovery surface from discoverable private state.
+ *
+ * @param input - Configured vault and private-state roots
+ * @returns Recovery composition retaining any discoverable receipt context
+ * @throws {Error} When private state cannot be selected safely
+ *
+ * @example
+ * ```typescript
+ * const composition = await createVaultGitCliRecoveryComposition(input)
+ * const report = await composition.engine.doctor()
+ * ```
+ */
+export async function createVaultGitCliRecoveryComposition(
+	input: VaultGitCliCompositionInput,
+): Promise<VaultGitCliComposition> {
+	if (input.repositoryIdentity !== undefined) {
+		return createVaultGitCliComposition(input);
+	}
+	const selection = await discoverPrivateState(
+		input.stateRoot,
+		input.privateStateNamespaceIdentity ?? DEFAULT_LEGACY_STATE_IDENTITY,
+	);
+	return createVaultGitCliCompositionFromSelection(input, selection ?? undefined);
+}
+
+async function discoverPrivateState(
+	stateRoot: string,
+	legacyNamespaceIdentity: string,
+): Promise<VaultGitPrivateStateSelection | null> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const entries = await readdir(managerRoot, { withFileTypes: true }).catch(
+		(error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return [];
+			throw error;
+		},
+	);
+	const populated = [];
+	for (const entry of entries) {
+		if (!/^[0-9a-f]{64}$/.test(entry.name) || !entry.isDirectory()) continue;
+		const repositoryRoot = join(managerRoot, entry.name);
+		if ((await readdir(repositoryRoot)).length > 0) {
+			populated.push({ repositoryId: entry.name, repositoryRoot });
+		}
+	}
+	if (populated.length > 1) throw new VaultGitPrivateStateConflictError();
+	if (populated.length === 0) return null;
+	const [candidate] = populated;
+	if (!candidate) return null;
+	const legacyStore = createReceiptStore({
+		stateRoot,
+		repositoryIdentity: legacyNamespaceIdentity,
+	});
+	if (legacyStore.repositoryId === candidate.repositoryId) {
+		return { repositoryId: candidate.repositoryId, store: legacyStore };
+	}
+	const evidencePath = join(candidate.repositoryRoot, "prepared-evidence.json");
+	const metadata = await lstat(evidencePath).catch(
+		(error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return null;
+			throw error;
+		},
+	);
+	if (
+		!metadata?.isFile() ||
+		metadata.isSymbolicLink() ||
+		(metadata.mode & 0o777) !== 0o600
+	) {
+		return { repositoryId: candidate.repositoryId };
+	}
+	const evidence = await readFile(evidencePath, "utf8")
+		.then((source) => parseVaultGitPreparedEvidence(JSON.parse(source)))
+		.catch(() => null);
+	if (!evidence) return { repositoryId: candidate.repositoryId };
+	const store = createReceiptStore({
+		stateRoot,
+		repositoryIdentity: evidence.repositoryIdentity,
+	});
+	return store.repositoryId === candidate.repositoryId
+		? {
+				repositoryId: candidate.repositoryId,
+				repositoryIdentity: evidence.repositoryIdentity,
+				store,
+			}
+		: { repositoryId: candidate.repositoryId };
+}
+
+async function selectPrivateStateStore(
+	canonicalStore: VaultGitReceiptStore,
+	legacyStore: VaultGitReceiptStore,
+): Promise<VaultGitReceiptStore> {
+	if (canonicalStore.repositoryId === legacyStore.repositoryId) {
+		return canonicalStore;
+	}
+	const [canonicalPopulated, legacyPopulated] = await Promise.all([
+		privateStateNamespaceIsPopulated(canonicalStore),
+		privateStateNamespaceIsPopulated(legacyStore),
+	]);
+	if (canonicalPopulated && legacyPopulated) {
+		throw new VaultGitPrivateStateConflictError();
+	}
+	return legacyPopulated ? legacyStore : canonicalStore;
+}
+
+async function privateStateNamespaceIsPopulated(
+	store: VaultGitReceiptStore,
+): Promise<boolean> {
+	try {
+		return (await readdir(store.paths.repositoryRoot)).length > 0;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
 function createConfiguredActivationAuthority(input: {
 	readonly input: VaultGitCliCompositionInput;
 	readonly repositoryPath: string;
@@ -321,6 +563,9 @@ function createConfiguredActivationAuthority(input: {
 		repositoryPath: input.repositoryPath,
 		privateStateRoot: input.input.stateRoot,
 		remoteName,
+		...(input.input.allowedRemoteHosts
+			? { allowedRemoteHosts: input.input.allowedRemoteHosts }
+			: {}),
 		repositoryIdentity: input.repositoryIdentity,
 		jobGeneration: 1,
 		process: input.processPort,
@@ -336,7 +581,11 @@ function createConfiguredActivationAuthority(input: {
 				timeoutMs: DEFAULT_TIMEOUTS.localMs,
 			}),
 		createChecker: (isolatedRepositoryPath) =>
-			createVaultCheckerPort(isolatedRepositoryPath, input.processPort),
+			createVaultCheckerPort(
+				isolatedRepositoryPath,
+				input.processPort,
+				identity.runtimeBinaryPath,
+			),
 		clock: () => input.runtime.now().toISOString(),
 		timeouts: DEFAULT_TIMEOUTS,
 		gitBinaryPath: identity.gitBinaryPath,
@@ -436,8 +685,30 @@ export async function main(
 	try {
 		composition =
 			options.composition ??
-			(await (options.resolveComposition ?? resolveDefaultComposition)());
-	} catch {
+			(await (options.resolveComposition ?? resolveDefaultComposition)(
+				invocation.command,
+			));
+	} catch (error) {
+		if (error instanceof VaultGitPrivateStateConflictError) {
+			return emitPrivateStateConflict({
+				invocation,
+				stdout,
+				stderr,
+				runId: diagnostics.options.runId,
+				startedAt: diagnostics.options.startedAtMs,
+				now,
+			});
+		}
+		if (error instanceof VaultRepositoryIdentityUnavailableError) {
+			return emitActivationUnavailable({
+				invocation,
+				stdout,
+				stderr,
+				runId: diagnostics.options.runId,
+				startedAt: diagnostics.options.startedAtMs,
+				now,
+			});
+		}
 		composition = null;
 	}
 	if (!composition) {
@@ -518,6 +789,9 @@ export async function runVaultGitForTest(
 	options: {
 		readonly runId?: string;
 		readonly composition?: VaultGitCliComposition;
+		readonly resolveComposition?: (
+			command: Exclude<VaultGitCommand, "commands">,
+		) => Promise<VaultGitCliComposition | null>;
 		readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 		readonly launchPrivate?: boolean;
 	} = {},
@@ -529,7 +803,7 @@ export async function runVaultGitForTest(
 		stdout,
 		stderr,
 		now: () => 0,
-		resolveComposition: async () => null,
+		resolveComposition: options.resolveComposition ?? (async () => null),
 		...(options.composition ? { composition: options.composition } : {}),
 		...(options.readCapability
 			? { readCapability: options.readCapability }
@@ -541,7 +815,9 @@ export async function runVaultGitForTest(
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
 
-async function resolveDefaultComposition(): Promise<VaultGitCliComposition | null> {
+async function resolveDefaultComposition(
+	command: Exclude<VaultGitCommand, "commands">,
+): Promise<VaultGitCliComposition | null> {
 	const repositoryPath =
 		process.env.VAULT_GIT_REPOSITORY_PATH ??
 		(await resolveConfiguredVaultRoot(process.env.VAULT_GIT_CONFIG_PATH));
@@ -551,29 +827,48 @@ async function resolveDefaultComposition(): Promise<VaultGitCliComposition | nul
 		process.env.XDG_STATE_HOME ??
 		join(homedir(), ".local", "state");
 	const activationIdentity = resolveDefaultActivationIdentity();
-	return createVaultGitCliComposition({
+	const allowedRemoteHosts = resolveDefaultAllowedRemoteHosts();
+	const input: VaultGitCliCompositionInput = {
 		repositoryPath,
 		checkRepositoryPath:
 			process.env.VAULT_GIT_CHECK_REPOSITORY_PATH ?? repositoryPath,
 		stateRoot,
+		privateStateNamespaceIdentity:
+			process.env.VAULT_GIT_REPOSITORY_IDENTITY ??
+			DEFAULT_LEGACY_STATE_IDENTITY,
 		actor: process.env.VAULT_GIT_ACTOR ?? process.env.USER ?? "operator",
 		host: process.env.VAULT_GIT_HOST ?? hostname(),
 		remote: process.env.VAULT_GIT_REMOTE ?? DEFAULT_REMOTE,
+		...(allowedRemoteHosts ? { allowedRemoteHosts } : {}),
 		...(activationIdentity ? { activationIdentity } : {}),
-	});
+	};
+	return ["status", "preview", "doctor"].includes(command)
+		? createVaultGitCliRecoveryComposition(input)
+		: createVaultGitCliComposition(input);
+}
+
+function resolveDefaultAllowedRemoteHosts(): readonly string[] | undefined {
+	const configured = process.env.VAULT_GIT_ALLOWED_REMOTE_HOSTS;
+	if (configured === undefined) return undefined;
+	// Exact DNS names only. Empty entries remain visible to constructor
+	// validation so a malformed owner-controlled admission fails closed.
+	return configured.split(",").map((host) => host.trim());
 }
 
 function resolveDefaultActivationIdentity(): VaultGitCliActivationIdentityInput | null {
 	const publicKey = process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
+	const identityFile = process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH;
 	const knownHosts = process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
-	if (!publicKey || !knownHosts) return null;
+	if (!identityFile || !publicKey || !knownHosts) return null;
 	return {
 		hostId: process.env.VAULT_GIT_HOST ?? hostname(),
 		runtimeBinaryPath: process.execPath,
 		runtimeVersion: Bun.version,
 		executablePath: CLI_PATH,
+		executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
 		gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
 		sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
+		sshIdentityFilePath: identityFile,
 		sshIdentityPublicKeyPath: publicKey,
 		sshKnownHostsPath: knownHosts,
 	};
@@ -591,20 +886,25 @@ function resolveDefaultActivationIdentity(): VaultGitCliActivationIdentityInput 
  *
  * @example
  * ```typescript
- * const checker = createVaultCheckerPort(vaultRoot, createNodeProcessPort())
+ * const checker = createVaultCheckerPort(vaultRoot, createNodeProcessPort(), process.execPath)
  * const result = await checker.runCheck()
  * ```
  */
 export function createVaultCheckerPort(
 	repositoryPath: string,
 	processPort: VaultGitProcessPort,
+	runtimeBinaryPath: string = process.execPath,
 ): VaultGitCheckerPort {
 	const run = (args: readonly string[]) =>
 		processPort.run({
-			command: "bun",
+			command: runtimeBinaryPath,
 			args,
 			cwd: repositoryPath,
-			env: { LC_ALL: "C" },
+			env: {
+				LC_ALL: "C",
+				PATH: `${dirname(runtimeBinaryPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+			},
+			environmentMode: "isolated",
 			timeoutMs: DEFAULT_TIMEOUTS.localMs,
 		});
 	return {
@@ -624,6 +924,12 @@ export function createVaultCheckerPort(
 					bytes: await readFile(join(repositoryPath, "bun.lock")),
 				},
 			];
+			// The checker reads this deterministic contract as runtime input. Bind it
+			// with code and lock bytes so schema drift always invalidates admission.
+			const checkerDataPaths = ["schemas/frontmatter-contract.json"] as const;
+			for (const path of checkerDataPaths) {
+				bundle.push({ path, bytes: await readFile(join(repositoryPath, path)) });
+			}
 			const bunfig = await readFile(join(repositoryPath, "bunfig.toml")).catch(
 				(error: NodeJS.ErrnoException) => {
 					if (error.code === "ENOENT") return null;
@@ -754,14 +1060,18 @@ async function resolveConfiguredVaultRoot(
 		);
 	const source = await readFile(configPath, "utf8").catch(() => null);
 	if (!source) return null;
+	const declarations: string[] = [];
 	for (const line of source.split(/\r?\n/)) {
 		const match = line.match(
 			/^\s*(?:[-*]\s*)?(?:configured\s+)?vault\s+root\s*:\s*[`"']?(.+?)[`"']?\s*$/i,
 		);
 		const candidate = match?.[1]?.trim();
-		if (candidate && isAbsolute(candidate)) return candidate;
+		if (candidate) declarations.push(candidate);
 	}
-	return null;
+	const [candidate] = declarations;
+	return declarations.length === 1 && candidate && isAbsolute(candidate)
+		? candidate
+		: null;
 }
 
 function validateInvocation(invocation: ParsedVaultGitInvocation): void {
@@ -1073,6 +1383,62 @@ function emitUnconfigured(input: EmitContext & {
 	});
 }
 
+function emitActivationUnavailable(input: EmitContext & {
+	readonly invocation: VaultGitRuntimeInvocation;
+	readonly stderr: CliWriter;
+}): number {
+	const readOnly = ["status", "preview", "doctor"].includes(
+		input.invocation.command,
+	);
+	const restriction = createVaultGitActivationRestriction({
+		stoppedAction: "vault_write",
+		cause: "revalidation_unavailable",
+	});
+	const payload = createVaultGitLifecycleResult({
+		command: input.invocation.command,
+		outcome: readOnly ? "read_only" : "refused",
+		phase: "blocked",
+		write_permission: "denied",
+		changed_state: "none",
+		retry_safety: "same_input_safe",
+		blockers: ["activation_blocked"],
+		next_action: action(restriction.nextAction.id),
+		activation_restriction:
+			projectVaultGitActivationRestrictionJson(restriction),
+	});
+	return emitPayload({
+		...input,
+		payload,
+		success: readOnly,
+		errorCode: "activation_blocked",
+	});
+}
+
+function emitPrivateStateConflict(input: EmitContext & {
+	readonly invocation: VaultGitRuntimeInvocation;
+	readonly stderr: CliWriter;
+}): number {
+	const readOnly = ["status", "preview", "doctor"].includes(
+		input.invocation.command,
+	);
+	const payload = createVaultGitLifecycleResult({
+		command: input.invocation.command,
+		outcome: readOnly ? "read_only" : "refused",
+		phase: "human_required",
+		write_permission: "denied",
+		changed_state: "none",
+		retry_safety: "operator_required",
+		blockers: ["receipt_conflict"],
+		next_action: action("inspect_private_receipt"),
+	});
+	return emitPayload({
+		...input,
+		payload,
+		success: readOnly,
+		errorCode: "receipt_conflict",
+	});
+}
+
 function emitRuntimeResult(input: EmitContext & {
 	readonly invocation: VaultGitRuntimeInvocation;
 	readonly result: RuntimeResult;
@@ -1160,15 +1526,22 @@ function payloadForRuntime(
 	if (result.kind === "repair") {
 		const value = result.value;
 		return createVaultGitLifecycleResult({
-		command,
-		outcome: value.status,
-		phase: value.phase,
-		write_permission: value.status === "repaired" ? "owner" : "denied",
-		changed_state: value.changedState,
-		retry_safety: value.retrySafety,
-		blockers: value.blocker ? [value.blocker] : [],
-		transaction_state: value.state,
-		repair_action: value.action,
+			command,
+			outcome: value.status,
+			phase: value.phase,
+			write_permission:
+				value.status === "repaired" &&
+				value.action === "resume" &&
+				value.state === "active" &&
+				value.phase === "writing" &&
+				value.nextAction.id === "complete_transaction"
+					? "owner"
+					: "denied",
+			changed_state: value.changedState,
+			retry_safety: value.retrySafety,
+			blockers: value.blocker ? [value.blocker] : [],
+			transaction_state: value.state,
+			repair_action: value.action,
 			next_action: action(value.nextAction.id, value.nextAction.summary),
 			...(value.activationRestriction
 				? {

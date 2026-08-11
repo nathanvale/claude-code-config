@@ -16,8 +16,12 @@ import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
+import type { VaultGitRepairAction } from "../src/model.ts";
 import type { VaultGitRuntimePort } from "../src/ports.ts";
-import type { VaultGitRepairInput } from "../src/repair.ts";
+import type {
+	VaultGitRepairInput,
+	VaultGitRepairResult,
+} from "../src/repair.ts";
 import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
 import {
 	admitActivationForTest,
@@ -192,8 +196,7 @@ describe("vault-git CLI composition", () => {
 					blocker: "activation_blocked",
 					retrySafety: "same_input_unsafe",
 					nextAction: {
-						id: "request_operator_admission",
-						summary: "Ask an operator to admit runtime activation before canonical vault writes.",
+						...activationRestriction.nextAction,
 					},
 					activationRestriction,
 				});
@@ -214,13 +217,16 @@ describe("vault-git CLI composition", () => {
 		expect(json.exitCode).toBe(1);
 		expect(JSON.parse(json.stdout).data).toMatchObject({
 			blockers: ["activation_blocked"],
-			next_action: { id: "request_operator_admission" },
+			next_action: { id: "prepare_fresh" },
 			activation_restriction: {
 				status: "restricted",
 				stopped_action: "vault_write",
 				cause: { id: "revoked" },
 				next_action: { id: "prepare_fresh" },
 			},
+		});
+		expect(JSON.parse(json.stdout).continuation).toMatchObject({
+			next_action_id: "prepare_fresh",
 		});
 
 		const text = await runVaultGitForTest(argv, {
@@ -230,7 +236,7 @@ describe("vault-git CLI composition", () => {
 		expect(text.exitCode).toBe(1);
 		expect(text.stderr).toContain("cause: revoked | A human revoked this activation evidence.");
 		expect(text.stderr).toContain("next: prepare_fresh | Prepare fresh V2 evidence");
-		expect(text.stderr).toContain("next: request_operator_admission");
+		expect(text.stderr).not.toContain("request_operator_admission");
 	});
 
 	test("keeps the configured dashboard read-only with one continuation", async () => {
@@ -417,6 +423,136 @@ describe("vault-git CLI composition", () => {
 		});
 		expect(observedRepair?.doctorToken).toEqual(new Uint8Array([1, 2, 3]));
 	});
+
+	test("projects write authority only for active writing resume repairs", async () => {
+		const transactionId = "txn_00000000000000000000000000000001";
+		const cases = [
+			{
+				action: "close-verified",
+				result: repairResult("close-verified", "closed", "closed", "none"),
+				writePermission: "denied",
+			},
+			{
+				action: "retry-push",
+				result: repairResult("retry-push", "closed", "closed", "none"),
+				writePermission: "denied",
+			},
+			{
+				action: "stale-lease-takeover",
+				result: repairResult(
+					"stale-lease-takeover",
+					"superseded",
+					"closed",
+					"reconcile_quarantine",
+				),
+				writePermission: "denied",
+			},
+			{
+				action: "reconcile-quarantine",
+				result: repairResult(
+					"reconcile-quarantine",
+					"closed",
+					"closed",
+					"none",
+				),
+				writePermission: "denied",
+			},
+			{
+				action: "resume",
+				result: repairResult(
+					"resume",
+					"active",
+					"writing",
+					"complete_transaction",
+				),
+				writePermission: "owner",
+			},
+		] as const satisfies readonly {
+			readonly action: VaultGitRepairAction;
+			readonly result: VaultGitRepairResult;
+			readonly writePermission: "denied" | "owner";
+		}[];
+
+		for (const repairCase of cases) {
+			const engine = fakeEngine({
+				async doctor() {
+					return {
+						status: "diagnosed",
+						state: "expired",
+						phase: "writing",
+						finding: "lease_expired",
+						changedState: "none",
+						retrySafety: "operator_required",
+						nextAction: {
+							id: "run_repair",
+							summary: "Run the admitted repair.",
+						},
+						diagnosticsReference: "doctor:fixture",
+						repairAction: "stale-lease-takeover",
+						transactionId,
+						ledgerGeneration: "generation-a",
+					};
+				},
+				async repair() {
+					return repairCase.result;
+				},
+			});
+			const composition = fakeComposition(engine, {
+				async readDoctorProof() {
+					return {
+						transactionId,
+						ledgerGeneration: "generation-a",
+						receiptId: "receipt-fixture",
+						receiptRevision: 1,
+						proofFingerprint: "fingerprint-fixture",
+						issuedAt: "2026-01-01T00:00:00.000Z",
+					};
+				},
+			});
+			const args = [
+				"repair",
+				repairCase.action,
+				...(repairCase.action === "stale-lease-takeover"
+					? ["--transaction-id", transactionId, "--prior-writer-stopped"]
+					: []),
+				"--capability-fd",
+				"7",
+			];
+			const options = {
+				composition,
+				launchPrivate: false,
+				readCapability: async () => new Uint8Array([1]),
+			};
+
+			const json = await runVaultGitForTest([...args, "--json"], options);
+			expect(json.exitCode).toBe(0);
+			expect(JSON.parse(json.stdout)).toMatchObject({
+				status: "ok",
+				data: {
+					outcome: "repaired",
+					phase: repairCase.result.phase,
+					transaction_state: repairCase.result.state,
+					write_permission: repairCase.writePermission,
+					next_action: { id: repairCase.result.nextAction.id },
+				},
+				continuation: {
+					next_action_id: repairCase.result.nextAction.id,
+				},
+			});
+
+			const plain = await runVaultGitForTest(args, options);
+			expect(plain.exitCode).toBe(0);
+			expect(plain.stdout).toContain(
+				`write_permission: ${repairCase.writePermission}`,
+			);
+			expect(
+				plain.stdout
+					.trim()
+					.split("\n")
+					.filter((line) => line.startsWith("next:")),
+			).toEqual([`next: ${repairCase.result.nextAction.id}`]);
+		}
+	});
 });
 
 async function temp(prefix: string): Promise<string> {
@@ -528,5 +664,23 @@ function engineResult(
 			summary: "Begin one transaction before canonical writes.",
 		},
 		...overrides,
+	};
+}
+
+function repairResult(
+	action: VaultGitRepairAction,
+	state: VaultGitRepairResult["state"],
+	phase: VaultGitRepairResult["phase"],
+	nextAction: VaultGitRepairResult["nextAction"]["id"],
+): VaultGitRepairResult {
+	return {
+		status: "repaired",
+		action,
+		state,
+		phase,
+		changedState: "none",
+		retrySafety: "same_input_safe",
+		nextAction: { id: nextAction, summary: "Fixture next action." },
+		diagnosticsReference: "repair:fixture",
 	};
 }

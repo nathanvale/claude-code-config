@@ -85,12 +85,13 @@ describe("activation trust negative controls", () => {
 	] as const) {
 		test(`the ${control.name} owning test fails when its guard is disabled`, async () => {
 			const root = await mkdtemp(
-				join(packageRoot, `.activation-negative-${control.name}-`),
+				join(resolve(packageRoot, ".."), `.activation-negative-${control.name}-`),
 			);
 			roots.push(root);
 			await Promise.all([
 				cp(join(packageRoot, "src"), join(root, "src"), { recursive: true }),
 				cp(join(packageRoot, "tests"), join(root, "tests"), { recursive: true }),
+				cp(join(packageRoot, "package.json"), join(root, "package.json")),
 			]);
 			const baseline = runOwningTest(root, control.testFile);
 			expect(

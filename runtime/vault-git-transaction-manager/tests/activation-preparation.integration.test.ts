@@ -13,18 +13,28 @@ import {
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+	parseCliProcessJson,
+	runCliProcess,
+} from "@side-quest/cli-command-facade/testing";
 
 import {
 	createVaultGitActivationAuthority,
 	createVaultGitActivationPreparer,
 	resolveVaultGitActivationIdentities,
 	resolveVaultRepositoryIdentity,
+	type VaultGitReceipt,
 	VAULT_GIT_ABSENT_LEDGER_GENERATION,
 } from "../src/index.ts";
 import {
+	createGitAdapter,
 	createNodeProcessPort,
 } from "../src/git-adapter.ts";
-import { createVaultCheckerPort } from "../src/cli.ts";
+import { acquireRemoteLease } from "../src/remote-ledger.ts";
+import {
+	createVaultCheckerPort,
+	VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
+} from "../src/cli.ts";
 import type { VaultGitCheckerPort } from "../src/ports.ts";
 import type { VaultGitProcessRequest } from "../src/ports.ts";
 import { createReceiptStore } from "../src/store.ts";
@@ -34,6 +44,94 @@ const tempDirectories = createTempDirectoryFixture();
 afterEach(tempDirectories.cleanup);
 
 describe("isolated activation preparation", () => {
+	test(
+		"production CLI refuses, revalidates admitted V2 evidence, and opens the write gate",
+		async () => {
+			const fixture = await preparationFixture({ seedLedger: false });
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				VAULT_GIT_REPOSITORY_PATH: fixture.repositoryPath,
+				VAULT_GIT_CHECK_REPOSITORY_PATH: fixture.repositoryPath,
+				VAULT_GIT_STATE_ROOT: fixture.stateRoot,
+				VAULT_GIT_ACTOR: "fixture-operator",
+				VAULT_GIT_HOST: "fixture-host",
+				VAULT_GIT_REMOTE: "origin",
+				VAULT_GIT_GIT_BINARY_PATH: "/usr/bin/git",
+				VAULT_GIT_SSH_BINARY_PATH: "/usr/bin/ssh",
+				VAULT_GIT_SSH_IDENTITY_FILE_PATH: fixture.privateKeyPath,
+				VAULT_GIT_SSH_PUBLIC_KEY_PATH: fixture.publicKeyPath,
+				VAULT_GIT_SSH_KNOWN_HOSTS_PATH: fixture.knownHostsPath,
+			};
+			const runProductionBegin = (runId: string) =>
+				runCliProcess({
+					label: `production activation canary ${runId}`,
+					argv: [
+						"bun", "run", join(import.meta.dir, "../src/cli.ts"),
+						"begin", "--event", "note_created", "--path", "notes/a.md",
+						"--json", "--run-id", runId,
+					],
+					cwd: fixture.repositoryPath,
+					env,
+					timeoutMs: 30_000,
+				});
+
+			const missing = await runProductionBegin("activation-missing");
+			expect(missing.exitCode).toBe(1);
+			expect(parseCliProcessJson(missing)).toMatchObject({
+				status: "error",
+				error: { code: "activation_blocked" },
+				data: { activation_restriction: { cause: { id: "admission_missing" } } },
+			});
+
+			const prepared = await fixture.preparer.prepare();
+			if (prepared.status !== "prepared") throw new Error("expected prepared");
+			const capability = new Uint8Array([4, 2]);
+			const authority = createVaultGitActivationAuthority({
+				store: fixture.store,
+				clock: () => "2026-08-11T00:00:01.000Z",
+				validateHumanCapability: async (candidate) =>
+					candidate.length === capability.length &&
+					candidate.every((byte, index) => byte === capability[index]),
+				revalidate: fixture.preparer.revalidate,
+			});
+			expect(await authority.admit({
+				evidenceId: prepared.evidence.evidenceId,
+				humanCapability: capability,
+				note: "fixture human review",
+			})).toMatchObject({ status: "admitted" });
+
+			const admitted = await runProductionBegin("activation-admitted");
+			if (admitted.exitCode !== 0) {
+				const invalidation = await fixture.store.readActivationInvalidation(
+					prepared.evidence.evidenceId,
+				);
+				throw new Error(
+					`production admission failed after ${invalidation?.binding ?? "unknown"} changed`,
+				);
+			}
+			expect({
+				exitCode: admitted.exitCode,
+				envelope: parseCliProcessJson(admitted),
+			}).toMatchObject({
+				exitCode: 0,
+				envelope: {
+					status: "ok",
+					data: { outcome: "admitted", write_permission: "owner" },
+				},
+			});
+
+			await writeFile(fixture.publicKeyPath, "ssh-ed25519 changed-key\n");
+			const changed = await runProductionBegin("activation-changed");
+			expect(changed.exitCode).toBe(1);
+			expect(parseCliProcessJson(changed)).toMatchObject({
+				status: "error",
+				error: { code: "activation_blocked" },
+				data: { activation_restriction: { cause: { id: "binding_changed" } } },
+			});
+		},
+		120_000,
+	);
+
 	test("publishes V2 evidence without changing canonical Git or granting authority", async () => {
 		const fixture = await preparationFixture();
 		const before = await canonicalSnapshot(fixture.repositoryPath);
@@ -79,6 +177,33 @@ describe("isolated activation preparation", () => {
 		for (const request of remoteRequests) {
 			expect(request.env).toMatchObject(admittedGitEnvironment);
 		}
+	});
+
+	test("refuses an unsafe configured remote before any network-capable Git command", async () => {
+		const observed: VaultGitProcessRequest[] = [];
+		const fixture = await preparationFixture({
+			observeProcess(request) {
+				observed.push(request);
+			},
+		});
+		git(fixture.repositoryPath, [
+			"remote",
+			"set-url",
+			"origin",
+			"ext::sh -c exploit",
+		]);
+
+		expect(await fixture.preparer.prepare()).toEqual({
+			status: "refused",
+			reason: "remote_unavailable",
+			changedState: "none",
+		});
+		expect(
+			observed.some(({ args }) =>
+				args[0] === "fetch" ||
+				(args[0] === "ls-remote" && args[1] !== "--get-url"),
+			),
+		).toBe(false);
 	});
 
 	test("workspace cleanup failure refuses before evidence publication", async () => {
@@ -181,6 +306,117 @@ describe("isolated activation preparation", () => {
 			VAULT_GIT_ABSENT_LEDGER_GENERATION,
 		);
 		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	test("prepares fresh evidence for the exact receipt-bound push-pending recovery", async () => {
+		const fixture = await preparationFixture({ seedLedger: false });
+		const processPort = createNodeProcessPort();
+		const acquired = await acquireRemoteLease(
+			{
+				git: createGitAdapter({
+					repositoryPath: fixture.repositoryPath,
+					process: processPort,
+					timeouts: { localMs: 5_000, fetchMs: 5_000, pushMs: 5_000 },
+				}),
+				clock: { now: () => new Date("2026-08-11T00:00:00.000Z") },
+			},
+			{
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "fixture-operator",
+				host: "fixture-host",
+				event: "note_created",
+				ownedPaths: ["recovery.md"],
+				leaseDurationMs: 60_000,
+			},
+		);
+		if (acquired.status !== "acquired") {
+			throw new Error(JSON.stringify(acquired));
+		}
+
+		await writeFile(join(fixture.repositoryPath, "recovery.md"), "preserved\n");
+		git(fixture.repositoryPath, ["add", "recovery.md"]);
+		git(fixture.repositoryPath, [
+			"-c", "user.name=Fixture",
+			"-c", "user.email=fixture@example.invalid",
+			"commit", "-m", "preserve recovery candidate",
+		]);
+		const candidate = gitOutput(fixture.repositoryPath, [
+			"rev-parse", "refs/heads/main",
+		]);
+		const receipt: VaultGitReceipt = {
+			schemaVersion: 2,
+			receiptId: `receipt_${"3".repeat(32)}`,
+			transactionId: acquired.transactionId,
+			revision: 1,
+			phase: "push_pending",
+			transition: "push_outcome_unknown",
+			recordedAt: "2026-08-11T00:00:01.000Z",
+			event: "note_created",
+			actor: "fixture-operator",
+			host: "fixture-host",
+			remote: "origin",
+			ownedPaths: [
+				{ path: "recovery.md", baselineHash: null, admittedNewFile: true },
+			],
+			unrelatedState: { statusHex: "", indexHex: "" },
+			localMainHead: fixture.mainHead,
+			remoteMainHead: fixture.mainHead,
+			expectedLeaseGeneration: null,
+			leaseGeneration: acquired.generation,
+			leaseAcquiredAt: acquired.lease.acquiredAt,
+			leaseDurationMs: acquired.lease.leaseDurationMs,
+			commitId: candidate,
+			expectedMainCommit: candidate,
+			ledgerReleaseId: null,
+			pushOutcome: "unknown",
+			nextSafeAction: "run_doctor",
+			diagnosticsReference: `receipt:receipt_${"3".repeat(32)}`,
+		};
+		await fixture.store.initialize(receipt);
+
+		const result = await fixture.preparer.prepare();
+
+		if (result.status !== "prepared") throw new Error(result.reason);
+		expect(result.evidence.localMainHead).toBe(candidate);
+		expect(result.evidence.remoteMainHead).toBe(fixture.mainHead);
+		expect(result.evidence.ledgerGeneration).toBe(acquired.generation);
+		const capability = new Uint8Array([7, 4]);
+		const authority = createVaultGitActivationAuthority({
+			store: fixture.store,
+			clock: () => "2026-08-11T00:00:02.000Z",
+			validateHumanCapability: async (presented) =>
+				presented.length === capability.length &&
+				presented.every((byte, index) => byte === capability[index]),
+			revalidate: fixture.preparer.revalidate,
+		});
+		expect(
+			await authority.admit({
+				evidenceId: result.evidence.evidenceId,
+				humanCapability: capability,
+				note: "review preserved push-pending candidate",
+			}),
+		).toMatchObject({ status: "admitted" });
+		expect(await authority.validate("continuation")).toMatchObject({
+			status: "admitted",
+		});
+	});
+
+	test("keeps an unbound local-ahead main outside activation preparation", async () => {
+		const fixture = await preparationFixture({ seedLedger: false });
+		await writeFile(join(fixture.repositoryPath, "unbound.md"), "local only\n");
+		git(fixture.repositoryPath, ["add", "unbound.md"]);
+		git(fixture.repositoryPath, [
+			"-c", "user.name=Fixture",
+			"-c", "user.email=fixture@example.invalid",
+			"commit", "-m", "unbound local candidate",
+		]);
+
+		expect(await fixture.preparer.prepare()).toEqual({
+			status: "refused",
+			reason: "main_not_aligned",
+			changedState: "none",
+		});
 	});
 
 	test("live admission revalidation invalidates remote drift without canonical mutation", async () => {
@@ -294,9 +530,14 @@ async function preparationFixture(overrides: {
 	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
 	readonly observeProcess?: (request: VaultGitProcessRequest) => void;
 	readonly removeWorkspace?: (workspace: string) => Promise<void>;
+	readonly seedLedger?: boolean;
 } = {}): Promise<{
 	readonly repositoryPath: string;
 	readonly remotePath: string;
+	readonly stateRoot: string;
+	readonly publicKeyPath: string;
+	readonly privateKeyPath: string;
+	readonly knownHostsPath: string;
 	readonly mainHead: string;
 	readonly ledgerGeneration: string;
 	readonly store: ReturnType<typeof createReceiptStore>;
@@ -307,14 +548,19 @@ async function preparationFixture(overrides: {
 	const repositoryPath = join(root, "vault");
 	const stateRoot = join(root, "state");
 	const publicKeyPath = join(root, "writer.pub");
+	const privateKeyPath = join(root, "writer");
 	const knownHostsPath = join(root, "known_hosts");
 	await mkdir(stateRoot);
 	await writeFile(publicKeyPath, "ssh-ed25519 fixture-public-key\n");
-	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n");
+	await writeFile(privateKeyPath, "fixture-private-key\n", { mode: 0o600 });
+	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n", {
+		mode: 0o600,
+	});
 	git(root, ["init", "--bare", remotePath]);
 	git(root, ["clone", remotePath, repositoryPath]);
 	git(repositoryPath, ["switch", "-c", "main"]);
 	await mkdir(join(repositoryPath, "scripts"));
+	await mkdir(join(repositoryPath, "schemas"));
 	await writeFile(
 		join(repositoryPath, "package.json"),
 		JSON.stringify({
@@ -328,7 +574,17 @@ async function preparationFixture(overrides: {
 		join(repositoryPath, "scripts", "check.ts"),
 		'await Bun.write(".activation-checker-ran", "ran\\n");\nprocess.stdout.write(JSON.stringify({ schema_version: 1, findings: [] }) + "\\n");\n',
 	);
-	git(repositoryPath, ["add", "package.json", "bun.lock", "scripts/check.ts"]);
+	await writeFile(
+		join(repositoryPath, "schemas", "frontmatter-contract.json"),
+		'{"type":"object"}\n',
+	);
+	git(repositoryPath, [
+		"add",
+		"package.json",
+		"bun.lock",
+		"scripts/check.ts",
+		"schemas/frontmatter-contract.json",
+	]);
 	git(repositoryPath, [
 		"-c",
 		"user.name=Fixture",
@@ -341,30 +597,27 @@ async function preparationFixture(overrides: {
 	git(repositoryPath, ["push", "-u", "origin", "main"]);
 	const mainHead = gitOutput(repositoryPath, ["rev-parse", "refs/heads/main"]);
 
-	git(repositoryPath, ["switch", "--orphan", "ledger-seed"]);
-	git(repositoryPath, ["rm", "-rf", "--ignore-unmatch", "."]);
-	await writeFile(
-		join(repositoryPath, "ledger.json"),
-		JSON.stringify({ schema_version: 1, operation: "release", lease: null }),
-	);
-	git(repositoryPath, ["add", "ledger.json"]);
-	git(repositoryPath, [
-		"-c",
-		"user.name=Fixture",
-		"-c",
-		"user.email=fixture@example.invalid",
-		"commit",
-		"-m",
-		"fixture ledger",
-	]);
-	const ledgerGeneration = gitOutput(repositoryPath, ["rev-parse", "HEAD"]);
-	git(repositoryPath, [
-		"push",
-		"origin",
-		"HEAD:refs/heads/vault-system/transaction-ledger",
-	]);
-	git(repositoryPath, ["switch", "main"]);
-	git(repositoryPath, ["branch", "-D", "ledger-seed"]);
+	let ledgerGeneration = VAULT_GIT_ABSENT_LEDGER_GENERATION;
+	if (overrides.seedLedger !== false) {
+		git(repositoryPath, ["switch", "--orphan", "ledger-seed"]);
+		git(repositoryPath, ["rm", "-rf", "--ignore-unmatch", "."]);
+		await writeFile(
+			join(repositoryPath, "ledger.json"),
+			JSON.stringify({ schema_version: 1, operation: "release", lease: null }),
+		);
+		git(repositoryPath, ["add", "ledger.json"]);
+		git(repositoryPath, [
+			"-c", "user.name=Fixture",
+			"-c", "user.email=fixture@example.invalid",
+			"commit", "-m", "fixture ledger",
+		]);
+		ledgerGeneration = gitOutput(repositoryPath, ["rev-parse", "HEAD"]);
+		git(repositoryPath, [
+			"push", "origin", "HEAD:refs/heads/vault-system/transaction-ledger",
+		]);
+		git(repositoryPath, ["switch", "main"]);
+		git(repositoryPath, ["branch", "-D", "ledger-seed"]);
+	}
 
 	const nodeProcessPort = createNodeProcessPort();
 	const processPort = {
@@ -389,9 +642,11 @@ async function preparationFixture(overrides: {
 		runtimeBinaryPath: process.execPath,
 		runtimeVersion: Bun.version,
 		executablePath: join(import.meta.dir, "../src/cli.ts"),
+		executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
 		gitBinaryPath: "/usr/bin/git",
 		sshBinaryPath: "/usr/bin/ssh",
 		sshIdentityPublicKeyPath: publicKeyPath,
+		sshIdentityFilePath: privateKeyPath,
 		sshKnownHostsPath: knownHostsPath,
 		process: processPort,
 		timeoutMs: 5_000,
@@ -399,6 +654,10 @@ async function preparationFixture(overrides: {
 	return {
 		repositoryPath,
 		remotePath,
+		stateRoot,
+		publicKeyPath,
+		privateKeyPath,
+		knownHostsPath,
 		mainHead,
 		ledgerGeneration,
 		store,

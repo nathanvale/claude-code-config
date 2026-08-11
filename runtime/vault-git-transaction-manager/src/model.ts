@@ -29,6 +29,8 @@ export type VaultGitActivationRestrictionCause =
 export interface VaultGitActivationRestrictionInput {
 	readonly stoppedAction: VaultGitActivationStoppedAction;
 	readonly cause: VaultGitActivationRestrictionCause;
+	/** Command-local change already preserved before activation stopped the next write. */
+	readonly changedState?: VaultGitChangedState;
 }
 
 /** Privacy-classified semantic source shared by every renderer. */
@@ -40,9 +42,9 @@ export interface VaultGitActivationRestriction {
 		readonly summary: string;
 	};
 	readonly protection: string;
-	readonly observedSafeState: "Nothing changed.";
+	readonly observedSafeState: string;
 	readonly writePermission: "denied";
-	readonly changedState: "none";
+	readonly changedState: VaultGitChangedState;
 	readonly manualHandoff: {
 		readonly availability: "unavailable";
 		readonly summary: string;
@@ -66,9 +68,9 @@ export interface VaultGitActivationRestrictionJsonV1 {
 	readonly stopped_action: VaultGitActivationStoppedAction;
 	readonly cause: VaultGitActivationRestriction["cause"];
 	readonly protection: string;
-	readonly observed_safe_state: "Nothing changed.";
+	readonly observed_safe_state: string;
 	readonly write_permission: "denied";
-	readonly changed_state: "none";
+	readonly changed_state: VaultGitChangedState;
 	readonly manual_handoff: VaultGitActivationRestriction["manualHandoff"];
 	readonly next_action: VaultGitActivationRestriction["nextAction"];
 }
@@ -120,6 +122,14 @@ const ACTIVATION_NEXT_ACTION: Record<
 	},
 };
 
+const ACTIVATION_OBSERVED_SAFE_STATE: Record<VaultGitChangedState, string> = {
+	none: "Nothing changed.",
+	local: "Local transaction state is preserved; no canonical commit or publication started.",
+	remote: "Remote lease state is preserved; no canonical vault commit or publication started.",
+	committed: "A local commit is preserved; remote publication did not start.",
+	partial: "Remote completion is unknown; preserved evidence requires Doctor.",
+};
+
 /** Build the one semantic restriction object consumed by all projections. */
 export function createVaultGitActivationRestriction(
 	input: VaultGitActivationRestrictionInput,
@@ -127,8 +137,11 @@ export function createVaultGitActivationRestriction(
 	const valid = [
 		VAULT_GIT_ACTIVATION_STOPPED_ACTIONS.includes(input.stoppedAction),
 		VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES.includes(input.cause),
+		input.changedState === undefined ||
+			VAULT_GIT_CHANGED_STATES.includes(input.changedState),
 	].every(Boolean);
 	if (!valid) throw new Error("activation restriction invalid");
+	const changedState = input.changedState ?? "none";
 	return Object.freeze({
 		privacy: "public",
 		stoppedAction: input.stoppedAction,
@@ -137,9 +150,9 @@ export function createVaultGitActivationRestriction(
 			summary: ACTIVATION_CAUSE_SUMMARY[input.cause],
 		}),
 		protection: "Vault Git kept canonical write permission denied.",
-		observedSafeState: "Nothing changed.",
+		observedSafeState: ACTIVATION_OBSERVED_SAFE_STATE[changedState],
 		writePermission: "denied",
-		changedState: "none",
+		changedState,
 		manualHandoff: Object.freeze({
 			availability: "unavailable",
 			summary: "Manual handoff is not available from activation trust.",
@@ -443,10 +456,8 @@ export type VaultGitBlockerId = (typeof VAULT_GIT_BLOCKER_IDS)[number];
 /** Deterministic repair actions the runtime may classify. */
 export const VAULT_GIT_REPAIR_ACTIONS = [
 	"resume",
-	"restore",
 	"retry-push",
 	"close-verified",
-	"replay",
 	"stale-lease-takeover",
 	"reconcile-quarantine",
 ] as const;
@@ -510,8 +521,10 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	"inspect_configured_vault",
 	"inspect_private_receipt",
 	"inspect_remote_lease",
+	"prepare_fresh",
 	"reload_capability",
-	"request_operator_admission",
+	"return_to_human_review",
+	"review_prepared",
 	"use_join_capability",
 	"use_owner_capability",
 ] as const;

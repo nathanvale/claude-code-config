@@ -5,6 +5,7 @@ import type {
 import {
 	VAULT_GIT_ACTIVATION_BINDINGS,
 	type VaultGitActivationBinding,
+	type VaultGitReceipt,
 } from "./model.ts";
 import {
 	VaultGitLegacyActivationRecordError,
@@ -21,12 +22,6 @@ export type { VaultGitActivationValidationScope } from "./ports.ts";
 const SCALAR_BINDINGS = VAULT_GIT_ACTIVATION_BINDINGS.filter(
 	(binding) => binding !== "checkerClosure",
 );
-const TRANSACTION_MUTABLE_BINDINGS = new Set<VaultGitActivationBinding>([
-	"localMainHead",
-	"remoteMainHead",
-	"ledgerGeneration",
-]);
-
 /** Authoritative live bindings compared with one prepared snapshot. */
 export interface VaultGitLiveActivationBindings {
 	readonly repositoryIdentity: string;
@@ -261,7 +256,11 @@ async function revalidateEvidence(
 	} catch {
 		throw new AuthorityDenial("revalidation_unavailable");
 	}
-	const binding = changedBinding(evidence, live, scope);
+	const expected =
+		scope === "continuation"
+			? await expectedContinuationBindings(options.store, evidence)
+			: evidence;
+	const binding = changedBinding(expected, live);
 	if (binding === null) return;
 	await options.store.recordActivationInvalidation({
 		schemaVersion: 1,
@@ -275,17 +274,71 @@ async function revalidateEvidence(
 function changedBinding(
 	evidence: VaultGitPreparedEvidenceV2,
 	live: VaultGitLiveActivationBindings,
-	scope: VaultGitActivationValidationScope,
 ): VaultGitActivationBinding | null {
 	const scalar = SCALAR_BINDINGS.find(
-		(binding) =>
-			(scope === "admission" || !TRANSACTION_MUTABLE_BINDINGS.has(binding)) &&
-			evidence[binding] !== live[binding],
+		(binding) => evidence[binding] !== live[binding],
 	);
 	if (scalar !== undefined) return scalar;
 	return sameCheckerClosure(evidence.checkerClosure, live.checkerClosure)
 		? null
 		: "checkerClosure";
+}
+
+async function expectedContinuationBindings(
+	store: VaultGitReceiptStore,
+	evidence: VaultGitPreparedEvidenceV2,
+): Promise<VaultGitPreparedEvidenceV2> {
+	let loaded: Awaited<ReturnType<VaultGitReceiptStore["load"]>>;
+	try {
+		loaded = await store.load();
+	} catch {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	if (loaded.status === "absent") return evidence;
+	if (loaded.status !== "loaded") {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	const mutable = expectedReceiptBindings(loaded.receipt);
+	return { ...evidence, ...mutable };
+}
+
+function expectedReceiptBindings(receipt: VaultGitReceipt): Pick<
+	VaultGitPreparedEvidenceV2,
+	"localMainHead" | "remoteMainHead" | "ledgerGeneration"
+> {
+	if (receipt.phase === "closed") {
+		if (
+			!receipt.expectedMainCommit ||
+			!receipt.ledgerReleaseId ||
+			receipt.pushOutcome !== "closed"
+		) {
+			throw new AuthorityDenial("revalidation_unavailable");
+		}
+		return {
+			localMainHead: receipt.expectedMainCommit,
+			remoteMainHead: receipt.expectedMainCommit,
+			ledgerGeneration: receipt.ledgerReleaseId,
+		};
+	}
+	if (receipt.phase === "human_required") {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	const ledgerGeneration =
+		receipt.transactionId === null
+			? receipt.expectedLeaseGeneration
+			: receipt.leaseGeneration;
+	if (!ledgerGeneration) {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	const localMainHead =
+		receipt.phase === "push_pending" && receipt.expectedMainCommit
+			? receipt.expectedMainCommit
+			: receipt.localMainHead;
+	return {
+		localMainHead,
+		remoteMainHead: receipt.remoteMainHead,
+		ledgerGeneration,
+	};
 }
 
 function sameCheckerClosure(

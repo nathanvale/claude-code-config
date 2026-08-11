@@ -18,13 +18,15 @@ import {
 	persistedActivationAuthorityForTest,
 	preparedEvidenceForTest,
 } from "./activation-fixture.ts";
-import type {
-	VaultGitAtomicPushCapability,
-	VaultGitClockPort,
-	VaultGitLedgerAppendRequest,
-	VaultGitRemotePort,
-	VaultGitRepositoryPort,
-	VaultGitRuntimePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitAtomicPushCapability,
+	type VaultGitCheckPort,
+	type VaultGitClockPort,
+	type VaultGitLedgerAppendRequest,
+	type VaultGitRemotePort,
+	type VaultGitRepositoryPort,
+	type VaultGitRuntimePort,
 } from "../src/ports.ts";
 import type { RemoteLease } from "../src/remote-ledger.ts";
 import { createReceiptStore } from "../src/store.ts";
@@ -324,6 +326,42 @@ describe("transaction engine lifecycle", () => {
 		expect(fixture.repository.admissionCalls).toBe(admissionCalls);
 	});
 
+	test("takeover during joined-state capture prevents the joined receipt append", async () => {
+		const fixture = await engineFixture();
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const joinCapability = await fixture.store.readCapability(begun.receiptId, "join");
+		const captureStarted = deferred<void>();
+		const releaseCapture = deferred<void>();
+		fixture.repository.onCapture = async () => {
+			captureStarted.resolve();
+			await releaseCapture.promise;
+		};
+		const pending = fixture.engine.join({
+			transactionId: begun.transactionId,
+			requestedPaths: ["notes/child.md"],
+			remote: "origin",
+			capability: joinCapability,
+		});
+		await captureStarted.promise;
+		fixture.remote.generation = "c".repeat(40);
+		fixture.remote.lease = foreignLease();
+		releaseCapture.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			state: "superseded",
+			blocker: "lease_generation_stale",
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "writing",
+				ownedPaths: [{ path: "notes/new.md" }],
+			},
+		});
+	});
+
 	test("binds the admission remote into the receipt and inspects through it", async () => {
 		const fixture = await engineFixture();
 		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "backup", leaseDurationMs: 60_000 });
@@ -423,7 +461,7 @@ describe("transaction engine lifecycle", () => {
 			phase: "blocked",
 			blocker: "activation_blocked",
 			retrySafety: "same_input_safe",
-			nextAction: { id: "request_operator_admission" },
+			nextAction: { id: "review_prepared" },
 			activationRestriction: {
 				cause: { id: "admission_missing" },
 				nextAction: { id: "review_prepared" },
@@ -440,11 +478,13 @@ describe("transaction engine lifecycle", () => {
 		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({ status: "admitted" });
 	});
 
-	for (const [reason, restrictionNextAction] of [
-		["evidence_changed", "prepare_fresh"],
-		["binding_changed", "prepare_fresh"],
-		["revoked", "prepare_fresh"],
-		["revalidation_unavailable", "run_doctor"],
+	for (const [reason, restrictionNextAction, retrySafety] of [
+		["human_capability_required", "return_to_human_review", "operator_required"],
+		["evidence_changed", "prepare_fresh", "same_input_unsafe"],
+		["binding_changed", "prepare_fresh", "same_input_unsafe"],
+		["invalidated", "prepare_fresh", "same_input_unsafe"],
+		["revoked", "prepare_fresh", "operator_required"],
+		["revalidation_unavailable", "run_doctor", "same_input_safe"],
 	] as const) {
 		test(`preserves ${reason} activation restriction semantics`, async () => {
 			const fixture = await engineFixture(undefined, {
@@ -465,7 +505,8 @@ describe("transaction engine lifecycle", () => {
 			).toMatchObject({
 				status: "refused",
 				blocker: "activation_blocked",
-				nextAction: { id: "request_operator_admission" },
+				retrySafety,
+				nextAction: { id: restrictionNextAction },
 				activationRestriction: {
 					cause: { id: reason },
 					nextAction: { id: restrictionNextAction },
@@ -493,7 +534,31 @@ describe("transaction engine lifecycle", () => {
 		).toMatchObject({
 			status: "refused",
 			blocker: "activation_blocked",
-			nextAction: { id: "request_operator_admission" },
+			retrySafety: "same_input_safe",
+			nextAction: { id: "run_doctor" },
+			activationRestriction: {
+				cause: { id: "revalidation_unavailable" },
+				nextAction: { id: "run_doctor" },
+			},
+		});
+	});
+
+	test("maps write-phase repository identity outages to retry-safe activation refusal", async () => {
+		const fixture = await engineFixture();
+		fixture.repository.identityError =
+			new VaultRepositoryIdentityUnavailableError();
+
+		expect(
+			await fixture.engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/new.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+			retrySafety: "same_input_safe",
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
 				nextAction: { id: "run_doctor" },
@@ -523,10 +588,536 @@ describe("transaction engine lifecycle", () => {
 		expect(validations).toBe(1);
 		admitted = true;
 		expect(await fixture.engine.begin(input)).toMatchObject({ status: "admitted" });
-		expect(validations).toBe(2);
+		expect(validations).toBe(3);
 	});
 
-	test("begin and complete use the real authority across transaction-owned ledger movement", async () => {
+	test("revocation during the atomic probe prevents a later write-authority grant", async () => {
+		let admitted = true;
+		const probeStarted = deferred<void>();
+		const releaseProbe = deferred<void>();
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		fixture.remote.onProbe = async () => {
+			probeStarted.resolve();
+			await releaseProbe.promise;
+		};
+		const pending = fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		await probeStarted.promise;
+		admitted = false;
+		releaseProbe.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			state: "active",
+			phase: "leased",
+			writePermission: "denied",
+			changedState: "remote",
+			blocker: "activation_blocked",
+			nextAction: { id: "prepare_fresh" },
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "leased" },
+		});
+	});
+
+	test("receipt-backed activation denial preserves transaction and lease posture on every read surface", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		admitted = false;
+
+		const inspected = await fixture.engine.inspect();
+		const diagnosed = await fixture.engine.doctor();
+		const refusedCompletion = await fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+		});
+		for (const read of [inspected, diagnosed, refusedCompletion]) {
+			expect(read).toMatchObject({
+				phase: "writing",
+				transactionId: begun.transactionId,
+				changedState: "none",
+				blocker: "activation_blocked",
+				nextAction: { id: "prepare_fresh" },
+				activationRestriction: {
+					cause: { id: "revoked" },
+					nextAction: { id: "prepare_fresh" },
+				},
+			});
+		}
+		expect(inspected.state).toBe("active");
+		expect(diagnosed).toMatchObject({
+			state: "repairable",
+			finding: "writes_in_progress",
+		});
+		expect(refusedCompletion).toMatchObject({
+			status: "refused",
+			state: "active",
+			writePermission: "denied",
+		});
+	});
+
+	test("activation-denied Doctor does not issue takeover material for an expired receipt", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({ status: "admitted" });
+		fixture.runtime.nowValue = new Date("2026-08-09T00:02:00.000Z");
+		admitted = false;
+
+		const diagnosed = await fixture.engine.doctor();
+		expect(diagnosed).toMatchObject({
+			status: "diagnosed",
+			state: "expired",
+			phase: "writing",
+			changedState: "none",
+			blocker: "activation_blocked",
+			nextAction: { id: "prepare_fresh" },
+		});
+		expect("takeoverTokenIssued" in diagnosed).toBe(false);
+	});
+
+	test("revocation during the checker prevents local commit and remote close", async () => {
+		let admitted = true;
+		const checkStarted = deferred<void>();
+		const releaseCheck = deferred<void>();
+		const check: VaultGitCheckPort = {
+			async run() {
+				checkStarted.resolve();
+				await releaseCheck.promise;
+				return { status: "passed" };
+			},
+		};
+		const fixture = await engineFixture(undefined, {
+			check,
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		const pending = fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		});
+		await checkStarted.promise;
+		admitted = false;
+		releaseCheck.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			phase: "committing",
+			changedState: "local",
+			blocker: "activation_blocked",
+			nextAction: { id: "prepare_fresh" },
+		});
+		expect(fixture.repository.commitExactCalls).toBe(0);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+	});
+
+	test("takeover during the checker prevents a stale local commit", async () => {
+		const checkStarted = deferred<void>();
+		const releaseCheck = deferred<void>();
+		const fixture = await engineFixture(undefined, {
+			check: {
+				async run() {
+					checkStarted.resolve();
+					await releaseCheck.promise;
+					return { status: "passed" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		const pending = fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		});
+		await checkStarted.promise;
+		fixture.remote.generation = "c".repeat(40);
+		fixture.remote.lease = foreignLease();
+		releaseCheck.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			state: "superseded",
+			phase: "committing",
+			changedState: "local",
+			blocker: "lease_generation_stale",
+		});
+		expect(fixture.repository.commitExactCalls).toBe(0);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+	});
+
+	test("revocation after local commit preserves commit evidence and prevents remote close", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			check: { async run() { return { status: "passed" }; } },
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		fixture.repository.onCommit = async () => {
+			admitted = false;
+		};
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+
+		expect(await fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		})).toMatchObject({
+			status: "refused",
+			state: "push_pending",
+			phase: "push_pending",
+			changedState: "committed",
+			blocker: "activation_blocked",
+			nextAction: { id: "prepare_fresh" },
+			activationRestriction: {
+				observedSafeState: "A local commit is preserved; remote publication did not start.",
+				changedState: "committed",
+			},
+		});
+		expect(fixture.repository.commitExactCalls).toBe(1);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "push_pending", commitId: "c".repeat(40) },
+		});
+	});
+
+	test("takeover after local commit preserves commit evidence and prevents remote close", async () => {
+		const fixture = await engineFixture(undefined, {
+			check: { async run() { return { status: "passed" }; } },
+		});
+		fixture.repository.onCommit = async () => {
+			fixture.remote.generation = "d".repeat(40);
+			fixture.remote.lease = foreignLease();
+		};
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+
+		expect(await fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		})).toMatchObject({
+			status: "refused",
+			state: "superseded",
+			phase: "push_pending",
+			changedState: "committed",
+			blocker: "lease_generation_stale",
+		});
+		expect(fixture.repository.commitExactCalls).toBe(1);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+	});
+
+	test("revocation during the final begin fence denies owner authority", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		let safetyReads = 0;
+		fixture.repository.onSafety = async () => {
+			safetyReads += 1;
+			if (safetyReads === 2) admitted = false;
+		};
+
+		expect(
+			await fixture.engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/new.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "leased",
+			blocker: "activation_blocked",
+			writePermission: "denied",
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "leased" },
+		});
+	});
+
+	test("revocation during the final join fence denies new path authority", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const joinCapability = await fixture.store.readCapability(
+			begun.receiptId,
+			"join",
+		);
+		let joinFenceReads = 0;
+		fixture.repository.onSafety = async () => {
+			joinFenceReads += 1;
+			if (joinFenceReads === 2) admitted = false;
+		};
+
+		expect(
+			await fixture.engine.join({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability: joinCapability,
+				requestedPaths: ["notes/joined.md"],
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+			writePermission: "denied",
+			nextAction: { id: "prepare_fresh" },
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { ownedPaths: [{ path: "notes/new.md" }] },
+		});
+	});
+
+	test("revocation during the no-fresh join fence denies retained join authority", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const joinCapability = await fixture.store.readCapability(
+			begun.receiptId,
+			"join",
+		);
+		fixture.repository.onSafety = async () => {
+			admitted = false;
+		};
+
+		expect(
+			await fixture.engine.join({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability: joinCapability,
+				requestedPaths: ["notes/new.md"],
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+			writePermission: "denied",
+		});
+	});
+
+	test("revocation during the record-phase fence prevents the receipt append", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		fixture.repository.onSafety = async () => {
+			admitted = false;
+		};
+
+		expect(await fixture.engine.recordPhase({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			phase: "repairable",
+			nextSafeAction: "run_repair",
+		})).toMatchObject({ status: "refused", blocker: "activation_blocked", writePermission: "denied" });
+		expect(await fixture.store.load()).toMatchObject({ status: "loaded", receipt: { phase: "writing" } });
+	});
+
+	test("revocation during the pre-commit fence prevents the local commit", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			check: { async run() { return { status: "passed" }; } },
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		let safetyReads = 0;
+		fixture.repository.onSafety = async () => {
+			safetyReads += 1;
+			if (safetyReads === 2) admitted = false;
+		};
+
+		expect(await fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		})).toMatchObject({ status: "refused", phase: "committing", blocker: "activation_blocked" });
+		expect(fixture.repository.commitExactCalls).toBe(0);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+	});
+
+	test("revocation during the pre-close fence preserves the commit without publishing", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			check: { async run() { return { status: "passed" }; } },
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		let safetyReads = 0;
+		fixture.repository.onSafety = async () => {
+			safetyReads += 1;
+			if (safetyReads === 3) admitted = false;
+		};
+
+		expect(await fixture.engine.complete({
+			transactionId: begun.transactionId,
+			remote: "origin",
+			capability: owner,
+			summary: "docs(vault): record admitted note",
+		})).toMatchObject({ status: "refused", phase: "push_pending", blocker: "activation_blocked", changedState: "committed" });
+		expect(fixture.repository.commitExactCalls).toBe(1);
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+	});
+
+	test("revocation during the hygiene mutation fence prevents apply", async () => {
+		let admitted = true;
+		let applyCalls = 0;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		let safetyReads = 0;
+		fixture.repository.onSafety = async () => {
+			safetyReads += 1;
+			if (safetyReads === 3) admitted = false;
+		};
+
+		expect(await fixture.engine.runHygieneTransaction({
+			paths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+			summary: "docs(vault): apply hygiene",
+			async apply() {
+				applyCalls += 1;
+				return true;
+			},
+		})).toMatchObject({ status: "refused", blocker: "activation_blocked" });
+		expect(applyCalls).toBe(0);
+	});
+
+	test("a human-admitted activation remains valid for a second transaction", async () => {
 		const root = await mkdtemp(join(tmpdir(), "vault-git-engine-authority-"));
 		roots.push(root);
 		const evidence = preparedEvidenceForTest({
@@ -558,8 +1149,19 @@ describe("transaction engine lifecycle", () => {
 		const repository = new FakeRepository();
 		const remote = new FakeRemote();
 		const runtime = new FakeRuntime();
+		repository.mirrorLocalHead = (head) => {
+			remote.localHead = head;
+			live = { ...live, localMainHead: head };
+		};
 		remote.onAppend = async () => {
 			live = { ...live, ledgerGeneration: GENERATION };
+		};
+		remote.onAtomicClose = async (mainCommit, ledgerCommit) => {
+			live = {
+				...live,
+				remoteMainHead: mainCommit,
+				ledgerGeneration: ledgerCommit,
+			};
 		};
 		const engine = createVaultGitTransactionEngine({
 			store,
@@ -567,6 +1169,7 @@ describe("transaction engine lifecycle", () => {
 			ledger: { git: remote, clock: runtime },
 			runtime,
 			repositoryIdentity: "canonical-vault",
+			check: { async run() { return { status: "passed" }; } },
 			activationAuthority: {
 				async validate(scope) {
 					scopes.push(scope ?? "admission");
@@ -590,9 +1193,18 @@ describe("transaction engine lifecycle", () => {
 				transactionId: begun.transactionId,
 				remote: "origin",
 				capability: owner,
+				summary: "docs(vault): record admitted note",
 			}),
-		).toMatchObject({ status: "advanced", phase: "checking" });
-		expect(scopes).toEqual(["admission", "continuation"]);
+		).toMatchObject({ status: "completed", phase: "closed" });
+		expect(
+			await engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/second.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({ status: "admitted", phase: "writing" });
+		expect(scopes).toEqual(Array(8).fill("continuation"));
 	});
 });
 
@@ -618,6 +1230,7 @@ function activationBindings(
 async function engineFixture(interruptAt?: string, options: {
 	admitActivation?: boolean;
 	activationAuthority?: VaultGitTransactionEngineOptions["activationAuthority"];
+	check?: VaultGitCheckPort;
 } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-engine-"));
 	roots.push(root);
@@ -625,8 +1238,11 @@ async function engineFixture(interruptAt?: string, options: {
 	if (options.admitActivation !== false) await admitActivationForTest(store);
 	const repository = new FakeRepository();
 	const remote = new FakeRemote();
+	repository.mirrorLocalHead = (head) => {
+		remote.localHead = head;
+	};
 	const runtime = new FakeRuntime(interruptAt);
-	const engine = createVaultGitTransactionEngine({ store, repository, ledger: { git: remote, clock: runtime }, runtime, repositoryIdentity: "canonical-vault", activationAuthority: options.activationAuthority ?? persistedActivationAuthorityForTest(store) });
+	const engine = createVaultGitTransactionEngine({ store, repository, ledger: { git: remote, clock: runtime }, runtime, repositoryIdentity: "canonical-vault", activationAuthority: options.activationAuthority ?? persistedActivationAuthorityForTest(store), check: options.check });
 	return { root, store, repository, remote, runtime, engine };
 }
 
@@ -648,14 +1264,28 @@ class FakeRuntime implements VaultGitRuntimePort, VaultGitClockPort {
 
 class FakeRepository implements VaultGitRepositoryPort {
 	identity = "canonical-vault";
+	localHead = HEAD;
+	identityError: Error | null = null;
+	commitExactCalls = 0;
+	commitCounter = 0;
+	mirrorLocalHead?: (head: string) => void;
+	onCommit?: (head: string) => Promise<void>;
+	onSafety?: () => Promise<void>;
 	admissionCalls = 0;
 	lastRequested: readonly string[] = [];
 	readonly dirtyPaths = new Set<string>();
+	onCapture?: () => Promise<void>;
 	refusal: "dirty_worktree" | "staged" | "ignored" | "symlink" | "preexisting_untracked" | null = null;
 	// Write-capable engine phases fail closed without this proof (fix: engine
 	// probes are mandatory on composed ports), so the fake provides it.
-	inspectSafety: VaultGitRepositoryPort["inspectSafety"] = async () => ({ status: "safe" as const });
-	async resolveCanonicalIdentity() { return { identity: this.identity, localMainHead: HEAD }; }
+	inspectSafety: VaultGitRepositoryPort["inspectSafety"] = async () => {
+		await this.onSafety?.();
+		return { status: "safe" as const };
+	};
+	async resolveCanonicalIdentity() {
+		if (this.identityError) throw this.identityError;
+		return { identity: this.identity, localMainHead: this.localHead };
+	}
 	async inspectOwnedPaths(paths: readonly string[]) {
 		this.admissionCalls += 1;
 		this.lastRequested = [...paths];
@@ -667,19 +1297,43 @@ class FakeRepository implements VaultGitRepositoryPort {
 			unrelatedState: { statusHex: "", indexHex: "" },
 		};
 	}
+	async captureUnrelatedState() {
+		await this.onCapture?.();
+		return { statusHex: "", indexHex: "" };
+	}
+	async hashOwnedPaths(paths: readonly string[]) {
+		return paths.map((path) => ({ path, contentHash: "e".repeat(40) }));
+	}
+	async commitExact() {
+		this.commitExactCalls += 1;
+		this.commitCounter += 1;
+		const commitId = String.fromCharCode(98 + this.commitCounter).repeat(40);
+		this.localHead = commitId;
+		this.mirrorLocalHead?.(commitId);
+		await this.onCommit?.(commitId);
+		return { status: "committed" as const, commitId, treeId: "f".repeat(40) };
+	}
 }
 
 class FakeRemote implements VaultGitRemotePort {
+	localHead = HEAD;
+	remoteHead = HEAD;
 	generation: string | null = null;
 	parents: string[] = [];
 	appendCalls = 0;
+	atomicCloseCalls = 0;
 	failReads = false;
 	lastObservedRemote: string | null = null;
 	onAppend?: () => Promise<void>;
 	lease: RemoteLease | null = null;
 	probeResult: VaultGitAtomicPushCapability = { status: "supported" };
-	probeAtomicPush: VaultGitRemotePort["probeAtomicPush"] = async () => this.probeResult;
-	async inspectMain() { return { status: "ok" as const, alignment: "aligned" as const, localHead: HEAD, remoteHead: HEAD }; }
+	onProbe?: () => Promise<void>;
+	onAtomicClose?: (mainCommit: string, ledgerCommit: string) => Promise<void>;
+	probeAtomicPush: VaultGitRemotePort["probeAtomicPush"] = async () => {
+		await this.onProbe?.();
+		return this.probeResult;
+	};
+	async inspectMain() { return { status: "ok" as const, alignment: this.localHead === this.remoteHead ? "aligned" as const : "ahead" as const, localHead: this.localHead, remoteHead: this.remoteHead }; }
 	async readLedger(remote: string) {
 		this.lastObservedRemote = remote;
 		if (this.failReads) return { status: "failed" as const, reason: "remote_unavailable" as const };
@@ -700,6 +1354,31 @@ class FakeRemote implements VaultGitRemotePort {
 		};
 		return { status: "appended" as const, generation: GENERATION };
 	}
+	atomicClose: NonNullable<VaultGitRemotePort["atomicClose"]> = async (request) => {
+		this.atomicCloseCalls += 1;
+		const ledgerCommit = "f".repeat(40);
+		await request.onPrepared({
+			mainCommit: request.mainCommit,
+			ledgerCommit,
+		});
+		this.remoteHead = request.mainCommit;
+		this.localHead = request.mainCommit;
+		this.parents = this.generation ? [this.generation] : [];
+		this.generation = ledgerCommit;
+		if (this.lease) this.lease = { ...this.lease, state: "released" };
+		await this.onAtomicClose?.(request.mainCommit, ledgerCommit);
+		return { status: "closed", mainCommit: request.mainCommit, ledgerCommit };
+	};
+}
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
 
 function foreignLease(): RemoteLease {

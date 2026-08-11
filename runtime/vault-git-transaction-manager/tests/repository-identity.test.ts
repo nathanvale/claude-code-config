@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+	VaultRepositoryIdentityUnavailableError,
 	deriveVaultRepositoryIdentity,
 	resolveVaultRepositoryIdentity,
 } from "../src/index.ts";
@@ -93,5 +94,28 @@ describe("vault repository identity", () => {
 				timeoutMs: 5_000,
 			}),
 		).rejects.toThrow("configured repository identity could not be resolved");
+	});
+
+	test("distinguishes an unavailable identity probe from invalid configuration", async () => {
+		const repositoryPath = await tempDirectories.create(
+			"vault-identity-unavailable-",
+		);
+
+		await expect(
+			resolveVaultRepositoryIdentity({
+				repositoryPath,
+				process: {
+					async run() {
+						return {
+							exitCode: null,
+							stdout: "",
+							stderr: "",
+							timedOut: true,
+						};
+					},
+				},
+				timeoutMs: 5_000,
+			}),
+		).rejects.toBeInstanceOf(VaultRepositoryIdentityUnavailableError);
 	});
 });

@@ -20,6 +20,11 @@ import type {
 	VaultGitProcessPort,
 	VaultGitProcessResult,
 } from "./ports.ts";
+import {
+	assertVaultGitSafeRemoteTarget,
+	normalizeVaultGitAllowedRemoteHosts,
+	VaultGitRemoteSafetyError,
+} from "./remote-safety.ts";
 import type { VaultGitReceiptStore } from "./store.ts";
 
 const CONTROLLED_GIT_ENVIRONMENT = {
@@ -60,6 +65,8 @@ export interface VaultGitActivationPreparerOptions {
 	readonly gitBinaryPath?: string;
 	/** Exact admitted SSH transport closure shared with write-side Git. */
 	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
+	/** Exact network hosts admitted before activation preparation contacts Git. */
+	readonly allowedRemoteHosts?: readonly string[];
 	/** Testable owner for recursive private-workspace removal. */
 	readonly removeWorkspace?: (workspace: string) => Promise<void>;
 }
@@ -201,7 +208,7 @@ async function collectPreparedEvidence(
 	Extract<VaultGitActivationPreparationResult, { readonly status: "prepared" }>
 > {
 	const live = await captureLiveBindings(options, gitBinary, workspace);
-	assertMainAligned(live.localMainHead, live.remoteMainHead);
+	await assertPreparableMainState(options, live);
 	if (live.repositoryIdentity !== options.repositoryIdentity) {
 		throw new PreparationFailure("refused", "identity_changed");
 	}
@@ -225,7 +232,7 @@ async function captureLiveBindings(
 	workspace: string,
 ): Promise<VaultGitLiveActivationBindings> {
 	const localHead = await readCanonicalHead(options, gitBinary);
-	const remoteUrl = await readExactRemote(options, gitBinary);
+	const remoteUrl = await readSafeRemote(options, gitBinary);
 	const isolatedRepository = join(workspace, "repository");
 	await cloneCanonicalRepository(
 		options,
@@ -284,8 +291,28 @@ function preparationFailureResult(
 	};
 }
 
-function assertMainAligned(localHead: string, remoteHead: string): void {
-	if (localHead !== remoteHead) {
+async function assertPreparableMainState(
+	options: VaultGitActivationPreparerOptions,
+	live: VaultGitLiveActivationBindings,
+): Promise<void> {
+	if (live.localMainHead === live.remoteMainHead) return;
+	const loaded = await options.store.load().catch(() => null);
+	const receipt = loaded?.status === "loaded" ? loaded.receipt : null;
+	// R17 recovery exception: preparation may bind one exact preserved commit
+	// to its still-current push_pending receipt. The active receipt continues to
+	// block new transaction admission; fresh evidence can authorize only recovery.
+	const exactPushPendingRecovery = receipt !== null && [
+		receipt.phase === "push_pending",
+		receipt.pushOutcome === "unknown",
+		receipt.transactionId !== null,
+		receipt.remote === options.remoteName,
+		receipt.localMainHead === live.remoteMainHead,
+		receipt.remoteMainHead === live.remoteMainHead,
+		receipt.commitId === live.localMainHead,
+		receipt.expectedMainCommit === live.localMainHead,
+		receipt.leaseGeneration === live.ledgerGeneration,
+	].every(Boolean);
+	if (!exactPushPendingRecovery) {
 		throw new PreparationFailure("refused", "main_not_aligned");
 	}
 }
@@ -354,22 +381,38 @@ async function readCanonicalHead(
 	return objectId(result.stdout);
 }
 
-async function readExactRemote(
+async function readSafeRemote(
 	options: VaultGitActivationPreparerOptions,
 	gitBinary: string,
 ): Promise<string> {
-	const result = await runGit(
-		options,
-		gitBinary,
-		options.repositoryPath,
-		["remote", "get-url", "--all", options.remoteName],
-		options.timeouts.localMs,
-	);
-	const remotes = result.stdout.split(/\r?\n/).filter(Boolean);
-	if (remotes.length !== 1 || (remotes[0] ?? "").startsWith("-")) {
+	try {
+		return await assertVaultGitSafeRemoteTarget({
+			remote: options.remoteName,
+			timeoutMs: options.timeouts.localMs,
+			allowedRemoteHosts: normalizeVaultGitAllowedRemoteHosts(
+				options.allowedRemoteHosts ?? [],
+			),
+			runGit: (args, timeoutMs) =>
+				options.process.run({
+					command: gitBinary,
+					args,
+					cwd: options.repositoryPath,
+					env: {
+						...CONTROLLED_GIT_ENVIRONMENT,
+						...options.admittedGitEnvironment,
+					},
+					timeoutMs,
+				}),
+		});
+	} catch (error) {
+		if (
+			error instanceof VaultGitRemoteSafetyError &&
+			error.kind === "unavailable"
+		) {
+			throw new PreparationFailure("unknown", "preparation_timed_out");
+		}
 		throw new PreparationFailure("refused", "remote_unavailable");
 	}
-	return remotes[0] as string;
 }
 
 async function cloneCanonicalRepository(
@@ -603,6 +646,7 @@ function parseJson(source: string): unknown {
 }
 
 function validateOptions(options: VaultGitActivationPreparerOptions): void {
+	normalizeVaultGitAllowedRemoteHosts(options.allowedRemoteHosts ?? []);
 	const valid = [
 		isAbsolute(options.repositoryPath),
 		isAbsolute(options.privateStateRoot),

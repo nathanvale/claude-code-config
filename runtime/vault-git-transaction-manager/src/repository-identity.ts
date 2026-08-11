@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 
-import type { VaultGitProcessPort, VaultGitProcessResult } from "./ports.ts";
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitProcessPort,
+	type VaultGitProcessResult,
+} from "./ports.ts";
 
 const REPOSITORY_IDENTITY_DOMAIN = "vault-git.repository-identity.v1";
 
@@ -133,7 +137,10 @@ export async function resolveVaultRepositoryIdentity(
 }
 
 function successfulProbeOutput(result: VaultGitProcessResult): string {
-	if (result.timedOut || result.exitCode !== 0) {
+	if (result.timedOut || result.exitCode === null) {
+		throw new VaultRepositoryIdentityUnavailableError();
+	}
+	if (result.exitCode !== 0) {
 		throw new Error("configured repository identity could not be resolved");
 	}
 	return result.stdout.trim();

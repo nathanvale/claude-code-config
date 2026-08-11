@@ -87,6 +87,37 @@ describe("deterministic Janitor", () => {
 		expect(applies).toBe(1);
 	});
 
+	test("returns normal vault posture after a refused hygiene transaction releases its lease", async () => {
+		const engine = fakeEngine({
+			async runHygieneTransaction(request) {
+				request.onLeaseAcquired?.();
+				expect(await request.apply()).toBe(true);
+				request.onLeaseReleased?.();
+				return {
+					status: "refused",
+					state: "repairable",
+					phase: "repairable",
+					writePermission: "denied",
+					changedState: "local",
+					retrySafety: "same_input_safe",
+					blocker: "checker_repair_refused",
+					nextAction: { id: "run_doctor", summary: "Inspect refusal." },
+				};
+			},
+		});
+		const report = await createVaultGitJanitor({
+			engine,
+			checker: fakeChecker({ check: validRepairCheck() }),
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		}).run({ trigger: "nightly" });
+
+		expect(report).toMatchObject({
+			status: "refused",
+			vaultPosture: "normal",
+		});
+	});
+
 	test("keeps changed, malformed, semantic, secret, and unknown repairs preview-only", async () => {
 		for (const scenario of [
 			{

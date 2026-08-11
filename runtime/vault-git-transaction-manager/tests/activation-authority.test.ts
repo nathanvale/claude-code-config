@@ -295,7 +295,7 @@ describe("activation authority", () => {
 		}
 	}
 
-	test("continuation accepts transaction-owned head and ledger movement", async () => {
+	test("continuation rejects unreceipted head and ledger movement", async () => {
 		let continued = false;
 		const fixture = await authorityFixture({
 			async revalidate(bindings) {
@@ -318,8 +318,40 @@ describe("activation authority", () => {
 		continued = true;
 
 		expect(await fixture.authority.validate("continuation")).toEqual({
-			status: "admitted",
+			status: "denied",
+			reason: "binding_changed",
+			binding: "localMainHead",
+		});
+	});
+
+	test("continuation fails closed when current receipt state conflicts", async () => {
+		let conflict = false;
+		const fixture = await authorityFixture({
+			wrapStore(store) {
+				return {
+					...store,
+					async load() {
+						return conflict
+							? {
+									status: "conflict" as const,
+									reason: "fixture receipt conflict",
+								}
+							: store.load();
+					},
+				};
+			},
+		});
+		await fixture.store.publishPreparedEvidence(fixture.evidence);
+		await fixture.authority.admit({
 			evidenceId: fixture.evidence.evidenceId,
+			humanCapability,
+			note: "admit",
+		});
+		conflict = true;
+
+		expect(await fixture.authority.validate("continuation")).toEqual({
+			status: "denied",
+			reason: "revalidation_unavailable",
 		});
 	});
 

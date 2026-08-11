@@ -104,6 +104,8 @@ export interface VaultGitProcessRequest {
 	readonly stdin?: string;
 	/** Environment additions; ambient values remain process-adapter owned. */
 	readonly env?: Readonly<Record<string, string>>;
+	/** Use only the supplied environment for credential-free isolated work. */
+	readonly environmentMode?: "scrubbed" | "isolated";
 	/** Hard operation deadline. */
 	readonly timeoutMs: number;
 }
@@ -124,6 +126,15 @@ export interface VaultGitProcessResult {
 export interface VaultGitProcessPort {
 	/** Run one bounded process without a shell. */
 	run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult>;
+}
+
+/** Live repository identity could not be proved before the bounded deadline. */
+export class VaultRepositoryIdentityUnavailableError extends Error {
+	/** Construct the stable availability failure used by composition policy. */
+	constructor() {
+		super("configured repository identity revalidation is unavailable");
+		this.name = "VaultRepositoryIdentityUnavailableError";
+	}
 }
 
 /** Main-branch relationship after fetching the exact upstream ref. */

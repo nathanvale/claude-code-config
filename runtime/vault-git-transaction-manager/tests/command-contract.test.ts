@@ -35,6 +35,7 @@ import {
 	VAULT_GIT_WRITE_PERMISSIONS,
 	createVaultGitLifecycleResult,
 } from "../src/model.ts";
+import { VaultRepositoryIdentityUnavailableError } from "../src/ports.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contractOptions = {
@@ -233,6 +234,36 @@ describe("vault-git U1 read-only runtime", () => {
 		}
 	});
 
+	test("maps unavailable live identity proof to activation_blocked", async () => {
+		const run = await runVaultGitForTest(
+			["begin", "--event", "note_created", "--path", "notes/a.md", "--json"],
+			{
+				runId: "run-identity-unavailable",
+				resolveComposition: async () => {
+					throw new VaultRepositoryIdentityUnavailableError();
+				},
+			},
+		);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe("");
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked", retryable: true },
+			data: {
+				outcome: "refused",
+				write_permission: "denied",
+				changed_state: "none",
+				retry_safety: "same_input_safe",
+				blockers: ["activation_blocked"],
+				activation_restriction: {
+					cause: { id: "revalidation_unavailable" },
+					next_action: { id: "run_doctor" },
+				},
+			},
+		});
+	});
+
 	test("usage-failure JSON never echoes private path values", async () => {
 		const rejectedEnum = await runVaultGitForTest(
 			["begin", "--event", "/Users/example/private-vault", "--json"],
@@ -284,9 +315,19 @@ describe("vault-git U1 read-only runtime", () => {
 	});
 
 	test("repair without an engine-owned action is a usage failure", () => {
+		expect(VAULT_GIT_REPAIR_ACTIONS).toEqual([
+			"resume",
+			"retry-push",
+			"close-verified",
+			"stale-lease-takeover",
+			"reconcile-quarantine",
+		]);
 		expect(() => parseVaultGitInvocation(["repair", "--json"])).toThrow(
 			`repair requires one action: ${VAULT_GIT_REPAIR_ACTIONS.join(", ")}`,
 		);
+		expect(() =>
+			parseVaultGitInvocation(["repair", "replay", "--transaction-id", "tx-1"]),
+		).toThrow("repair action");
 	});
 
 	test("result construction rejects literals outside package vocabulary", () => {
@@ -446,7 +487,11 @@ describe("vault-git KTD16 boundaries", () => {
 		["worker-policy.ts", new Set(["model.ts"])],
 	]);
 	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
-		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
+		[
+			"git-adapter.ts",
+			new Set(["model.ts", "ports.ts", "remote-safety.ts"]),
+		],
+		["remote-safety.ts", new Set(["ports.ts"])],
 		["remote-ledger.ts", new Set(["model.ts", "ports.ts"])],
 		["clock.ts", new Set(["ports.ts"])],
 		["store.ts", new Set(["activation-contract.ts", "model.ts"])],

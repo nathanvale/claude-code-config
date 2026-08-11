@@ -18,15 +18,16 @@ import type {
 	VaultGitTransactionState,
 	VaultGitWritePermission,
 } from "./model.ts";
-import type {
-	VaultGitActivationValidationPort,
-	VaultGitActivationValidationResult,
-	VaultGitActivationValidationScope,
-	VaultGitAtomicCloseResult,
-	VaultGitCheckPort,
-	VaultGitOwnedPathContentHash,
-	VaultGitRepositoryPort,
-	VaultGitRuntimePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitActivationValidationPort,
+	type VaultGitActivationValidationResult,
+	type VaultGitActivationValidationScope,
+	type VaultGitAtomicCloseResult,
+	type VaultGitCheckPort,
+	type VaultGitOwnedPathContentHash,
+	type VaultGitRepositoryPort,
+	type VaultGitRuntimePort,
 } from "./ports.ts";
 import {
 	buildVaultCommitMessage,
@@ -116,11 +117,6 @@ export interface VaultGitEngineNextAction {
 	readonly id: VaultGitEngineNextActionId;
 	readonly summary: string;
 }
-
-const LEGACY_ACTIVATION_NEXT_ACTION: VaultGitEngineNextAction = {
-	id: "request_operator_admission",
-	summary: "Ask an operator to admit runtime activation before canonical vault writes.",
-};
 
 /** Optional non-mutating transaction selector for one inspection pass. */
 export interface VaultGitInspectInput {
@@ -212,6 +208,8 @@ export interface VaultGitTransactionEngine {
 		readonly summary: string;
 		/** Observer invoked once the fresh hygiene lease is held. */
 		readonly onLeaseAcquired?: () => void;
+		/** Observer invoked only after an ordinary refusal releases that lease. */
+		readonly onLeaseReleased?: () => void;
 		readonly apply: () => Promise<boolean>;
 	}): Promise<VaultGitEngineResult>;
 }
@@ -242,7 +240,7 @@ export function createVaultGitTransactionEngine(
 
 	/** R34 activation gate retaining the exact public refusal cause. */
 	async function activationRestriction(
-		scope: VaultGitActivationValidationScope = "admission",
+		scope: VaultGitActivationValidationScope,
 	): Promise<VaultGitActivationRestriction | null> {
 		let validation: VaultGitActivationValidationResult;
 		try {
@@ -261,37 +259,73 @@ export function createVaultGitTransactionEngine(
 	/** Shared write-command refusal until operator admission exists (R34). */
 	function activationRefusal(
 		restriction: VaultGitActivationRestriction,
+		receipt?: VaultGitReceipt,
+		changedState: VaultGitEngineResult["changedState"] = "none",
 	): VaultGitEngineResult {
+		const contextualRestriction =
+			changedState === restriction.changedState
+				? restriction
+				: createVaultGitActivationRestriction({
+						stoppedAction: restriction.stoppedAction,
+						cause: restriction.cause.id,
+						changedState,
+					});
+		const nextAction = activationNextAction(contextualRestriction);
 		return {
 			...refusal(
-			"absent",
-			"blocked",
-			"activation_blocked",
-			LEGACY_ACTIVATION_NEXT_ACTION.id,
-			LEGACY_ACTIVATION_NEXT_ACTION.summary,
-			"none",
-			activationRetrySafety(restriction),
+				receipt ? (stateForPhase(receipt.phase) ?? receiptState(receipt)) : "absent",
+				receipt?.phase ?? "blocked",
+				"activation_blocked",
+				nextAction.id,
+				nextAction.summary,
+				changedState,
+				activationRetrySafety(restriction),
 			),
-			activationRestriction: restriction,
+			...(receipt
+				? {
+						transactionId: receipt.transactionId ?? undefined,
+						receiptId: receipt.receiptId,
+						diagnosticsReference: receipt.diagnosticsReference,
+					}
+				: {}),
+			activationRestriction: contextualRestriction,
 		};
 	}
 
 	/** Read-only doctor surface for the un-admitted runtime. */
 	function activationDoctorResult(
 		restriction: VaultGitActivationRestriction,
+		diagnosed?: VaultGitDoctorResult,
 	): VaultGitDoctorResult {
+		const nextAction = activationNextAction(restriction);
 		return {
-			status: "diagnosed",
-			state: "absent",
-			phase: "blocked",
-			finding: "activation_missing",
-			changedState: "none",
+			...(diagnosed ?? {
+				status: "diagnosed" as const,
+				state: "absent" as const,
+				phase: "blocked" as const,
+				finding: "activation_missing" as const,
+				changedState: "none" as const,
+				diagnosticsReference: `doctor:${options.store.repositoryId}`,
+			}),
+			changedState: diagnosed?.changedState ?? "none",
+			finding:
+				diagnosed?.finding === "no_receipt"
+					? "activation_missing"
+					: (diagnosed?.finding ?? "activation_missing"),
 			retrySafety: activationRetrySafety(restriction),
-			nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
-			diagnosticsReference: `doctor:${options.store.repositoryId}`,
+			nextAction,
 			blocker: "activation_blocked",
 			activationRestriction: restriction,
 		};
+	}
+
+	async function receiptForActivation(): Promise<VaultGitReceipt | undefined> {
+		try {
+			const loaded = await options.store.load();
+			return loaded.status === "loaded" ? loaded.receipt : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	async function loadReceipt(): Promise<VaultGitReceipt | VaultGitEngineResult | null> {
@@ -315,7 +349,10 @@ export function createVaultGitTransactionEngine(
 		return loaded.receipt;
 	}
 
-	async function proveIdentity(receipt?: VaultGitReceipt): Promise<VaultGitEngineResult | { localMainHead: string }> {
+	async function proveIdentity(
+		receipt?: VaultGitReceipt,
+		expectedLocalMainHead = receipt?.localMainHead,
+	): Promise<VaultGitEngineResult | { localMainHead: string }> {
 		// Fail closed like captureUnrelatedState: a composed port that cannot
 		// prove repository safety must never let a write-capable phase proceed.
 		if (!options.repository.inspectSafety) {
@@ -341,15 +378,35 @@ export function createVaultGitTransactionEngine(
 				"Remove the unsafe repository-local configuration flagged by safety inspection before continuing.",
 			);
 		}
-		const resolved = await options.repository.resolveCanonicalIdentity();
-		if (resolved.identity !== options.repositoryIdentity || (receipt && resolved.localMainHead !== receipt.localMainHead)) {
+		let resolved: Awaited<
+			ReturnType<VaultGitRepositoryPort["resolveCanonicalIdentity"]>
+		>;
+		try {
+			resolved = await options.repository.resolveCanonicalIdentity();
+		} catch (error) {
+			if (error instanceof VaultRepositoryIdentityUnavailableError) {
+				return activationRefusal(
+					createVaultGitActivationRestriction({
+						stoppedAction: "vault_write",
+						cause: "revalidation_unavailable",
+					}),
+					receipt,
+				);
+			}
+			throw error;
+		}
+		if (resolved.identity !== options.repositoryIdentity || (receipt && resolved.localMainHead !== expectedLocalMainHead)) {
 			return refusal("human_required", receipt?.phase ?? "blocked", "vault_identity_changed", "inspect_configured_vault", "Inspect configured vault identity before continuing.");
 		}
 		return { localMainHead: resolved.localMainHead };
 	}
 
-	async function fence(receipt: VaultGitReceipt, remote: string): Promise<VaultGitEngineResult | null> {
-		const identity = await proveIdentity(receipt);
+	async function fence(
+		receipt: VaultGitReceipt,
+		remote: string,
+		expectedLocalMainHead = receipt.localMainHead,
+	): Promise<VaultGitEngineResult | null> {
+		const identity = await proveIdentity(receipt, expectedLocalMainHead);
 		if ("status" in identity) return identity;
 		if (!receipt.transactionId || !receipt.leaseGeneration) {
 			return refusal("unknown", receipt.phase, "receipt_corrupt", "inspect_remote_lease", "Inspect remote lease acquisition evidence.");
@@ -357,8 +414,9 @@ export function createVaultGitTransactionEngine(
 		const main = await options.ledger.git.inspectMain(remote);
 		if (
 			main.status !== "ok" ||
-			main.alignment !== "aligned" ||
-			main.localHead !== receipt.localMainHead ||
+			main.alignment !==
+				(expectedLocalMainHead === receipt.remoteMainHead ? "aligned" : "ahead") ||
+			main.localHead !== expectedLocalMainHead ||
 			main.remoteHead !== receipt.remoteMainHead
 		) {
 			return refusal("human_required", receipt.phase, "remote_moved", "preserve_local_edits", "Preserve local edits and inspect main movement.");
@@ -374,25 +432,50 @@ export function createVaultGitTransactionEngine(
 		return null;
 	}
 
+	async function finalWriteAuthority(
+		receipt: VaultGitReceipt,
+		remote: string,
+		changedState: VaultGitEngineResult["changedState"] = "none",
+		expectedLocalMainHead = receipt.localMainHead,
+	): Promise<VaultGitEngineResult | null> {
+		const fenced = await fence(receipt, remote, expectedLocalMainHead);
+		if (fenced) return withReceiptContext(fenced, receipt, changedState);
+		const restriction = await activationRestriction("continuation");
+		return restriction
+			? activationRefusal(restriction, receipt, changedState)
+			: null;
+	}
+
 	const engine: VaultGitTransactionEngine = {
 		async doctor(input) {
 			const restriction = await activationRestriction("continuation");
-			if (restriction) return activationDoctorResult(restriction);
-			return doctorEngine.diagnose(input);
+			const diagnosed = await doctorEngine.diagnose(
+				restriction ? { ...input, issueTakeoverToken: false } : input,
+			);
+			if (!restriction) return diagnosed;
+			return activationDoctorResult(
+				restriction,
+				diagnosed,
+			);
 		},
 
 		async repair(input) {
 			const restriction = await activationRestriction("continuation");
 			if (restriction) {
+				const receipt = await receiptForActivation();
 				return {
 					status: "refused",
 					action: input.action,
-					state: "absent",
-					phase: "blocked",
+					state: receipt
+						? (stateForPhase(receipt.phase) ?? receiptState(receipt))
+						: "absent",
+					phase: receipt?.phase ?? "blocked",
 					changedState: "none",
 					retrySafety: activationRetrySafety(restriction),
-					nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
-					diagnosticsReference: `doctor:${options.store.repositoryId}`,
+					nextAction: activationNextAction(restriction),
+					diagnosticsReference:
+						receipt?.diagnosticsReference ??
+						`doctor:${options.store.repositoryId}`,
 					blocker: "activation_blocked",
 					activationRestriction: restriction,
 				};
@@ -401,12 +484,18 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async inspectJanitorPreflight(remote) {
-			const restriction = await activationRestriction();
+			const restriction = await activationRestriction("continuation");
 			if (restriction) {
+				const diagnosed = await doctorEngine.diagnose({
+					issueTakeoverToken: false,
+				});
 				return {
 					status: "refused",
 					blocker: "activation_blocked",
-					doctor: activationDoctorResult(restriction),
+					doctor: activationDoctorResult(
+						restriction,
+						diagnosed,
+					),
 					activationRestriction: restriction,
 				};
 			}
@@ -519,11 +608,12 @@ export function createVaultGitTransactionEngine(
 				const { transactionId, leaseGeneration } = current.receipt;
 				if (!transactionId || !leaseGeneration) return;
 				try {
-					await releaseRemoteLease(options.ledger, {
+					const released = await releaseRemoteLease(options.ledger, {
 						remote: request.remote,
 						transactionId,
 						expectedGeneration: leaseGeneration,
 					});
+					if (released.status === "released") request.onLeaseReleased?.();
 				} catch {
 					// A failed release leaves the lease to expire on its own; the
 					// refusal below still reports the outcome the caller must act on.
@@ -565,7 +655,18 @@ export function createVaultGitTransactionEngine(
 					? await options.repository.captureUnrelatedState([])
 					: null;
 				const stillClean = wholeTree !== null && wholeTree.statusHex.length === 0;
-				applied = stillClean && (await request.apply());
+				if (stillClean) {
+					const finalAuthority = await finalWriteAuthority(
+						loaded.receipt,
+						request.remote,
+						"remote",
+					);
+					if (finalAuthority) {
+						await abandonLease();
+						return finalAuthority;
+					}
+					applied = await request.apply();
+				}
 			} catch {
 				applied = false;
 			}
@@ -590,8 +691,15 @@ export function createVaultGitTransactionEngine(
 
 		async begin(input) {
 			validateBegin(input);
-			const restriction = await activationRestriction();
-			if (restriction) return activationRefusal(restriction);
+			const existing = await loadReceipt();
+			if (existing !== null && "status" in existing) return existing;
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
+				return activationRefusal(
+					restriction,
+					existing === null ? undefined : existing,
+				);
+			}
 			if (input.offline) {
 				return refusal("absent", "blocked", "offline_mode", "capture_private_draft", "Keep the canonical vault read-only while offline.");
 			}
@@ -605,9 +713,7 @@ export function createVaultGitTransactionEngine(
 			) {
 				return refusal("absent", "blocked", "identity_label_invalid", "inspect_status", "Configure non-secret single-line actor and host labels before beginning.");
 			}
-			const existing = await loadReceipt();
 			if (existing !== null) {
-				if ("status" in existing) return existing;
 				if (existing.phase !== "closed") {
 					// A refused acquisition never granted a transaction id, so its
 					// terminal receipt must not brick admission forever. Supersede it
@@ -740,15 +846,24 @@ export function createVaultGitTransactionEngine(
 				nextSafeAction: "complete_transaction",
 				recordedAt: options.runtime.now().toISOString(),
 			});
+			const finalAuthority = await finalWriteAuthority(
+				leased,
+				input.remote,
+				"remote",
+			);
+			if (finalAuthority) return finalAuthority;
 			await options.store.append(writing);
 			return result("admitted", "active", writing, "owner", "remote", "complete_transaction", "Complete the meaningful event explicitly.");
 		},
 
 		async join(input) {
-			const restriction = await activationRestriction("continuation");
-			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
-			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one outer transaction first.");
+			if (loaded && "status" in loaded) return loaded;
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
+				return activationRefusal(restriction, loaded ?? undefined);
+			}
+			if (!loaded) return refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one outer transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "join", input.capability);
 			if (authorization) return authorization;
 			if (input.remote !== loaded.remote) {
@@ -763,32 +878,44 @@ export function createVaultGitTransactionEngine(
 			// dirty now by design; only genuinely new paths face admission.
 			const existing = new Set(loaded.ownedPaths.map((path) => path.path));
 			const fresh = input.requestedPaths.filter((path) => !existing.has(path));
-			if (fresh.length === 0) return result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
+			if (fresh.length === 0) {
+				const finalAuthority = await finalWriteAuthority(loaded, input.remote);
+				return finalAuthority ?? result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
+			}
 			const admission = await options.repository.inspectOwnedPaths(fresh);
 			if (admission.status === "refused") return refusal("active", loaded.phase, "owned_path_not_admitted", "change_owned_paths", `Change the joined path set; admission found ${admission.reason}.`);
 			const additions = admission.paths.filter((path) => !existing.has(path.path));
-			if (additions.length === 0) return result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
+			if (additions.length === 0) {
+				const finalAuthority = await finalWriteAuthority(loaded, input.remote);
+				return finalAuthority ?? result("joined", "active", loaded, "join", "none", "continue_outer_transaction", "Continue the outer transaction.");
+			}
 			const joinedPaths = [...loaded.ownedPaths, ...copyPaths(additions)];
+			const unrelatedState = options.repository.captureUnrelatedState
+				? await options.repository.captureUnrelatedState(
+						joinedPaths.map((path) => path.path),
+					)
+				: loaded.unrelatedState;
 			const joined = nextVaultGitReceipt(loaded, {
 				transition: "paths_joined",
 				ownedPaths: joinedPaths,
-				unrelatedState: options.repository.captureUnrelatedState
-					? await options.repository.captureUnrelatedState(
-							joinedPaths.map((path) => path.path),
-						)
-					: loaded.unrelatedState,
+				unrelatedState,
 				nextSafeAction: "continue_outer_transaction",
 				recordedAt: options.runtime.now().toISOString(),
 			});
+			const finalAuthority = await finalWriteAuthority(loaded, input.remote);
+			if (finalAuthority) return finalAuthority;
 			await options.store.append(joined);
 			return result("joined", "active", joined, "join", "local", "continue_outer_transaction", "Continue the outer transaction.");
 		},
 
 		async complete(input) {
-			const restriction = await activationRestriction("continuation");
-			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
-			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one transaction first.");
+			if (loaded && "status" in loaded) return loaded;
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
+				return activationRefusal(restriction, loaded ?? undefined);
+			}
+			if (!loaded) return refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
 			if (authorization) return authorization;
 			if (input.remote !== loaded.remote) {
@@ -825,8 +952,11 @@ export function createVaultGitTransactionEngine(
 					return refusal("human_required", "human_required", "receipt_corrupt", "inspect_private_receipt", "Inspect missing atomic-close receipt evidence.", "none", "operator_required");
 				}
 			}
-			const fenced = await fence(loaded, input.remote);
-			if (fenced) return fenced;
+			const completionAuthority = await finalWriteAuthority(
+				loaded,
+				input.remote,
+			);
+			if (completionAuthority) return completionAuthority;
 			const checking = nextVaultGitReceipt(loaded, {
 				phase: "checking",
 				transition: "completion_requested",
@@ -877,7 +1007,7 @@ export function createVaultGitTransactionEngine(
 				transactionId,
 				actor: committing.actor,
 			});
-			const localCommit = await options.repository.commitExact({
+			const commitRequest = {
 				baselineHead: committing.localMainHead,
 				ownedPaths: committing.ownedPaths,
 				unrelatedState: committing.unrelatedState,
@@ -885,7 +1015,14 @@ export function createVaultGitTransactionEngine(
 				message,
 				author: committing.actor,
 				timestamp: options.runtime.now().toISOString(),
-			});
+			};
+			const commitAuthority = await finalWriteAuthority(
+				committing,
+				input.remote,
+				"local",
+			);
+			if (commitAuthority) return commitAuthority;
+			const localCommit = await options.repository.commitExact(commitRequest);
 			if (localCommit.status === "refused") {
 				if (localCommit.reason === "timed_out") {
 					// Transient local plumbing timeout: no commit landed, so refuse
@@ -948,27 +1085,37 @@ export function createVaultGitTransactionEngine(
 				// not allowed to start.
 				return refusal("human_required", committing.phase, "receipt_corrupt", "inspect_private_receipt", "Inspect private receipt durability; commit evidence could not persist, so publication was not attempted.", "committed", "operator_required");
 			}
+			const closeRequest = {
+				remote: committing.remote,
+				expectedMainHead: committing.remoteMainHead,
+				mainCommit: localCommit.commitId,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: leaseGeneration,
+				ledgerContent: releaseContent,
+				ledgerMessage: `vault-ledger: release ${transactionId}`,
+				author: committing.actor,
+				timestamp: closedAt,
+				async onPrepared(evidence: {
+					readonly ledgerCommit: string;
+				}) {
+					publicationReceipt = nextVaultGitReceipt(publicationReceipt, {
+						transition: "push_outcome_unknown",
+						ledgerReleaseId: evidence.ledgerCommit,
+						recordedAt: options.runtime.now().toISOString(),
+					});
+					await options.store.append(publicationReceipt);
+				},
+			};
+			const closeAuthority = await finalWriteAuthority(
+				publicationReceipt,
+				input.remote,
+				"committed",
+				localCommit.commitId,
+			);
+			if (closeAuthority) return closeAuthority;
 			let publication: VaultGitAtomicCloseResult;
 			try {
-				publication = await options.ledger.git.atomicClose({
-					remote: committing.remote,
-					expectedMainHead: committing.remoteMainHead,
-					mainCommit: localCommit.commitId,
-					ledgerRef: VAULT_GIT_LEDGER_REF,
-					expectedLedgerGeneration: leaseGeneration,
-					ledgerContent: releaseContent,
-					ledgerMessage: `vault-ledger: release ${transactionId}`,
-					author: committing.actor,
-					timestamp: closedAt,
-					async onPrepared(evidence) {
-						publicationReceipt = nextVaultGitReceipt(publicationReceipt, {
-							transition: "push_outcome_unknown",
-							ledgerReleaseId: evidence.ledgerCommit,
-							recordedAt: options.runtime.now().toISOString(),
-						});
-						await options.store.append(publicationReceipt);
-					},
-				});
+				publication = await options.ledger.git.atomicClose(closeRequest);
 			} catch {
 				// An adapter throw after the local commit must surface as a
 				// structured refusal that preserves the durable commit evidence.
@@ -1007,57 +1154,85 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async inspect(input = {}) {
+			const loaded = await loadReceipt();
 			const restriction = await activationRestriction("continuation");
-			if (restriction) {
-				// Read-only surface of the same blocker: status and the dashboard
-				// show activation_blocked without refusing the inspection itself.
+			const finish = (
+				current: VaultGitEngineResult,
+				receipt?: VaultGitReceipt,
+			): VaultGitEngineResult => {
+				if (!restriction) return current;
+				const nextAction = activationNextAction(restriction);
+				const contextual = receipt
+					? withReceiptContext(current, receipt)
+					: current;
 				return {
+					...contextual,
 					status: "inspected",
-					state: "absent",
-					phase: "blocked",
 					writePermission: "denied",
-					changedState: "none",
 					retrySafety: activationRetrySafety(restriction),
 					blocker: "activation_blocked",
-					nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
+					nextAction,
 					activationRestriction: restriction,
 				};
+			};
+			if (loaded === null) {
+				return finish(
+					inspected(
+						"absent",
+						"blocked",
+						"begin_transaction",
+						"Begin one transaction before canonical writes.",
+					),
+				);
 			}
-			const loaded = await loadReceipt();
-			if (loaded === null) return inspected("absent", "blocked", "begin_transaction", "Begin one transaction before canonical writes.");
-			if ("status" in loaded) return loaded;
+			if ("status" in loaded) return finish(loaded);
 			if (
 				input.transactionId !== undefined &&
 				loaded.transactionId !== null &&
 				input.transactionId !== loaded.transactionId
 			) {
-				return refusal("human_required", loaded.phase, "transaction_mismatch", "inspect_status", "Inspect the active transaction id.");
+				return finish(
+					refusal(
+						"human_required",
+						loaded.phase,
+						"transaction_mismatch",
+						"inspect_status",
+						"Inspect the active transaction id.",
+					),
+					loaded,
+				);
 			}
 			// Terminal phases are durable local facts; a remote failure must
 			// never downgrade them to "unknown".
 			const phaseState = stateForPhase(loaded.phase);
 			if (phaseState && phaseState !== "unknown") {
-				return result("inspected", phaseState, loaded, "denied", "none", nextForState(phaseState), summaryForState(phaseState));
+				return finish(
+					result("inspected", phaseState, loaded, "denied", "none", nextForState(phaseState), summaryForState(phaseState)),
+					loaded,
+				);
 			}
 			const observed = await observeRemoteLedger(options.ledger, { remote: loaded.remote });
-			if (observed.status === "refused") return result("inspected", "unknown", loaded, "denied", "none", "retry_remote", "Retry remote inspection after checking connectivity.", observed.blocker);
+			if (observed.status === "refused") return finish(result("inspected", "unknown", loaded, "denied", "none", "retry_remote", "Retry remote inspection after checking connectivity.", observed.blocker), loaded);
 			if (!loaded.transactionId || !loaded.leaseGeneration) {
-				return result("inspected", "unknown", loaded, "denied", "none", "inspect_remote_lease", "Inspect remote lease acquisition evidence.");
+				return finish(result("inspected", "unknown", loaded, "denied", "none", "inspect_remote_lease", "Inspect remote lease acquisition evidence."), loaded);
 			}
 			if (observed.generation !== loaded.leaseGeneration || observed.lease?.transactionId !== loaded.transactionId) {
-				return result("inspected", "superseded", loaded, "denied", "none", "preserve_local_edits", "Preserve local edits and inspect the newer lease.", "lease_generation_stale");
+				return finish(result("inspected", "superseded", loaded, "denied", "none", "preserve_local_edits", "Preserve local edits and inspect the newer lease.", "lease_generation_stale"), loaded);
 			}
 			const acquiredAt = loaded.leaseAcquiredAt ? Date.parse(loaded.leaseAcquiredAt) : Number.NaN;
 			const expired = !Number.isFinite(acquiredAt) || options.runtime.now().getTime() > acquiredAt + loaded.leaseDurationMs;
-			return result("inspected", expired ? "expired" : "active", loaded, "denied", "none", expired ? "request_operator_takeover" : "continue_transaction", expired ? "Ask an operator to inspect the stale lease." : "Continue the active transaction.");
+			return finish(result("inspected", expired ? "expired" : "active", loaded, "denied", "none", expired ? "request_operator_takeover" : "continue_transaction", expired ? "Ask an operator to inspect the stale lease." : "Continue the active transaction."), loaded);
 		},
 
 		async recordPhase(input) {
-			const restriction = await activationRestriction("continuation");
-			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
-			if (!loaded || "status" in loaded) {
-				return loaded ?? refusal("human_required", "human_required", "transaction_mismatch", "inspect_status", "Inspect the active transaction before recording a phase.");
+			if (loaded && "status" in loaded) return loaded;
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
+				return activationRefusal(restriction, loaded ?? undefined);
+			}
+			if (!loaded) {
+				return refusal("human_required", "human_required", "transaction_mismatch", "inspect_status", "Inspect the active transaction before recording a phase.");
 			}
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
 			if (authorization) return authorization;
@@ -1076,8 +1251,8 @@ export function createVaultGitTransactionEngine(
 			if (input.phase === "closed") {
 				return refusal(stateForPhase(loaded.phase) ?? "active", loaded.phase, "receipt_conflict", "inspect_status", "Closure requires verified atomic close; complete or repair the transaction instead of recording closed.");
 			}
-			const fenced = await fence(loaded, input.remote);
-			if (fenced) return fenced;
+			const finalAuthority = await finalWriteAuthority(loaded, input.remote);
+			if (finalAuthority) return finalAuthority;
 			const transition = input.phase === "push_pending" ? "push_outcome_unknown" : input.phase === "repairable" ? "deterministic_repair_available" : input.phase === "human_required" ? "human_intervention_required" : "closed";
 			// Commit evidence fields are owned by completion and repair flows (U5);
 			// a phase transition must never introduce or mutate them.
@@ -1097,9 +1272,42 @@ export function createVaultGitTransactionEngine(
 function activationRetrySafety(
 	restriction: VaultGitActivationRestriction,
 ): VaultGitRetrySafety {
-	return restriction.cause.id === "admission_missing"
-		? "same_input_safe"
-		: "same_input_unsafe";
+	switch (restriction.cause.id) {
+		case "admission_missing":
+		case "revalidation_unavailable":
+			return "same_input_safe";
+		case "human_capability_required":
+		case "revoked":
+			return "operator_required";
+		case "evidence_changed":
+		case "binding_changed":
+		case "invalidated":
+			return "same_input_unsafe";
+	}
+}
+
+function activationNextAction(
+	restriction: VaultGitActivationRestriction,
+): VaultGitEngineNextAction {
+	return restriction.nextAction;
+}
+
+function receiptState(receipt: VaultGitReceipt): VaultGitTransactionState {
+	return receipt.transactionId ? "active" : "unknown";
+}
+
+function withReceiptContext(
+	current: VaultGitEngineResult,
+	receipt: VaultGitReceipt,
+	changedState: VaultGitEngineResult["changedState"] = current.changedState,
+): VaultGitEngineResult {
+	return {
+		...current,
+		changedState,
+		transactionId: receipt.transactionId ?? undefined,
+		receiptId: receipt.receiptId,
+		diagnosticsReference: receipt.diagnosticsReference,
+	};
 }
 
 async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, transactionId: string, role: VaultGitCapabilityRole, capability: Uint8Array): Promise<VaultGitEngineResult | null> {

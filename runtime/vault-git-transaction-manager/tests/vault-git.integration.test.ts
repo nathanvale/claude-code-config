@@ -252,6 +252,79 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(projected[2]).toEqual(projected[0]);
 	});
 
+		test("accepts exactly one configured vault and refuses duplicate declarations", async () => {
+		const fixture = await createFixture();
+		const root = await mkdtemp(join(tmpdir(), "vault-git-ambiguous-config-"));
+		roots.push(root);
+		const configPath = join(root, "vault.md");
+		await writeFile(configPath, `Vault root: \`${fixture.clone}\`\n`);
+		const env: NodeJS.ProcessEnv = { ...process.env };
+		for (const key of Object.keys(env)) {
+			if (key.startsWith("VAULT_GIT_")) delete env[key];
+		}
+		env.VAULT_GIT_CONFIG_PATH = configPath;
+		env.VAULT_GIT_STATE_ROOT = join(root, "state");
+
+		const run = (runId: string) => runCliProcess({
+			label: `vault-git begin configured vault ${runId}`,
+			argv: [
+				"bun", "run", productionCliPath,
+				"begin", "--event", "note_created", "--path", "notes/a.md",
+				"--json", "--run-id", runId,
+			],
+			cwd: packageRoot,
+			env,
+			timeoutMs: 30_000,
+		});
+
+		const exact = await run("exact-config");
+		expect(exact.exitCode).toBe(1);
+		expect(parseCliProcessJson(exact)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked" },
+		});
+
+		await writeFile(
+			configPath,
+			[
+				`Vault root: \`${fixture.clone}\``,
+				`Configured vault root: \`${fixture.clone}\``,
+			].join("\n"),
+		);
+		const ambiguous = await run("ambiguous-config");
+		expect(ambiguous.exitCode).toBe(1);
+		expect(parseCliProcessJson(ambiguous)).toMatchObject({
+			status: "error",
+			error: { code: "vault_unconfigured" },
+		});
+	});
+
+	test("production composition fails closed on a malformed remote-host admission", async () => {
+		const fixture = await createFixture();
+		const result = await runCliProcess({
+			label: "vault-git malformed allowed remote host",
+			argv: [
+				"bun", "run", productionCliPath,
+				"status", "--json", "--run-id", "malformed-remote-host",
+			],
+			cwd: packageRoot,
+			env: {
+				...fixture.env,
+				VAULT_GIT_ALLOWED_REMOTE_HOSTS: "-example.invalid",
+			},
+			timeoutMs: 30_000,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(parseCliProcessJson(result)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "read_only",
+				blockers: ["vault_unconfigured"],
+			},
+		});
+	});
+
 	test("keeps foreign flags and malformed transaction ids at stable usage exits", async () => {
 		const fixture = await createFixture();
 		for (const args of [
@@ -333,7 +406,7 @@ describe("vault-git catalog-driven process boundary", () => {
 			data: {
 				outcome: "read_only",
 				blockers: ["activation_blocked"],
-				next_action: { id: "request_operator_admission" },
+				next_action: { id: "review_prepared" },
 				activation_restriction: {
 					cause: { id: "admission_missing" },
 					next_action: { id: "review_prepared" },
@@ -349,7 +422,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				outcome: "refused",
 				changed_state: "none",
 				blockers: ["activation_blocked"],
-				next_action: { id: "request_operator_admission" },
+				next_action: { id: "review_prepared" },
 				activation_restriction: {
 					cause: { id: "admission_missing" },
 					next_action: { id: "review_prepared" },
@@ -366,7 +439,7 @@ describe("vault-git catalog-driven process boundary", () => {
 			error: { code: "activation_blocked" },
 			data: {
 				blockers: ["activation_blocked"],
-				next_action: { id: "request_operator_admission" },
+				next_action: { id: "review_prepared" },
 				activation_restriction: {
 					cause: { id: "admission_missing" },
 				},
@@ -783,6 +856,7 @@ async function createFixture(
 	git(clone, ["config", "user.name", "Vault CLI Test"]);
 	git(clone, ["config", "user.email", "vault-cli@example.invalid"]);
 	await mkdir(join(clone, "notes"), { recursive: true });
+	await mkdir(join(clone, "schemas"), { recursive: true });
 	await writeFile(
 		join(clone, "notes", "a.md"),
 		options.checkerRepair ? "baseline\nowner:\n" : "baseline\n",
@@ -835,11 +909,16 @@ async function createFixture(
 	// The checker admission fingerprint requires a real bun.lock; a missing
 	// lock file refuses admission by design.
 	await writeFile(join(clone, "bun.lock"), "{}\n");
+	await writeFile(
+		join(clone, "schemas", "frontmatter-contract.json"),
+		'{"type":"object"}\n',
+	);
 	git(clone, [
 		"add",
 		"package.json",
 		"bun.lock",
 		"notes/a.md",
+		"schemas/frontmatter-contract.json",
 		...(options.checkerRepair
 			? ["scripts/vault-check.ts", "scripts/vault-repair-registry.ts"]
 			: []),
