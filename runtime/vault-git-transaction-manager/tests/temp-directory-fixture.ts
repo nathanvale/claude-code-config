@@ -16,7 +16,9 @@ export function createTempDirectoryFixture(): {
 		},
 		async cleanup() {
 			await Promise.all(
-				roots.splice(0).map((root) => rm(root, { recursive: true })),
+				roots.splice(0).map((root) =>
+					rm(root, { recursive: true, force: true }),
+				),
 			);
 		},
 	};

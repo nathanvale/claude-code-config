@@ -152,6 +152,64 @@ describe("owner-controlled activation identities", () => {
 		).rejects.toThrow("activation remote identity is ambiguous");
 	});
 
+	test("reports a successful empty remote probe as missing", async () => {
+		const fixture = await identityFixture();
+		const processPort = createNodeProcessPort();
+
+		await expect(
+			resolveVaultGitActivationIdentities({
+				...fixture.options,
+				process: {
+					run(request) {
+						if (
+							request.args.join("\0") ===
+							["remote", "get-url", "--all", "origin"].join("\0")
+						) {
+							return Promise.resolve({
+								exitCode: 0,
+								stdout: "",
+								stderr: "",
+								timedOut: false,
+							});
+						}
+						return processPort.run(request);
+					},
+				},
+			}),
+		).rejects.toThrow("activation remote identity is missing");
+	});
+
+	test("runs both Git identity probes with the controlled Git environment", async () => {
+		const fixture = await identityFixture();
+		const processPort = createNodeProcessPort();
+		const environments: Readonly<Record<string, string>>[] = [];
+
+		await resolveVaultGitActivationIdentities({
+			...fixture.options,
+			process: {
+				run(request) {
+					environments.push(request.env ?? {});
+					return processPort.run(request);
+				},
+			},
+		});
+
+		expect(environments).toHaveLength(2);
+		for (const environment of environments) {
+			expect(environment).toEqual({
+				GIT_CONFIG_COUNT: "2",
+				GIT_CONFIG_GLOBAL: "/dev/null",
+				GIT_CONFIG_KEY_0: "core.hooksPath",
+				GIT_CONFIG_KEY_1: "protocol.ext.allow",
+				GIT_CONFIG_NOSYSTEM: "1",
+				GIT_CONFIG_VALUE_0: "/dev/null",
+				GIT_CONFIG_VALUE_1: "never",
+				GIT_TERMINAL_PROMPT: "0",
+				LC_ALL: "C",
+			});
+		}
+	});
+
 	test("refuses a private state root that is itself a symlink", async () => {
 		const fixture = await identityFixture();
 		const target = join(fixture.root, "real-state");

@@ -109,6 +109,51 @@ describe("vault-git doctor", () => {
 			},
 		});
 	});
+
+	test.each([
+		["push_pending", "push_pending"],
+		["repairable", "repairable"],
+	] as const)(
+		"preserves %s state when repository identity is temporarily unavailable",
+		async (phase, state) => {
+			const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-doctor-"));
+			roots.push(stateRoot);
+			const store = createReceiptStore({
+				stateRoot,
+				repositoryIdentity: "canonical-vault",
+			});
+			await store.initialize(receiptForRecoveryPhase(phase), {
+				ownerCapability: new Uint8Array([1]),
+				joinCapability: new Uint8Array([2]),
+			});
+			const repository: VaultGitRepositoryPort = {
+				resolveCanonicalIdentity: () =>
+					Promise.reject(new VaultRepositoryIdentityUnavailableError()),
+				inspectOwnedPaths: () => Promise.reject(new Error("not used")),
+			};
+			const remote: VaultGitRemotePort = {
+				inspectMain: () => Promise.reject(new Error("not used")),
+				readLedger: () => Promise.reject(new Error("not used")),
+				appendLedgerCommit: () => Promise.reject(new Error("not used")),
+			};
+
+			expect(
+				await createVaultGitDoctor({
+					store,
+					repository,
+					ledger: { git: remote, clock: runtimeFixture() },
+					runtime: runtimeFixture(),
+					repositoryIdentity: "canonical-vault",
+				}).diagnose(),
+			).toMatchObject({
+				state,
+				phase,
+				finding: "activation_missing",
+				blocker: "activation_blocked",
+				nextAction: { id: "run_doctor" },
+			});
+		},
+	);
 });
 
 function runtimeFixture(): VaultGitRuntimePort {
@@ -150,5 +195,26 @@ function receipt(): VaultGitReceipt {
 		pushOutcome: "not_attempted",
 		nextSafeAction: "retry_remote",
 		diagnosticsReference: `receipt:receipt_${"1".repeat(32)}`,
+	};
+}
+
+function receiptForRecoveryPhase(
+	phase: "push_pending" | "repairable",
+): VaultGitReceipt {
+	const commitId = "c".repeat(40);
+	return {
+		...receipt(),
+		transactionId: `txn_${"3".repeat(32)}`,
+		phase,
+		transition:
+			phase === "push_pending"
+				? "push_outcome_unknown"
+				: "deterministic_repair_available",
+		leaseGeneration: "a".repeat(40),
+		leaseAcquiredAt: "2026-08-09T00:00:00.000Z",
+		commitId: phase === "push_pending" ? commitId : null,
+		expectedMainCommit: phase === "push_pending" ? commitId : null,
+		pushOutcome: phase === "push_pending" ? "unknown" : "not_attempted",
+		nextSafeAction: phase === "push_pending" ? "retry_push" : "run_repair",
 	};
 }

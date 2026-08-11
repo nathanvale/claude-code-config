@@ -197,8 +197,12 @@ export async function diagnoseVaultGitTransaction(
 		identity = await options.repository.resolveCanonicalIdentity();
 	} catch (error) {
 		if (error instanceof VaultRepositoryIdentityUnavailableError) {
+			const state =
+				receipt.phase === "push_pending" || receipt.phase === "repairable"
+					? receipt.phase
+					: "active";
 			return report(
-				"active",
+				state,
 				receipt.phase,
 				"activation_missing",
 				"same_input_safe",

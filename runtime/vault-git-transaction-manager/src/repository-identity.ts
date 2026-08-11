@@ -8,6 +8,17 @@ import {
 } from "./ports.ts";
 
 const REPOSITORY_IDENTITY_DOMAIN = "vault-git.repository-identity.v1";
+const CONTROLLED_GIT_ENVIRONMENT = {
+	GIT_CONFIG_COUNT: "2",
+	GIT_CONFIG_GLOBAL: "/dev/null",
+	GIT_CONFIG_KEY_0: "core.hooksPath",
+	GIT_CONFIG_KEY_1: "protocol.ext.allow",
+	GIT_CONFIG_NOSYSTEM: "1",
+	GIT_CONFIG_VALUE_0: "/dev/null",
+	GIT_CONFIG_VALUE_1: "never",
+	GIT_TERMINAL_PROMPT: "0",
+	LC_ALL: "C",
+} as const;
 
 /** Canonical local bindings that distinguish one configured vault checkout. */
 export interface VaultRepositoryIdentityBindings {
@@ -99,7 +110,7 @@ export async function resolveVaultRepositoryIdentity(
 			command: gitBinary,
 			args,
 			cwd: options.repositoryPath,
-			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+			env: CONTROLLED_GIT_ENVIRONMENT,
 			timeoutMs: options.timeoutMs,
 		});
 	const [repositoryRoot, discoveredRootResult, commonDirectoryResult] =

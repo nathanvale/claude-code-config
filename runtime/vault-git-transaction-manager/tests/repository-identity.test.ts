@@ -57,6 +57,44 @@ describe("vault repository identity", () => {
 		);
 	});
 
+	test("runs repository identity probes with the controlled Git environment", async () => {
+		const repositoryPath = await tempDirectories.create(
+			"vault-identity-environment-",
+		);
+		expect(
+			spawnSync("git", ["init", "--initial-branch=main", repositoryPath])
+				.status,
+		).toBe(0);
+		const processPort = createNodeProcessPort();
+		const environments: Readonly<Record<string, string>>[] = [];
+
+		await resolveVaultRepositoryIdentity({
+			repositoryPath,
+			process: {
+				run(request) {
+					environments.push(request.env ?? {});
+					return processPort.run(request);
+				},
+			},
+			timeoutMs: 5_000,
+		});
+
+		expect(environments).toHaveLength(2);
+		for (const environment of environments) {
+			expect(environment).toEqual({
+				GIT_CONFIG_COUNT: "2",
+				GIT_CONFIG_GLOBAL: "/dev/null",
+				GIT_CONFIG_KEY_0: "core.hooksPath",
+				GIT_CONFIG_KEY_1: "protocol.ext.allow",
+				GIT_CONFIG_NOSYSTEM: "1",
+				GIT_CONFIG_VALUE_0: "/dev/null",
+				GIT_CONFIG_VALUE_1: "never",
+				GIT_TERMINAL_PROMPT: "0",
+				LC_ALL: "C",
+			});
+		}
+	});
+
 	test("changes identity when the Git common directory is replaced in place", async () => {
 		const repositoryPath = await tempDirectories.create(
 			"vault-identity-replaced-",

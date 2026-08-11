@@ -453,6 +453,16 @@ describe("transaction engine lifecycle", () => {
 		expect(await fixture.store.load()).toEqual({ status: "absent" });
 	});
 
+	test("Janitor preflight classifies unsafe remote configuration as a host breach", async () => {
+		const fixture = await engineFixture();
+		fixture.remote.refuseInspection = true;
+
+		expect(await fixture.engine.inspectJanitorPreflight("origin")).toMatchObject({
+			status: "refused",
+			blocker: "host_contract_breach",
+		});
+	});
+
 	test("refuses write commands with activation_blocked until an operator admits activation", async () => {
 		const fixture = await engineFixture(undefined, { admitActivation: false });
 		const refusedBegin = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
@@ -620,8 +630,8 @@ describe("transaction engine lifecycle", () => {
 
 		expect(await pending).toMatchObject({
 			status: "refused",
-			state: "active",
-			phase: "leased",
+			state: "closed",
+			phase: "closed",
 			writePermission: "denied",
 			changedState: "remote",
 			blocker: "activation_blocked",
@@ -629,8 +639,9 @@ describe("transaction engine lifecycle", () => {
 		});
 		expect(await fixture.store.load()).toMatchObject({
 			status: "loaded",
-			receipt: { phase: "leased" },
+			receipt: { phase: "closed" },
 		});
+		expect(fixture.remote.lease).toMatchObject({ state: "released" });
 	});
 
 	test("receipt-backed activation denial preserves transaction and lease posture on every read surface", async () => {
@@ -869,7 +880,7 @@ describe("transaction engine lifecycle", () => {
 		expect(fixture.remote.atomicCloseCalls).toBe(0);
 	});
 
-	test("revocation during the final begin fence denies owner authority", async () => {
+	test("revocation during the final begin fence denies owner authority and releases the lease", async () => {
 		let admitted = true;
 		const fixture = await engineFixture(undefined, {
 			activationAuthority: {
@@ -895,14 +906,59 @@ describe("transaction engine lifecycle", () => {
 			}),
 		).toMatchObject({
 			status: "refused",
-			phase: "leased",
+			state: "closed",
+			phase: "closed",
 			blocker: "activation_blocked",
 			writePermission: "denied",
 		});
 		expect(await fixture.store.load()).toMatchObject({
 			status: "loaded",
-			receipt: { phase: "leased" },
+			receipt: { phase: "closed" },
 		});
+		expect(fixture.remote.lease).toMatchObject({ state: "released" });
+	});
+
+	test("a refused activation handback records the still-held lease for operator review", async () => {
+		let admitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "revoked" as const, evidenceId: "fixture" };
+				},
+			},
+		});
+		let safetyReads = 0;
+		fixture.repository.onSafety = async () => {
+			safetyReads += 1;
+			if (safetyReads === 2) admitted = false;
+		};
+		fixture.remote.refuseRelease = true;
+
+		expect(
+			await fixture.engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/new.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({
+			status: "refused",
+			state: "human_required",
+			phase: "human_required",
+			blocker: "remote_unavailable",
+			retrySafety: "operator_required",
+			nextAction: { id: "request_operator_review" },
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "human_required",
+				nextSafeAction: "request_operator_review",
+			},
+		});
+		expect(fixture.remote.lease).toMatchObject({ state: "held" });
 	});
 
 	test("revocation during the final join fence denies new path authority", async () => {
@@ -1323,6 +1379,8 @@ class FakeRemote implements VaultGitRemotePort {
 	appendCalls = 0;
 	atomicCloseCalls = 0;
 	failReads = false;
+	refuseRelease = false;
+	refuseInspection = false;
 	lastObservedRemote: string | null = null;
 	onAppend?: () => Promise<void>;
 	lease: RemoteLease | null = null;
@@ -1333,7 +1391,15 @@ class FakeRemote implements VaultGitRemotePort {
 		await this.onProbe?.();
 		return this.probeResult;
 	};
-	async inspectMain() { return { status: "ok" as const, alignment: this.localHead === this.remoteHead ? "aligned" as const : "ahead" as const, localHead: this.localHead, remoteHead: this.remoteHead }; }
+	async inspectMain() {
+		if (this.refuseInspection) {
+			return {
+				status: "refused" as const,
+				reason: "unsafe_remote_configuration" as const,
+			};
+		}
+		return { status: "ok" as const, alignment: this.localHead === this.remoteHead ? "aligned" as const : "ahead" as const, localHead: this.localHead, remoteHead: this.remoteHead };
+	}
 	async readLedger(remote: string) {
 		this.lastObservedRemote = remote;
 		if (this.failReads) return { status: "failed" as const, reason: "remote_unavailable" as const };
@@ -1344,6 +1410,9 @@ class FakeRemote implements VaultGitRemotePort {
 		this.appendCalls += 1;
 		await this.onAppend?.();
 		const document = JSON.parse(request.content);
+		if (this.refuseRelease && document.lease.state === "released") {
+			return { status: "refused" as const, reason: "remote_unavailable" as const };
+		}
 		this.generation = GENERATION;
 		this.lease = {
 			transactionId: document.lease.transaction_id,

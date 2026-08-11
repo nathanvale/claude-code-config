@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -128,6 +128,10 @@ describe("git adapter construction", () => {
 	);
 
 	test("injects the exact admitted SSH closure into remote and repository Git", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-ssh-closure-"));
+		fixtureRoots.push(root);
+		const repositoryPath = join(root, "repository");
+		await mkdir(repositoryPath);
 		const admittedGitEnvironment = {
 			GIT_SSH_COMMAND:
 				"'/usr/bin/ssh' -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes",
@@ -156,17 +160,17 @@ describe("git adapter construction", () => {
 			return {};
 		});
 		const remote = createGitAdapter({
-			repositoryPath: "/repository",
+			repositoryPath,
 			process,
 			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
 			admittedGitEnvironment,
 		});
 		const repository = createGitRepositoryAdapter({
-			repositoryPath: "/repository",
+			repositoryPath,
 			repositoryIdentity: "vault-git:v1:fixture",
 			resolveRepositoryIdentity: async () => ({
 				identity: "vault-git:v1:fixture",
-				repositoryRoot: "/repository",
+				repositoryRoot: repositoryPath,
 			}),
 			process,
 			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
@@ -188,12 +192,17 @@ describe("git adapter construction", () => {
 	});
 
 	test("rejects an injected identity proof for another repository root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-other-proof-"));
+		fixtureRoots.push(root);
+		const repositoryPath = join(root, "repository");
+		const otherRepositoryPath = join(root, "other-repository");
+		await Promise.all([mkdir(repositoryPath), mkdir(otherRepositoryPath)]);
 		const repository = createGitRepositoryAdapter({
-			repositoryPath: "/repository",
+			repositoryPath,
 			repositoryIdentity: "vault-git:v1:fixture",
 			resolveRepositoryIdentity: async () => ({
 				identity: "vault-git:v1:other",
-				repositoryRoot: "/other-repository",
+				repositoryRoot: otherRepositoryPath,
 			}),
 			process: fakePort((request) =>
 				request.args[0] === "rev-parse"
@@ -206,6 +215,34 @@ describe("git adapter construction", () => {
 		await expect(repository.resolveCanonicalIdentity()).rejects.toThrow(
 			"configured repository root is not canonical",
 		);
+	});
+
+	test("canonicalizes both configured and identity-proof repository roots", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-proof-root-"));
+		fixtureRoots.push(root);
+		const canonicalRoot = join(root, "repository");
+		const configuredRoot = join(root, "repository-link");
+		await mkdir(canonicalRoot);
+		await symlink(canonicalRoot, configuredRoot);
+		const repository = createGitRepositoryAdapter({
+			repositoryPath: configuredRoot,
+			repositoryIdentity: "vault-git:v1:fixture",
+			resolveRepositoryIdentity: async () => ({
+				identity: "vault-git:v1:fixture",
+				repositoryRoot: canonicalRoot,
+			}),
+			process: fakePort((request) =>
+				request.args[0] === "rev-parse"
+					? { stdout: `${LOCAL_MAIN}\n` }
+					: {},
+			),
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+		});
+
+		expect(await repository.resolveCanonicalIdentity()).toEqual({
+			identity: "vault-git:v1:fixture",
+			localMainHead: LOCAL_MAIN,
+		});
 	});
 });
 
@@ -225,9 +262,10 @@ describe("git adapter ledger reads", () => {
 			allowedRemoteHosts: ["example.invalid"],
 		});
 
-		await expect(
-			adapter.readLedger(remote, VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("query or fragment");
+		expect(await adapter.readLedger(remote, VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 		expect(requests).toEqual([]);
 	});
 
@@ -252,9 +290,10 @@ describe("git adapter ledger reads", () => {
 			allowedRemoteHosts: ["example.invalid"],
 		});
 
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("query or fragment");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 		expect(requests.every((request) => request.args[0] === "config")).toBe(true);
 	});
 
@@ -262,9 +301,12 @@ describe("git adapter ledger reads", () => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("process must not run");
 		});
-		await expect(
-			adapter.readLedger("ext::sh -c exploit", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("remote must be one safe Git remote name or URL");
+		expect(
+			await adapter.readLedger("ext::sh -c exploit", VAULT_GIT_LEDGER_REF),
+		).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test.each([
@@ -288,22 +330,24 @@ describe("git adapter ledger reads", () => {
 		"ext::sh -c exploit",
 		"http://example.invalid/vault.git",
 		"git://example.invalid/vault.git",
-	])("rejects a named remote whose configured endpoint is unsafe: %s", async (configuredRemoteUrl) => {
+	])("returns a structured refusal for an unsafe configured endpoint: %s", async (configuredRemoteUrl) => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("transport must not run");
 		}, { configuredRemoteUrl, allowedRemoteHosts: ["example.invalid"] });
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("unsafe transport");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test("rejects a network host outside the construction allowlist", async () => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("transport must not run");
 		}, { configuredRemoteUrl: "ssh://git@example.invalid/vault.git" });
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("remote host is not admitted");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test("a timed-out ledger content read fails instead of reporting absence", async () => {
@@ -344,6 +388,17 @@ describe("git adapter ledger reads", () => {
 });
 
 describe("git adapter main inspection", () => {
+	test("returns a structured refusal for unsafe remote configuration", async () => {
+		const adapter = createFakeAdapter(() => {
+			throw new Error("transport must not run");
+		}, { configuredRemoteUrl: "git://example.invalid/vault.git" });
+
+		expect(await adapter.inspectMain("origin")).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
+	});
+
 	test.each([
 		{
 			name: "command failure",
@@ -841,9 +896,10 @@ describe("git adapter process environment", () => {
 			process: createNodeProcessPort(),
 			timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
 		});
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("executable transport helper");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test("clean real repository passes effective auth config inspection", async () => {
@@ -891,13 +947,10 @@ describe("git adapter process environment", () => {
 				timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
 			});
 
-			const remoteResult = await remoteAdapter
-				.readLedger("origin", VAULT_GIT_LEDGER_REF)
-				.then(
-					() => "accepted",
-					(error: unknown) =>
-						error instanceof Error ? error.message : String(error),
-				);
+			const remoteResult = await remoteAdapter.readLedger(
+				"origin",
+				VAULT_GIT_LEDGER_REF,
+			);
 			const remoteRequests = [...requests];
 
 			const repository = createGitRepositoryAdapter({
@@ -907,7 +960,10 @@ describe("git adapter process environment", () => {
 				timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
 			});
 
-			expect(remoteResult).toContain("executable transport helper");
+			expect(remoteResult).toEqual({
+				status: "refused",
+				reason: "unsafe_remote_configuration",
+			});
 			expect(
 				remoteRequests.some(
 					({ args }) =>

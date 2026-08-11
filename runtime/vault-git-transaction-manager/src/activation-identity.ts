@@ -8,6 +8,17 @@ import type { VaultGitProcessPort } from "./ports.ts";
 const ACTIVATION_IDENTITY_DOMAIN = "vault-git.activation-identity.v1";
 const IDENTITY_OWNER = /^[a-z][a-z0-9-]*$/;
 const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const CONTROLLED_GIT_ENVIRONMENT = {
+	GIT_CONFIG_COUNT: "2",
+	GIT_CONFIG_GLOBAL: "/dev/null",
+	GIT_CONFIG_KEY_0: "core.hooksPath",
+	GIT_CONFIG_KEY_1: "protocol.ext.allow",
+	GIT_CONFIG_NOSYSTEM: "1",
+	GIT_CONFIG_VALUE_0: "/dev/null",
+	GIT_CONFIG_VALUE_1: "never",
+	GIT_TERMINAL_PROMPT: "0",
+	LC_ALL: "C",
+} as const;
 
 /** Exact non-secret bindings for one owner-controlled activation identity. */
 export interface VaultGitActivationIdentityBindings {
@@ -126,14 +137,14 @@ export async function resolveVaultGitActivationIdentities(
 		command: options.gitBinaryPath,
 		args: ["remote", "get-url", "--all", options.remoteName],
 		cwd: options.repositoryPath,
-		env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+		env: CONTROLLED_GIT_ENVIRONMENT,
 		timeoutMs: options.timeoutMs,
 	});
 	const gitVersionProbe = options.process.run({
 		command: options.gitBinaryPath,
 		args: ["--version"],
 		cwd: options.repositoryPath,
-		env: { LC_ALL: "C" },
+		env: CONTROLLED_GIT_ENVIRONMENT,
 		timeoutMs: options.timeoutMs,
 	});
 	const [remoteResult, gitVersionResult, files, privateState] =
@@ -374,7 +385,7 @@ function exactRemote(result: {
 	].every(Boolean);
 	if (!exact) {
 		throw new Error(
-			accessible
+			accessible && remotes.length > 0
 				? "activation remote identity is ambiguous"
 				: "activation remote identity is missing",
 		);

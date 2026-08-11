@@ -412,6 +412,15 @@ export function createVaultGitTransactionEngine(
 			return refusal("unknown", receipt.phase, "receipt_corrupt", "inspect_remote_lease", "Inspect remote lease acquisition evidence.");
 		}
 		const main = await options.ledger.git.inspectMain(remote);
+		if (main.status === "refused") {
+			return refusal(
+				"human_required",
+				receipt.phase,
+				"host_contract_breach",
+				"request_operator_review",
+				"Ask an operator to remove unsafe remote configuration before continuing.",
+			);
+		}
 		if (
 			main.status !== "ok" ||
 			main.alignment !==
@@ -528,6 +537,13 @@ export function createVaultGitTransactionEngine(
 					return { status: "refused", blocker: "vault_identity_changed", doctor };
 				}
 				const main = await options.ledger.git.inspectMain(remote);
+				if (main.status === "refused") {
+					return {
+						status: "refused",
+						blocker: "host_contract_breach",
+						doctor,
+					};
+				}
 				if (main.status !== "ok") {
 					return { status: "refused", blocker: "remote_unavailable", doctor };
 				}
@@ -766,7 +782,16 @@ export function createVaultGitTransactionEngine(
 				);
 			}
 			const main = await options.ledger.git.inspectMain(input.remote);
-			if (main.status !== "ok" || main.alignment !== "aligned" || main.localHead === null || main.localHead !== identity.localMainHead) {
+			if (main.status === "refused") {
+				return refusal(
+					"absent",
+					"blocked",
+					"host_contract_breach",
+					"request_operator_review",
+					"Ask an operator to remove unsafe remote configuration before admission.",
+				);
+			}
+			if (main.status === "failed" || main.alignment !== "aligned" || main.localHead === null || main.localHead !== identity.localMainHead) {
 				return refusal("absent", "blocked", main.status === "failed" ? "remote_unavailable" : alignmentBlocker(main.alignment), "inspect_status", "Inspect main alignment before admission.");
 			}
 			const admission = await options.repository.inspectOwnedPaths(input.requestedPaths);
@@ -851,7 +876,46 @@ export function createVaultGitTransactionEngine(
 				input.remote,
 				"remote",
 			);
-			if (finalAuthority) return finalAuthority;
+			if (finalAuthority) {
+				const released = await releaseRemoteLease(options.ledger, {
+					remote: input.remote,
+					expectedGeneration: acquired.generation,
+					transactionId: acquired.transactionId,
+				});
+				if (released.status === "refused") {
+					const stranded = nextVaultGitReceipt(leased, {
+						phase: "human_required",
+						transition: "human_intervention_required",
+						nextSafeAction: "request_operator_review",
+						recordedAt: options.runtime.now().toISOString(),
+					});
+					await options.store.append(stranded);
+					return withReceiptContext(
+						refusal(
+							"human_required",
+							"human_required",
+							released.blocker,
+							"request_operator_review",
+							"Ask an operator to release the exact acquired lease before any fresh activation attempt.",
+							released.changedState === "partial" ? "partial" : "remote",
+							"operator_required",
+						),
+						stranded,
+					);
+				}
+				const closed = nextVaultGitReceipt(leased, {
+					phase: "closed",
+					transition: "closed",
+					nextSafeAction: "none",
+					recordedAt: options.runtime.now().toISOString(),
+				});
+				await options.store.append(closed);
+				return {
+					...withReceiptContext(finalAuthority, closed, "remote"),
+					state: "closed",
+					phase: "closed",
+				};
+			}
 			await options.store.append(writing);
 			return result("admitted", "active", writing, "owner", "remote", "complete_transaction", "Complete the meaningful event explicitly.");
 		},

@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
+	chmod,
 	mkdir,
 	readFile,
 	readdir,
 	readlink,
 	rm,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -49,7 +51,11 @@ describe("isolated activation preparation", () => {
 		async () => {
 			const fixture = await preparationFixture({ seedLedger: false });
 			const env: NodeJS.ProcessEnv = {
-				...process.env,
+				...Object.fromEntries(
+					Object.entries(process.env).filter(
+						([name]) => !name.startsWith("VAULT_GIT_"),
+					),
+				),
 				VAULT_GIT_REPOSITORY_PATH: fixture.repositoryPath,
 				VAULT_GIT_CHECK_REPOSITORY_PATH: fixture.repositoryPath,
 				VAULT_GIT_STATE_ROOT: fixture.stateRoot,
@@ -231,6 +237,23 @@ describe("isolated activation preparation", () => {
 		await expect(fixture.preparer.revalidate()).rejects.toThrow(
 			"activation preparation cleanup failed",
 		);
+	});
+
+	test("refuses a symlinked private root without changing its target mode", async () => {
+		const fixture = await preparationFixture();
+		const target = join(await tempDirectories.create("vault-git-state-target-"), "state");
+		await mkdir(target, { mode: 0o755 });
+		await chmod(target, 0o755);
+		await rm(fixture.stateRoot, { recursive: true, force: true });
+		await symlink(target, fixture.stateRoot);
+		const modeBefore = (await stat(target)).mode & 0o7777;
+
+		expect(await fixture.preparer.prepare()).toEqual({
+			status: "unknown",
+			reason: "preparation_interrupted",
+			changedState: "none",
+		});
+		expect((await stat(target)).mode & 0o7777).toBe(modeBefore);
 	});
 
 	test("checker refusal leaves worktree, index, every ref, and object database byte-identical", async () => {

@@ -359,9 +359,28 @@ function assertNotCancelled(options: VaultGitActivationPreparerOptions): void {
 }
 
 async function preparePrivateRoot(root: string): Promise<void> {
-	await mkdir(root, { recursive: true, mode: 0o700 });
+	let metadata = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	});
+	if (metadata === null) {
+		await mkdir(root, { recursive: true, mode: 0o700 });
+		metadata = await lstat(root);
+	}
+	assertPrivateRootMetadata(metadata);
 	await chmod(root, 0o700);
-	const metadata = await lstat(root);
+	const secured = await lstat(root);
+	if (
+		secured.dev !== metadata.dev ||
+		secured.ino !== metadata.ino ||
+		(secured.mode & 0o7777) !== 0o700
+	) {
+		throw new Error("private activation state unavailable");
+	}
+	assertPrivateRootMetadata(secured);
+}
+
+function assertPrivateRootMetadata(metadata: Awaited<ReturnType<typeof lstat>>): void {
 	if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
 		throw new Error("private activation state unavailable");
 	}

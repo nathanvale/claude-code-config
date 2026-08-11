@@ -25,6 +25,7 @@ import {
 import {
 	assertVaultGitSafeRemoteTarget,
 	normalizeVaultGitAllowedRemoteHosts,
+	VaultGitRemoteSafetyError,
 } from "./remote-safety.ts";
 
 /** Options for the injected real-process vault-owned check. */
@@ -199,18 +200,29 @@ export function createGitAdapter(
 		}
 		return { status: "ok", commit: resolved.stdout.trim() };
 	};
+	const inspectRemoteSafety = async (remote: string) => {
+		try {
+			await assertVaultGitSafeRemoteTarget({
+				runGit,
+				remote,
+				timeoutMs: options.timeouts.localMs,
+				allowedRemoteHosts,
+			});
+			return null;
+		} catch (error) {
+			const classified = classifyRemoteSafetyError(error);
+			if (classified) return classified;
+			throw error;
+		}
+	};
 
 	const readLedger = async (
 		remote: string,
 		ledgerRef: string,
 	): Promise<VaultGitLedgerReadResult> => {
 		assertLedgerRef(ledgerRef);
-		await assertVaultGitSafeRemoteTarget({
-			runGit,
-			remote,
-			timeoutMs: options.timeouts.localMs,
-			allowedRemoteHosts,
-		});
+		const safety = await inspectRemoteSafety(remote);
+		if (safety) return safety;
 		const advertised = await runGit(
 			["ls-remote", "--refs", "--exit-code", remote, ledgerRef],
 			options.timeouts.fetchMs,
@@ -323,12 +335,8 @@ export function createGitAdapter(
 		},
 
 		async inspectMain(remote): Promise<VaultGitMainInspection> {
-			await assertVaultGitSafeRemoteTarget({
-				runGit,
-				remote,
-				timeoutMs: options.timeouts.localMs,
-				allowedRemoteHosts,
-			});
+			const safety = await inspectRemoteSafety(remote);
+			if (safety) return safety;
 			const advertised = await runGit(
 				["ls-remote", "--refs", "--exit-code", remote, "refs/heads/main"],
 				options.timeouts.fetchMs,
@@ -937,17 +945,15 @@ export function createGitRepositoryAdapter(
 
 		async resolveCanonicalIdentity() {
 			if (options.resolveRepositoryIdentity) {
-				const [identityProof, main] = await Promise.all([
+				const [identityProof, configuredRoot, main] = await Promise.all([
 					options.resolveRepositoryIdentity(),
+					realpath(options.repositoryPath),
 					runGit(["rev-parse", "--verify", "refs/heads/main^{commit}"]),
 				]);
 				if (main.timedOut || main.exitCode === null) {
 					throw new VaultRepositoryIdentityUnavailableError();
 				}
-				if (
-					identityProof.repositoryRoot !== options.repositoryPath ||
-					main.exitCode !== 0
-				) {
+				if ((await realpath(identityProof.repositoryRoot)) !== configuredRoot || main.exitCode !== 0) {
 					throw new Error("configured repository root is not canonical");
 				}
 				return {
@@ -1578,6 +1584,16 @@ const CONTROLLED_GIT_ENVIRONMENT = {
 	GIT_TERMINAL_PROMPT: "0",
 	LC_ALL: "C",
 } as const;
+
+function classifyRemoteSafetyError(error: unknown):
+	| { readonly status: "refused"; readonly reason: "unsafe_remote_configuration" }
+	| { readonly status: "failed"; readonly reason: "remote_unavailable" }
+	| null {
+	if (!(error instanceof VaultGitRemoteSafetyError)) return null;
+	return error.kind === "unsafe"
+		? { status: "refused", reason: "unsafe_remote_configuration" }
+		: { status: "failed", reason: "remote_unavailable" };
+}
 
 /**
  * Ambient Git redirection variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*,

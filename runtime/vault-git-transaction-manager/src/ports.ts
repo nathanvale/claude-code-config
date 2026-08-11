@@ -168,7 +168,11 @@ export interface VaultGitMainInspectionFailure {
 /** Complete exact-main inspection result. */
 export type VaultGitMainInspection =
 	| VaultGitMainInspectionSuccess
-	| VaultGitMainInspectionFailure;
+	| VaultGitMainInspectionFailure
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
+	  };
 
 /** Read-only atomic-push admission result before transaction state exists. */
 export type VaultGitAtomicPushCapability =
@@ -198,6 +202,10 @@ export type VaultGitLedgerReadResult =
 	| {
 			readonly status: "failed";
 			readonly reason: "remote_unavailable" | "timed_out";
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
 	  };
 
 /** Input for one compare-and-swap ledger append. */
