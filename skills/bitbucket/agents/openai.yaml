@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bitbucket"
+  short_description: "Use the Bitbucket Cloud REST API"
+  default_prompt: "Use $bitbucket to inspect this Bitbucket Cloud resource and report the next safe action."
