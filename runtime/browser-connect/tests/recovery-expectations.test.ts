@@ -46,6 +46,7 @@ import type {
 import { agentBrowserDefinition } from "../src/adapters/agent-browser.ts";
 import { chromeDevtoolsMcpDefinition } from "../src/adapters/chrome-devtools-mcp.ts";
 import type { RunSpawner } from "../src/run-exec.ts";
+import { agentBrowserReleaseResult } from "./agent-browser-release-fixture.ts";
 
 // ===========================================================================
 // U4 recovery-expectation proof (R1/R13/AE1). The package map declares each
@@ -185,20 +186,11 @@ function fakeAdapterRuntime(script: {
 				}
 				return { exitCode: 0, stdout: `${executable} ${version}\n`, stderr: "" };
 			}
-			if (input.args.includes("close")) {
-				return {
-					exitCode: 0,
-					stdout: JSON.stringify({ success: true }),
-					stderr: "",
-				};
-			}
-			if (input.args.includes("list")) {
-				return {
-					exitCode: 0,
-					stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
-					stderr: "",
-				};
-			}
+			const releaseResult = agentBrowserReleaseResult(
+				"/fake/bin/agent-browser",
+				input,
+			);
+			if (releaseResult) return releaseResult;
 			const exit = script.probeExit?.[executable] ?? 0;
 			return { exitCode: exit, stdout: exit === 0 ? "attached\n" : "", stderr: "" };
 		},

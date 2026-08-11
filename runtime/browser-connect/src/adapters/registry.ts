@@ -67,7 +67,9 @@ export type AdapterRuntime = {
 		command: string,
 	) => Promise<AdapterExecutableResolution> | AdapterExecutableResolution;
 	runCommand: (input: AdapterCommandInput) => Promise<AdapterCommandResult>;
-	/** Optional test clock for bounded settle loops; production uses real timers. */
+	/** Optional test clock for aggregate deadlines; production uses `Date.now`. */
+	now?: () => number;
+	/** Optional test wait for bounded settle loops; production uses real timers. */
 	wait?: (delayMs: number) => Promise<void>;
 };
 
@@ -375,7 +377,7 @@ export const VERSION_READ_TIMEOUT_MS = 8000;
 /** Bounded read for an adapter's read-only attachment probe. Shared by both adapters. */
 export const PROBE_TIMEOUT_MS = 8000;
 
-/** Bounded outer timeout for one adapter-native release command. */
+/** Aggregate deadline for one adapter-native release operation. */
 export const RELEASE_TIMEOUT_MS = 30_000;
 
 /**

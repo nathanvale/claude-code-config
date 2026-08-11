@@ -451,7 +451,7 @@ async function releaseAgentBrowserTaskSession(
 				resolved: true,
 				path: task.handoff.attachment.probe_executable,
 			}),
-			runCommand: runtime.runCommand,
+			runCommand: (input) => runtime.runCommand(input),
 		},
 		{ sessionName: deriveSessionName(task.run_id) },
 	);

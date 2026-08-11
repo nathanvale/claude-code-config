@@ -413,13 +413,24 @@ try {
 	);
 	console.log(PLANTED ? "\nPlanted acceptance receipt PASS." : "\nPost-build acceptance receipt PASS.");
 } finally {
-	server.stop();
+	try {
+		server.stop();
+	} catch (error) {
+		console.error("Cleanup could not stop the fixture server.", error);
+	}
 	if (sessionMayExist) {
-		const cleanup = await builtRelease();
-		console.error(
-			cleanup.released
-				? `Cleanup released ${sessionName} through built releaseSession.`
-				: `Cleanup could not release ${sessionName}; inspect Agent Browser inventory.`,
-		);
+		try {
+			const cleanup = await builtRelease();
+			console.error(
+				cleanup.released
+					? `Cleanup released ${sessionName} through built releaseSession.`
+					: `Cleanup could not release ${sessionName}; inspect Agent Browser inventory.`,
+			);
+		} catch (error) {
+			console.error(
+				`Cleanup failed while releasing ${sessionName}; inspect Agent Browser inventory.`,
+				error,
+			);
+		}
 	}
 }

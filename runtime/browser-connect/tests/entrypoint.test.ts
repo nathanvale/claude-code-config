@@ -42,6 +42,7 @@ import {
 } from "../src/adapters/agent-browser.ts";
 import { chromeDevtoolsMcpDefinition } from "../src/adapters/chrome-devtools-mcp.ts";
 import { playwrightCdpDefinition } from "../src/adapters/playwright-cdp.ts";
+import { agentBrowserReleaseResult } from "./agent-browser-release-fixture.ts";
 
 // ---------------------------------------------------------------------------
 // Characterization scaffolding — a fake warm-chrome `main` that emits the exact
@@ -755,26 +756,6 @@ function memoryWriter(): MemoryWriter {
 
 type DispatcherRun = { exitCode: number; stdout: string; stderr: string };
 
-function fakeAgentBrowserReleaseResult(
-	input: AdapterCommandInput,
-): AdapterCommandResult | undefined {
-	if (input.args.includes("close")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true }),
-			stderr: "",
-		};
-	}
-	if (input.args.includes("list")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
-			stderr: "",
-		};
-	}
-	return undefined;
-}
-
 /**
  * A scriptable fake adapter runtime. `provenance` and `probe` are keyed by the
  * executable command and drive checkProvenance / probeAttachment WITHOUT any
@@ -812,7 +793,10 @@ function fakeAdapterRuntime(script: {
 				}
 				return { exitCode: 0, stdout: `${executable} ${version}\n`, stderr: "" };
 			}
-			const releaseResult = fakeAgentBrowserReleaseResult(input);
+			const releaseResult = agentBrowserReleaseResult(
+				"/fake/bin/agent-browser",
+				input,
+			);
 			if (releaseResult) return releaseResult;
 			// The remaining adapter invocation is the attachment probe.
 			script.calls?.probe.push(executable);
@@ -3654,7 +3638,10 @@ describe("browser-connect connect gate: typed adapter evidence (U5 R11/R23)", ()
 						stderr: "",
 					};
 				}
-				const releaseResult = fakeAgentBrowserReleaseResult(input);
+				const releaseResult = agentBrowserReleaseResult(
+					"/fake/bin/agent-browser",
+					input,
+				);
 				if (releaseResult) return releaseResult;
 				const result = sequence[Math.min(probes, sequence.length - 1)];
 				probes += 1;

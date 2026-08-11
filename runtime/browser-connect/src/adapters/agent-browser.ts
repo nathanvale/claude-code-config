@@ -108,6 +108,24 @@ function waitForReleaseRetry(
 	return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+function releaseDeadlineExceeded(
+	inventoryReads: number,
+	sessionName: string,
+): AdapterReleaseResult {
+	if (inventoryReads === 0) {
+		return {
+			released: false,
+			cause: "command-failed",
+			detail: `${AGENT_BROWSER_EXECUTABLE} release deadline expired before session inventory verification.`,
+		};
+	}
+	return {
+		released: false,
+		cause: "still-present",
+		detail: `${AGENT_BROWSER_EXECUTABLE} session ${sessionName} remains present after ${inventoryReads} inventory reads; the ${RELEASE_TIMEOUT_MS}ms release deadline is exhausted.`,
+	};
+}
+
 /**
  * Adapter Definition for agent-browser (KTD9 — a plain binary invocation, a
  * non-MCP shape that forces the Adapter Definition interface to be honest
@@ -276,6 +294,13 @@ export const agentBrowserDefinition = {
 				detail: `${AGENT_BROWSER_EXECUTABLE} could not be resolved for session release.`,
 			};
 		}
+		const now = runtime.now ?? Date.now;
+		const releaseDeadlineMs = now() + RELEASE_TIMEOUT_MS;
+		const remainingReleaseTimeMs = (): number =>
+			Math.max(
+				0,
+				Math.min(RELEASE_TIMEOUT_MS, releaseDeadlineMs - now()),
+			);
 
 		let close: AdapterCommandResult;
 		try {
@@ -323,14 +348,19 @@ export const agentBrowserDefinition = {
 			};
 		}
 
+		let inventoryReads = 0;
 		for (let attempt = 0; attempt < RELEASE_VERIFY_ATTEMPTS; attempt += 1) {
+			const inventoryTimeoutMs = remainingReleaseTimeMs();
+			if (inventoryTimeoutMs <= 0) {
+				return releaseDeadlineExceeded(inventoryReads, input.sessionName);
+			}
 			let inventory: AdapterCommandResult;
 			try {
 				inventory = await runtime.runCommand({
 					command: resolution.path,
 					args: ["session", "list", "--json"],
 					env: { MCPORTER_NO_KEEPALIVE: "*" },
-					timeoutMs: RELEASE_TIMEOUT_MS,
+					timeoutMs: inventoryTimeoutMs,
 				});
 			} catch (error) {
 				return {
@@ -348,6 +378,7 @@ export const agentBrowserDefinition = {
 						: `${AGENT_BROWSER_EXECUTABLE} session inventory exited ${inventory.exitCode}.`,
 				};
 			}
+			inventoryReads += 1;
 			try {
 				const envelope = JSON.parse(inventory.stdout) as {
 					success?: unknown;
@@ -375,7 +406,14 @@ export const agentBrowserDefinition = {
 				};
 			}
 			if (attempt + 1 < RELEASE_VERIFY_ATTEMPTS) {
-				await waitForReleaseRetry(runtime, RELEASE_VERIFY_DELAY_MS);
+				const remainingTimeMs = remainingReleaseTimeMs();
+				if (remainingTimeMs <= 0) {
+					return releaseDeadlineExceeded(inventoryReads, input.sessionName);
+				}
+				await waitForReleaseRetry(
+					runtime,
+					Math.min(RELEASE_VERIFY_DELAY_MS, remainingTimeMs),
+				);
 			}
 		}
 		return {

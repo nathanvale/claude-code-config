@@ -925,7 +925,7 @@ async function releaseAgentBrowserOperationSession(
 		{
 			env: runtime.env,
 			resolveExecutable: () => ({ resolved: true, path: handoff.probeExecutable }),
-			runCommand: runtime.runCommand,
+			runCommand: (input) => runtime.runCommand(input),
 		},
 		{ sessionName: deriveSessionName(handoff.runId) },
 	);

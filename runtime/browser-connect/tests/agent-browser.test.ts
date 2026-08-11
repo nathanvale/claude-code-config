@@ -8,6 +8,7 @@ import {
 	findAdapterDefinition,
 	RELEASE_TIMEOUT_MS,
 } from "../src/adapters/registry.ts";
+import { agentBrowserReleaseResult } from "./agent-browser-release-fixture.ts";
 
 const EXECUTABLE_PATH = "/opt/adapters/bin/agent-browser";
 const SESSION_NAME = "browser-use-owned-session";
@@ -47,21 +48,10 @@ function runtimeWith(
 function successfulProbeResponse(
 	input: AdapterCommandInput,
 ): AdapterCommandResult {
-	if (input.args.includes("close")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true }),
-			stderr: "",
-		};
-	}
-	if (input.args.includes("list")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
-			stderr: "",
-		};
-	}
-	return { exitCode: 0, stdout: "snapshot", stderr: "" };
+	return (
+		agentBrowserReleaseResult(EXECUTABLE_PATH, input) ??
+		{ exitCode: 0, stdout: "snapshot", stderr: "" }
+	);
 }
 
 describe("agent-browser probeAttachment", () => {
@@ -197,6 +187,87 @@ describe("agent-browser releaseSession", () => {
 		});
 		expect(commands.filter((call) => call.args.includes("list"))).toHaveLength(2);
 		expect(delays).toEqual([1000]);
+	});
+
+	test("gives later release commands only the aggregate deadline remaining", async () => {
+		const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
+		if (!releaseSession) throw new Error("releaseSession missing");
+		let nowMs = 0;
+		let inventoryReads = 0;
+		const { runtime, commands, delays } = runtimeWith((input) => {
+			if (input.args.includes("close")) {
+				nowMs += 5000;
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ success: true }),
+					stderr: "",
+				};
+			}
+			inventoryReads += 1;
+			nowMs += 2000;
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify({
+					success: true,
+					data: {
+						sessions:
+							inventoryReads === 1 ? [SESSION_NAME] : ["foreign-session"],
+					},
+				}),
+				stderr: "",
+			};
+		});
+		runtime.now = () => nowMs;
+		runtime.wait = async (delayMs) => {
+			delays.push(delayMs);
+			nowMs += delayMs;
+		};
+
+		expect(await releaseSession(runtime, { sessionName: SESSION_NAME })).toEqual({
+			released: true,
+		});
+		expect(commands.map((command) => command.timeoutMs)).toEqual([
+			RELEASE_TIMEOUT_MS,
+			25_000,
+			22_000,
+		]);
+		expect(delays).toEqual([1000]);
+	});
+
+	test("stops the settle loop when the aggregate release deadline is exhausted", async () => {
+		const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
+		if (!releaseSession) throw new Error("releaseSession missing");
+		let nowMs = 0;
+		const { runtime, commands, delays } = runtimeWith((input) => {
+			if (input.args.includes("close")) {
+				nowMs += 29_500;
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ success: true }),
+					stderr: "",
+				};
+			}
+			nowMs += 500;
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify({
+					success: true,
+					data: { sessions: [SESSION_NAME] },
+				}),
+				stderr: "",
+			};
+		});
+		runtime.now = () => nowMs;
+
+		expect(await releaseSession(runtime, { sessionName: SESSION_NAME })).toMatchObject({
+			released: false,
+			cause: "still-present",
+		});
+		expect(commands.map((command) => command.timeoutMs)).toEqual([
+			RELEASE_TIMEOUT_MS,
+			500,
+		]);
+		expect(delays).toEqual([]);
 	});
 
 	test("returns still-present after the six-read settle budget is exhausted", async () => {

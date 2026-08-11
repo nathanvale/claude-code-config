@@ -39,6 +39,7 @@ import {
 	spawnAdapterCommand,
 	validateAdapterLockPackages,
 } from "../src/adapters/registry.ts";
+import { agentBrowserReleaseResult } from "./agent-browser-release-fixture.ts";
 
 const ENDPOINT: BrowserConnectVerifiedEndpoint = {
 	http: "http://127.0.0.1:41337",
@@ -88,26 +89,6 @@ const versionResponder =
 		}
 		return { exitCode: 0, stdout: "ok", stderr: "" };
 	};
-
-function agentBrowserReleaseResult(
-	input: AdapterCommandInput,
-): AdapterCommandResult | undefined {
-	if (input.args.includes("close")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true }),
-			stderr: "",
-		};
-	}
-	if (input.args.includes("list")) {
-		return {
-			exitCode: 0,
-			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
-			stderr: "",
-		};
-	}
-	return undefined;
-}
 
 describe("registry", () => {
 	test("ships the three adapters, chrome-devtools-mcp first, Playwright CLI lane last", () => {
@@ -352,7 +333,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 	test("probe success → attached naming the probe executable", async () => {
 		const { runtime, log } = fakeRuntime({
 			respond: (input) =>
-				agentBrowserReleaseResult(input) ?? {
+				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
 					exitCode: 0,
 					stdout: "snapshot",
 					stderr: "",
@@ -400,7 +381,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 	test("probe non-zero exit → attachment-failed", async () => {
 		const { runtime, log } = fakeRuntime({
 			respond: (input) =>
-				agentBrowserReleaseResult(input) ?? {
+				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
 					exitCode: 2,
 					stdout: "",
 					stderr: "no cdp",

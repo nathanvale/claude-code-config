@@ -385,6 +385,10 @@ describe("Agent Browser native task lane", () => {
 			runtime: ReturnType<typeof runtimeFor>;
 			steps: readonly AgentBrowserTaskStep[];
 			code: AgentBrowserExecutionFailureCode;
+			expectedFinalization?: {
+				mutation_dispatched: true;
+				executed_steps: 1;
+			};
 		}> = [
 			{
 				name: "target selection",
@@ -498,21 +502,79 @@ describe("Agent Browser native task lane", () => {
 				],
 				code: "agent_browser_confidential_input_requires_auth_transaction",
 			},
+			{
+				name: "mutation effect unknown",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ opened: true }) },
+					{ exitCode: 1, stdout: semanticFailure() },
+				]),
+				steps: [
+					{
+						kind: "open",
+						url: "https://example.test/next",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://example.test/next",
+						},
+					},
+				],
+				code: "agent_browser_mutation_effect_unknown",
+				expectedFinalization: {
+					mutation_dispatched: true,
+					executed_steps: 1,
+				},
+			},
+			{
+				name: "postcondition not achieved",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ opened: true }) },
+					{ stdout: json({ url: "https://example.test/unexpected" }) },
+				]),
+				steps: [
+					{
+						kind: "open",
+						url: "https://example.test/next",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://example.test/next",
+						},
+					},
+				],
+				code: "agent_browser_postcondition_not_achieved",
+				expectedFinalization: {
+					mutation_dispatched: true,
+					executed_steps: 1,
+				},
+			},
 		];
 
 		for (const scenario of cases) {
+			const runId = `run-release-${scenario.name.replaceAll(" ", "-")}`;
 			const result = await executeAgentBrowserTask(scenario.runtime, {
 				handoff: HANDOFF,
-				run_id: `run-release-${scenario.name.replaceAll(" ", "-")}`,
+				run_id: runId,
 				target_tab_id: "t1",
 				allowed_origins: ["https://example.test"],
 				steps: scenario.steps,
 			});
 
-			expect(result).toMatchObject({ ok: false, code: scenario.code });
-			expect(
-				scenario.runtime.releaseCalls.filter((input) => input.args.includes("close")),
-			).toHaveLength(1);
+			expect(result).toMatchObject({
+				ok: false,
+				code: scenario.code,
+				...scenario.expectedFinalization,
+			});
+			const closeCalls = scenario.runtime.releaseCalls.filter((input) =>
+				input.args.includes("close"),
+			);
+			expect(closeCalls).toHaveLength(1);
+			expect(closeCalls[0]?.args).toEqual([
+				"--session",
+				`browser-use-${runId}`,
+				"close",
+				"--json",
+			]);
 			expect(
 				scenario.runtime.releaseCalls.every((input) => !input.args.includes("--cdp")),
 			).toBe(true);

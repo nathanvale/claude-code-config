@@ -352,9 +352,7 @@ export async function runTargetsList(input: {
 			: {}),
 	};
 
-	const envelope: TargetDiscoveryEnvelope & {
-		release?: AdapterSessionReleaseDebt;
-	} = {
+	const envelope: TargetDiscoveryEnvelope = {
 		contract: BROWSER_USE_TARGETS_CONTRACT_ID,
 		schema_version: BROWSER_USE_TARGETS_SCHEMA_VERSION,
 		mode,
@@ -679,7 +677,7 @@ async function releaseAgentBrowserLease(
 		{
 			env: runtime.env,
 			resolveExecutable: () => ({ resolved: true, path: facts.probeExecutable }),
-			runCommand: runtime.runCommand,
+			runCommand: (input) => runtime.runCommand(input),
 		},
 		{ sessionName: deriveSessionName(facts.runId) },
 	);
