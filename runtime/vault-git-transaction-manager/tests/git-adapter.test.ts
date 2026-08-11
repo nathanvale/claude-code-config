@@ -6,7 +6,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { createGitAdapter, createNodeProcessPort } from "../src/git-adapter.ts";
+import {
+	createGitAdapter,
+	createGitRepositoryAdapter,
+	createNodeProcessPort,
+} from "../src/git-adapter.ts";
 import type {
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
@@ -122,6 +126,63 @@ describe("git adapter construction", () => {
 		).toThrow("unsafe entry");
 		},
 	);
+
+	test("injects the exact admitted SSH closure into remote and repository Git", async () => {
+		const admittedGitEnvironment = {
+			GIT_SSH_COMMAND:
+				"'/usr/bin/ssh' -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes",
+			GIT_SSH_VARIANT: "ssh",
+		} as const;
+		const requests: VaultGitProcessRequest[] = [];
+		const process = fakePort((request) => {
+			requests.push(request);
+			if (request.args[0] === "config") {
+				return request.args.includes("remote.origin.url")
+					? { stdout: "/tmp/remote.git\n" }
+					: { exitCode: 1 };
+			}
+			if (
+				request.args[0] === "ls-remote" &&
+				request.args[1] === "--get-url"
+			) {
+				return { stdout: "/tmp/remote.git\n" };
+			}
+			if (request.args[0] === "ls-remote") {
+				return { exitCode: 2, stdout: "" };
+			}
+			if (request.args[0] === "rev-parse") {
+				return { stdout: `${LOCAL_MAIN}\n` };
+			}
+			return {};
+		});
+		const remote = createGitAdapter({
+			repositoryPath: "/repository",
+			process,
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			admittedGitEnvironment,
+		});
+		const repository = createGitRepositoryAdapter({
+			repositoryPath: "/repository",
+			repositoryIdentity: "vault-git:v1:fixture",
+			resolveRepositoryIdentity: async () => "vault-git:v1:fixture",
+			process,
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			admittedGitEnvironment,
+		});
+
+		expect(await remote.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "ok",
+			head: null,
+		});
+		expect(await repository.resolveCanonicalIdentity()).toEqual({
+			identity: "vault-git:v1:fixture",
+			localMainHead: LOCAL_MAIN,
+		});
+		expect(requests.length).toBeGreaterThan(1);
+		for (const request of requests) {
+			expect(request.env).toMatchObject(admittedGitEnvironment);
+		}
+	});
 });
 
 describe("git adapter ledger reads", () => {

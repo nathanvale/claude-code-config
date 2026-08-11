@@ -34,7 +34,6 @@ import { admitActivationForTest } from "../activation-fixture.ts";
  */
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const cliPath = join(packageRoot, "src", "cli.ts");
 const processCliPath = join(packageRoot, "tests", "smoke", "process-cli.ts");
 
 /** Shim behaviours the recorded `git` wrapper can impose on a row. */
@@ -224,7 +223,7 @@ async function mkSmokeClone(
 	});
 	if (options.activate !== false) await admitActivationForTest(store);
 
-	const executableCliPath = options.leaseDurationMs ? processCliPath : cliPath;
+	const executableCliPath = processCliPath;
 	const run = (args: readonly string[]) =>
 		runCliProcess({
 			label: `vault-git ${args.join(" ")}`,

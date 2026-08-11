@@ -537,6 +537,7 @@ function cliComposition(janitor: VaultGitJanitor): VaultGitCliComposition {
 		repositoryPath: "/fixture-vault",
 		remote: "origin",
 		leaseDurationMs: 60_000,
+		privateEntrypointPath: import.meta.path,
 	};
 }
 

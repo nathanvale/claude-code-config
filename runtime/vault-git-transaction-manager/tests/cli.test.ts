@@ -1,5 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -9,21 +9,115 @@ import {
 	runVaultGitForTest,
 	type VaultGitCliComposition,
 } from "../src/cli.ts";
+import { createNodeProcessPort } from "../src/git-adapter.ts";
+import { createVaultGitActivationRestriction } from "../src/activation-restriction.ts";
+import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
 import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
 import type { VaultGitRuntimePort } from "../src/ports.ts";
 import type { VaultGitRepairInput } from "../src/repair.ts";
-import type { VaultGitReceiptStore } from "../src/store.ts";
+import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
+import {
+	admitActivationForTest,
+	admittedActivationAuthorityForTest,
+} from "./activation-fixture.ts";
+import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
 
-const roots: string[] = [];
+const tempDirectories = createTempDirectoryFixture();
 
-afterEach(async () => {
-	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
-});
+afterEach(tempDirectories.cleanup);
 
 describe("vault-git CLI composition", () => {
+	test("derives the private-store identity from the configured checkout", async () => {
+		const repositoryPath = await temp("vault-git-composition-identity-");
+		const initialized = spawnSync(
+			"git",
+			["init", "--initial-branch=main", repositoryPath],
+			{ encoding: "utf8" },
+		);
+		expect(initialized.status).toBe(0);
+		const stateRoot = await temp("vault-git-composition-state-");
+		const process = createNodeProcessPort();
+		const resolved = await resolveVaultRepositoryIdentity({
+			repositoryPath,
+			process,
+			timeoutMs: 5_000,
+		});
+
+		const composition = await createVaultGitCliComposition({
+			repositoryPath,
+			checkRepositoryPath: repositoryPath,
+			stateRoot,
+			actor: "agent-a",
+			host: "host-a",
+			process,
+		});
+
+		expect(composition.store.repositoryId).toBe(
+			createReceiptStore({
+				stateRoot,
+				repositoryIdentity: resolved.identity,
+			}).repositoryId,
+		);
+	});
+
+	test("refuses admission when the configured Git repository is replaced after composition", async () => {
+		const repositoryPath = await temp("vault-git-composition-replaced-");
+		const git = (...args: readonly string[]) =>
+			spawnSync("git", args, { cwd: repositoryPath, encoding: "utf8" });
+		expect(git("init", "--initial-branch=main").status).toBe(0);
+		expect(
+			git(
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"commit",
+				"--allow-empty",
+				"-m",
+				"initial",
+			).status,
+		).toBe(0);
+		const composition = await createVaultGitCliComposition({
+			repositoryPath,
+			checkRepositoryPath: repositoryPath,
+			stateRoot: await temp("vault-git-composition-replaced-state-"),
+			actor: "agent-a",
+			host: "host-a",
+			activationAuthority: admittedActivationAuthorityForTest,
+		});
+		await admitActivationForTest(composition.store);
+
+		await rm(join(repositoryPath, ".git"), { recursive: true });
+		expect(git("init", "--initial-branch=main").status).toBe(0);
+		expect(
+			git(
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"commit",
+				"--allow-empty",
+				"-m",
+				"replacement",
+			).status,
+		).toBe(0);
+
+		const result = await composition.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 15 * 60_000,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "vault_identity_changed",
+			changedState: "none",
+		});
+	});
+
 	test("refuses check and repository ports rooted at different vaults", async () => {
 		const repositoryPath = await temp("vault-git-composition-repository-");
 		const checkRepositoryPath = await temp("vault-git-composition-check-");
@@ -84,6 +178,59 @@ describe("vault-git CLI composition", () => {
 			continuation: { next_action_id: "complete_transaction" },
 		});
 		expect(run.stdout).not.toMatch(/capability|\/private\/|\/Users\//);
+	});
+
+	test("renders the same cause-specific activation restriction in JSON and text", async () => {
+		const activationRestriction = createVaultGitActivationRestriction({
+			stoppedAction: "vault_write",
+			cause: "revoked",
+		});
+		const engine = fakeEngine({
+			async begin() {
+				return engineResult({
+					status: "refused",
+					blocker: "activation_blocked",
+					retrySafety: "same_input_unsafe",
+					nextAction: {
+						id: "request_operator_admission",
+						summary: "Ask an operator to admit runtime activation before canonical vault writes.",
+					},
+					activationRestriction,
+				});
+			},
+		});
+		const argv = [
+			"begin",
+			"--event",
+			"note_created",
+			"--path",
+			"notes/new.md",
+		] as const;
+
+		const json = await runVaultGitForTest([...argv, "--json"], {
+			composition: fakeComposition(engine),
+			launchPrivate: false,
+		});
+		expect(json.exitCode).toBe(1);
+		expect(JSON.parse(json.stdout).data).toMatchObject({
+			blockers: ["activation_blocked"],
+			next_action: { id: "request_operator_admission" },
+			activation_restriction: {
+				status: "restricted",
+				stopped_action: "vault_write",
+				cause: { id: "revoked" },
+				next_action: { id: "prepare_fresh" },
+			},
+		});
+
+		const text = await runVaultGitForTest(argv, {
+			composition: fakeComposition(engine),
+			launchPrivate: false,
+		});
+		expect(text.exitCode).toBe(1);
+		expect(text.stderr).toContain("cause: revoked | A human revoked this activation evidence.");
+		expect(text.stderr).toContain("next: prepare_fresh | Prepare fresh V2 evidence");
+		expect(text.stderr).toContain("next: request_operator_admission");
 	});
 
 	test("keeps the configured dashboard read-only with one continuation", async () => {
@@ -273,9 +420,7 @@ describe("vault-git CLI composition", () => {
 });
 
 async function temp(prefix: string): Promise<string> {
-	const root = await mkdtemp(join(tmpdir(), prefix));
-	roots.push(root);
-	return root;
+	return tempDirectories.create(prefix);
 }
 
 function fakeComposition(
@@ -322,6 +467,7 @@ function fakeComposition(
 		repositoryPath: "/fixture-vault",
 		remote: "origin",
 		leaseDurationMs: 60_000,
+		privateEntrypointPath: import.meta.path,
 	};
 }
 

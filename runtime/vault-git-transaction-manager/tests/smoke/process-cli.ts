@@ -5,6 +5,7 @@ import { writeFile } from "node:fs/promises";
 
 import { createVaultGitCliComposition, main } from "../../src/cli.ts";
 import { createNodeVaultGitRuntime } from "../../src/clock.ts";
+import { persistedActivationAuthorityForTest } from "../activation-fixture.ts";
 
 const required = (name: string): string => {
 	const value = process.env[name];
@@ -40,7 +41,7 @@ const runtime =
 				},
 			}
 		: baseRuntime;
-const composition = await createVaultGitCliComposition({
+const baseInput = {
 	repositoryPath: required("VAULT_GIT_REPOSITORY_PATH"),
 	checkRepositoryPath: required("VAULT_GIT_CHECK_REPOSITORY_PATH"),
 	stateRoot: required("VAULT_GIT_STATE_ROOT"),
@@ -50,6 +51,12 @@ const composition = await createVaultGitCliComposition({
 	remote: process.env.VAULT_GIT_REMOTE ?? "origin",
 	leaseDurationMs,
 	runtime,
+	privateEntrypointPath: import.meta.path,
+} as const;
+const storeComposition = await createVaultGitCliComposition(baseInput);
+const composition = await createVaultGitCliComposition({
+	...baseInput,
+	activationAuthority: persistedActivationAuthorityForTest(storeComposition.store),
 });
 
 process.exitCode = await main(Bun.argv.slice(2), { composition });

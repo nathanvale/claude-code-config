@@ -449,7 +449,7 @@ describe("vault-git KTD16 boundaries", () => {
 		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
 		["remote-ledger.ts", new Set(["model.ts", "ports.ts"])],
 		["clock.ts", new Set(["ports.ts"])],
-		["store.ts", new Set(["model.ts"])],
+		["store.ts", new Set(["activation-contract.ts", "model.ts"])],
 		[
 			"doctor.ts",
 			new Set(["model.ts", "ports.ts", "remote-ledger.ts", "store.ts"]),

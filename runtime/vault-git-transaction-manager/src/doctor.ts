@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitDoctorFinding,
 	VaultGitEngineNextActionId,
@@ -82,6 +83,8 @@ export interface VaultGitDoctorResult {
 	readonly ledgerGeneration?: string;
 	/** True only when fresh stale-lease proof issued private token material. */
 	readonly takeoverTokenIssued?: boolean;
+	/** Cause-specific public activation refusal, when activation stopped writes. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 }
 
 /** Read-only doctor policy surface. */

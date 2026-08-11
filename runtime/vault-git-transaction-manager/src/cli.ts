@@ -57,6 +57,20 @@ import {
 	type VaultGitRepairAction,
 	type VaultGitTransactionPhase,
 } from "./model.ts";
+import { resolveVaultRepositoryIdentity } from "./repository-identity.ts";
+import {
+	createVaultGitActivationAuthority,
+	type VaultGitActivationAuthority,
+} from "./activation-authority.ts";
+import {
+	resolveVaultGitActivationIdentities,
+	resolveVaultGitSshTransportEnvironment,
+} from "./activation-identity.ts";
+import { createVaultGitActivationPreparer } from "./activation-preparation.ts";
+import {
+	projectVaultGitActivationRestrictionJson,
+	renderVaultGitActivationRestriction,
+} from "./activation-restriction.ts";
 import type {
 	VaultGitCheckerPort,
 	VaultGitProcessPort,
@@ -78,7 +92,6 @@ import { evaluateVaultGitWorkerPolicy } from "./worker-policy.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_REMOTE = "origin";
-const DEFAULT_REPOSITORY_IDENTITY = "configured-super-vault";
 const DEFAULT_LEASE_DURATION_MS = 15 * 60_000;
 const DEFAULT_TIMEOUTS = {
 	fetchMs: 15_000,
@@ -95,6 +108,7 @@ export interface VaultGitCliComposition {
 	readonly repositoryPath: string;
 	readonly remote: string;
 	readonly leaseDurationMs: number;
+	readonly privateEntrypointPath?: string;
 }
 
 /** Explicit production composition input. */
@@ -102,13 +116,32 @@ export interface VaultGitCliCompositionInput {
 	readonly repositoryPath: string;
 	readonly checkRepositoryPath: string;
 	readonly stateRoot: string;
-	readonly repositoryIdentity: string;
+	/** Optional explicit identity seam for isolated tests and embedded callers. */
+	readonly repositoryIdentity?: string;
 	readonly actor: string;
 	readonly host: string;
 	readonly remote?: string;
 	readonly leaseDurationMs?: number;
 	readonly process?: VaultGitProcessPort;
 	readonly runtime?: VaultGitRuntimePort;
+	/** Explicit live authority; absence keeps production activation blocked. */
+	readonly activationAuthority?: Pick<VaultGitActivationAuthority, "validate">;
+	/** Complete owner-controlled configuration for live activation revalidation. */
+	readonly activationIdentity?: VaultGitCliActivationIdentityInput;
+	/** Exact entrypoint inherited-descriptor children re-enter through. */
+	readonly privateEntrypointPath?: string;
+}
+
+/** Non-secret paths and host binding required for live activation trust. */
+export interface VaultGitCliActivationIdentityInput {
+	readonly hostId: string;
+	readonly runtimeBinaryPath: string;
+	readonly runtimeVersion: string;
+	readonly executablePath: string;
+	readonly gitBinaryPath: string;
+	readonly sshBinaryPath: string;
+	readonly sshIdentityPublicKeyPath: string;
+	readonly sshKnownHostsPath: string;
 }
 
 /** Optional CLI dependencies used by tests and embedded callers. */
@@ -182,35 +215,77 @@ export async function createVaultGitCliComposition(
 		);
 	}
 	const processPort = input.process ?? createNodeProcessPort();
+	const gitBinary = input.activationIdentity?.gitBinaryPath;
+	const admittedGitEnvironment = input.activationIdentity
+		? await resolveVaultGitSshTransportEnvironment(input.activationIdentity)
+		: undefined;
+	const resolveRepositoryIdentity = () =>
+		resolveVaultRepositoryIdentity({
+			repositoryPath,
+			process: processPort,
+			timeoutMs: DEFAULT_TIMEOUTS.localMs,
+			...(gitBinary ? { gitBinary } : {}),
+		});
+	const repositoryIdentity =
+		input.repositoryIdentity ??
+		(await resolveRepositoryIdentity()).identity;
 	const runtime =
 		input.runtime ??
 		createNodeVaultGitRuntime({ actor: input.actor, host: input.host });
 	const timeouts = { ...DEFAULT_TIMEOUTS };
 	const repository = createGitRepositoryAdapter({
 		repositoryPath,
-		repositoryIdentity: input.repositoryIdentity,
+		repositoryIdentity,
+		...(input.repositoryIdentity === undefined
+			? {
+					resolveRepositoryIdentity: async () =>
+						(await resolveRepositoryIdentity()).identity,
+				}
+			: {}),
 		process: processPort,
 		timeouts,
+		...(gitBinary ? { gitBinary } : {}),
+		...(admittedGitEnvironment ? { admittedGitEnvironment } : {}),
 	});
 	const check = createVaultOwnedCheckPort({
 		repositoryPath: checkRepositoryPath,
 		process: processPort,
 		timeoutMs: DEFAULT_TIMEOUTS.localMs,
 	});
-	const git = createGitAdapter({ repositoryPath, process: processPort, timeouts });
+	const git = createGitAdapter({
+		repositoryPath,
+		process: processPort,
+		timeouts,
+		...(gitBinary ? { gitBinary } : {}),
+		...(admittedGitEnvironment ? { admittedGitEnvironment } : {}),
+	});
 	const store = createReceiptStore({
 		stateRoot: input.stateRoot,
-		repositoryIdentity: input.repositoryIdentity,
+		repositoryIdentity,
 	});
+	const checker = createVaultCheckerPort(repositoryPath, processPort);
+	const activationAuthority =
+		input.activationAuthority ??
+		createConfiguredActivationAuthority({
+			input,
+			repositoryPath,
+			repositoryIdentity,
+			processPort,
+			store,
+			runtime,
+			admittedGitEnvironment,
+			resolveRepositoryIdentity: async () =>
+				(await resolveRepositoryIdentity()).identity,
+		});
 	const engine = createVaultGitTransactionEngine({
 		store,
 		repository,
 		ledger: { git, clock: runtime },
 		runtime,
-		repositoryIdentity: input.repositoryIdentity,
+		repositoryIdentity,
 		check,
+		activationAuthority,
 	});
-	const checker = createVaultCheckerPort(repositoryPath, processPort);
 	const janitor = createVaultGitJanitor({
 		engine,
 		checker,
@@ -225,7 +300,56 @@ export async function createVaultGitCliComposition(
 		repositoryPath,
 		remote: input.remote ?? DEFAULT_REMOTE,
 		leaseDurationMs: input.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS,
+		privateEntrypointPath: input.privateEntrypointPath ?? CLI_PATH,
 	};
+}
+
+function createConfiguredActivationAuthority(input: {
+	readonly input: VaultGitCliCompositionInput;
+	readonly repositoryPath: string;
+	readonly repositoryIdentity: string;
+	readonly processPort: VaultGitProcessPort;
+	readonly store: VaultGitReceiptStore;
+	readonly runtime: VaultGitRuntimePort;
+	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
+	readonly resolveRepositoryIdentity: () => Promise<string>;
+}): Pick<VaultGitActivationAuthority, "validate"> {
+	const identity = input.input.activationIdentity;
+	if (!identity) return failClosedActivationAuthority();
+	const remoteName = input.input.remote ?? DEFAULT_REMOTE;
+	const preparer = createVaultGitActivationPreparer({
+		repositoryPath: input.repositoryPath,
+		privateStateRoot: input.input.stateRoot,
+		remoteName,
+		repositoryIdentity: input.repositoryIdentity,
+		jobGeneration: 1,
+		process: input.processPort,
+		store: input.store,
+		resolveRepositoryIdentity: input.resolveRepositoryIdentity,
+		resolveActivationIdentities: () =>
+			resolveVaultGitActivationIdentities({
+				repositoryPath: input.repositoryPath,
+				stateRoot: input.input.stateRoot,
+				remoteName,
+				...identity,
+				process: input.processPort,
+				timeoutMs: DEFAULT_TIMEOUTS.localMs,
+			}),
+		createChecker: (isolatedRepositoryPath) =>
+			createVaultCheckerPort(isolatedRepositoryPath, input.processPort),
+		clock: () => input.runtime.now().toISOString(),
+		timeouts: DEFAULT_TIMEOUTS,
+		gitBinaryPath: identity.gitBinaryPath,
+		...(input.admittedGitEnvironment
+			? { admittedGitEnvironment: input.admittedGitEnvironment }
+			: {}),
+	});
+	return createVaultGitActivationAuthority({
+		store: input.store,
+		clock: () => input.runtime.now().toISOString(),
+		validateHumanCapability: async () => false,
+		revalidate: preparer.revalidate,
+	});
 }
 
 /** Render bounded root help from the live facade contracts. */
@@ -426,18 +550,33 @@ async function resolveDefaultComposition(): Promise<VaultGitCliComposition | nul
 		process.env.VAULT_GIT_STATE_ROOT ??
 		process.env.XDG_STATE_HOME ??
 		join(homedir(), ".local", "state");
+	const activationIdentity = resolveDefaultActivationIdentity();
 	return createVaultGitCliComposition({
 		repositoryPath,
 		checkRepositoryPath:
 			process.env.VAULT_GIT_CHECK_REPOSITORY_PATH ?? repositoryPath,
 		stateRoot,
-		repositoryIdentity:
-			process.env.VAULT_GIT_REPOSITORY_IDENTITY ??
-			DEFAULT_REPOSITORY_IDENTITY,
 		actor: process.env.VAULT_GIT_ACTOR ?? process.env.USER ?? "operator",
 		host: process.env.VAULT_GIT_HOST ?? hostname(),
 		remote: process.env.VAULT_GIT_REMOTE ?? DEFAULT_REMOTE,
+		...(activationIdentity ? { activationIdentity } : {}),
 	});
+}
+
+function resolveDefaultActivationIdentity(): VaultGitCliActivationIdentityInput | null {
+	const publicKey = process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
+	const knownHosts = process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
+	if (!publicKey || !knownHosts) return null;
+	return {
+		hostId: process.env.VAULT_GIT_HOST ?? hostname(),
+		runtimeBinaryPath: process.execPath,
+		runtimeVersion: Bun.version,
+		executablePath: CLI_PATH,
+		gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
+		sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
+		sshIdentityPublicKeyPath: publicKey,
+		sshKnownHostsPath: knownHosts,
+	};
 }
 
 /**
@@ -537,6 +676,17 @@ export function createVaultCheckerPort(
 				"--root",
 				repositoryPath,
 			]);
+		},
+	};
+}
+
+function failClosedActivationAuthority(): Pick<
+	VaultGitActivationAuthority,
+	"validate"
+> {
+	return {
+		async validate() {
+			return { status: "denied", reason: "revalidation_unavailable" };
 		},
 	};
 }
@@ -668,7 +818,12 @@ async function launchPrivateInvocation(
 	const loaded = await composition.store.load();
 	if (loaded.status !== "loaded") return null;
 	const phase = loaded.receipt.phase;
-	const childArgs = [CLI_PATH, "--run-id", runId, ...args];
+	const childArgs = [
+		composition.privateEntrypointPath ?? CLI_PATH,
+		"--run-id",
+		runId,
+		...args,
+	];
 	if (invocation.repairAction === "stale-lease-takeover") {
 		const doctor = await composition.engine.doctor({
 			transactionId: invocation.transactionId,
@@ -964,6 +1119,14 @@ function payloadForRuntime(
 			transaction_id: value.transactionId,
 			transaction_state: value.state,
 			next_action: action(value.nextAction.id, value.nextAction.summary),
+			...(value.activationRestriction
+				? {
+						activation_restriction:
+							projectVaultGitActivationRestrictionJson(
+								value.activationRestriction,
+							),
+					}
+				: {}),
 		});
 		return command === "complete" && value.status === "completed"
 			? { ...payload, worker_eligibility: projectWorkerEligibility() }
@@ -984,6 +1147,14 @@ function payloadForRuntime(
 			repair_action: value.repairAction,
 			finding: value.finding,
 			next_action: action(value.nextAction.id, value.nextAction.summary),
+			...(value.activationRestriction
+				? {
+						activation_restriction:
+							projectVaultGitActivationRestrictionJson(
+								value.activationRestriction,
+							),
+					}
+				: {}),
 		});
 	}
 	if (result.kind === "repair") {
@@ -998,7 +1169,15 @@ function payloadForRuntime(
 		blockers: value.blocker ? [value.blocker] : [],
 		transaction_state: value.state,
 		repair_action: value.action,
-		next_action: action(value.nextAction.id, value.nextAction.summary),
+			next_action: action(value.nextAction.id, value.nextAction.summary),
+			...(value.activationRestriction
+				? {
+						activation_restriction:
+							projectVaultGitActivationRestrictionJson(
+								value.activationRestriction,
+							),
+					}
+				: {}),
 		});
 	}
 	const value = result.value;
@@ -1045,6 +1224,14 @@ function payloadForRuntime(
 						: "same_input_safe",
 			blockers: blocker ? [blocker] : [],
 			next_action: action(value.nextAction.id, value.nextAction.summary),
+			...(value.activationRestriction
+				? {
+						activation_restriction:
+							projectVaultGitActivationRestrictionJson(
+								value.activationRestriction,
+							),
+					}
+				: {}),
 		}),
 		janitor_report: projectJanitorReport(value),
 		worker_eligibility: projectWorkerEligibility(
@@ -1209,6 +1396,9 @@ function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
 		`changed_state: ${result.changed_state}`,
 		`retry_safety: ${result.retry_safety}`,
 		...(result.transaction_id ? [`transaction_id: ${result.transaction_id}`] : []),
+		...(result.activation_restriction
+			? [renderVaultGitActivationRestriction(result.activation_restriction)]
+			: []),
 		`next: ${result.next_action.id}`,
 		"",
 	].join("\n");

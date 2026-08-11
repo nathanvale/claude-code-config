@@ -130,11 +130,11 @@ export function createGitAdapter(
 	options: VaultGitAdapterOptions,
 ): VaultGitRemotePort {
 	const gitBinary = options.gitBinary ?? "git";
-	const allowedRemoteHosts = normalizeAllowedRemoteHosts(
-		options.allowedRemoteHosts ?? [],
-	);
 	const admittedGitEnvironment = normalizeAdmittedGitEnvironment(
 		options.admittedGitEnvironment ?? {},
+	);
+	const allowedRemoteHosts = normalizeAllowedRemoteHosts(
+		options.allowedRemoteHosts ?? [],
 	);
 	const runGit = async (
 		args: readonly string[],
@@ -155,7 +155,6 @@ export function createGitAdapter(
 			},
 			timeoutMs,
 		});
-
 	const fetchExactRef = async (
 		remote: string,
 		sourceRef: string,
@@ -722,6 +721,8 @@ export function createGitAdapter(
 export interface VaultGitRepositoryAdapterOptions extends VaultGitAdapterOptions {
 	/** Stable non-secret configured-vault identity. */
 	readonly repositoryIdentity: string;
+	/** Optional production revalidation of the configured-vault identity. */
+	readonly resolveRepositoryIdentity?: () => Promise<string>;
 }
 
 /**
@@ -748,6 +749,9 @@ export function createGitRepositoryAdapter(
 		throw new Error("repository identity must not be empty");
 	}
 	const gitBinary = options.gitBinary ?? "git";
+	const admittedGitEnvironment = normalizeAdmittedGitEnvironment(
+		options.admittedGitEnvironment ?? {},
+	);
 	const runGit = async (
 		args: readonly string[],
 		input?: string,
@@ -758,9 +762,17 @@ export function createGitRepositoryAdapter(
 			args,
 			cwd: options.repositoryPath,
 			stdin: input,
-			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+			env: {
+				...CONTROLLED_GIT_ENVIRONMENT,
+				...admittedGitEnvironment,
+				...env,
+			},
 			timeoutMs: options.timeouts.localMs,
 		});
+	// Inspect the repository's own configuration without the execution-time
+	// hooksPath override masking what the operator actually configured.
+	const inspectLocalConfig = (args: readonly string[]) =>
+		runGit(args, undefined, { GIT_CONFIG_COUNT: "0" });
 
 	const captureUnrelatedState = async (
 		ownedPaths: readonly string[],
@@ -821,14 +833,19 @@ export function createGitRepositoryAdapter(
 
 	return {
 		async inspectSafety() {
-			const hooksPath = await runGit(["config", "--local", "--get", "core.hooksPath"]);
+			const hooksPath = await inspectLocalConfig([
+				"config",
+				"--local",
+				"--get",
+				"core.hooksPath",
+			]);
 			if (hooksPath.timedOut || (hooksPath.exitCode !== 0 && hooksPath.exitCode !== 1)) {
 				return { status: "refused", reason: "configured_hooks_path" } as const;
 			}
 			if (hooksPath.exitCode === 0 && hooksPath.stdout.trim().length > 0) {
 				return { status: "refused", reason: "configured_hooks_path" } as const;
 			}
-			const credentialHelpers = await runGit([
+			const credentialHelpers = await inspectLocalConfig([
 				"config",
 				"--local",
 				"--get-all",
@@ -850,7 +867,7 @@ export function createGitRepositoryAdapter(
 				"^core\\.fsmonitor$",
 				"^protocol\\.ext\\.allow$",
 			]) {
-				const configured = await runGit([
+				const configured = await inspectLocalConfig([
 					"config",
 					"--local",
 					"--get-regexp",
@@ -864,7 +881,11 @@ export function createGitRepositoryAdapter(
 					return { status: "refused", reason: "transport_command" } as const;
 				}
 			}
-			const hooksDirectory = await runGit(["rev-parse", "--git-path", "hooks"]);
+			const hooksDirectory = await inspectLocalConfig([
+				"rev-parse",
+				"--git-path",
+				"hooks",
+			]);
 			if (hooksDirectory.timedOut || hooksDirectory.exitCode !== 0) {
 				return { status: "refused", reason: "repository_hook" } as const;
 			}
@@ -888,6 +909,19 @@ export function createGitRepositoryAdapter(
 		},
 
 		async resolveCanonicalIdentity() {
+			if (options.resolveRepositoryIdentity) {
+				const [identity, main] = await Promise.all([
+					options.resolveRepositoryIdentity(),
+					runGit(["rev-parse", "--verify", "refs/heads/main^{commit}"]),
+				]);
+				if (main.timedOut || main.exitCode !== 0) {
+					throw new Error("configured repository root is not canonical");
+				}
+				return {
+					identity,
+					localMainHead: requireObjectId(main.stdout, "local main"),
+				};
+			}
 			const [configuredRoot, discoveredRoot, main] = await Promise.all([
 				realpath(options.repositoryPath),
 				runGit(["rev-parse", "--show-toplevel"]),

@@ -21,11 +21,13 @@ import {
 } from "@side-quest/cli-command-facade/testing";
 
 import { VAULT_GIT_LEDGER_REF } from "../src/model.ts";
+import { createNodeProcessPort } from "../src/git-adapter.ts";
+import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
 import { admitActivationForTest } from "./activation-fixture.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cliPath = join(packageRoot, "src", "cli.ts");
+const cliPath = join(packageRoot, "tests", "process-cli.ts");
 const roots: string[] = [];
 
 setDefaultTimeout(30_000);
@@ -613,9 +615,16 @@ async function createCloneFixture(
 		...(options.shimMode ? { VAULT_GIT_SHIM_MODE: options.shimMode } : {}),
 		...(options.blockingCheck ? { VAULT_GIT_CHECK_MARKER: checkMarker } : {}),
 	};
+	const repositoryIdentity = (
+		await resolveVaultRepositoryIdentity({
+			repositoryPath: clone,
+			process: createNodeProcessPort(),
+			timeoutMs: 5_000,
+		})
+	).identity;
 	const store = createReceiptStore({
 		stateRoot,
-		repositoryIdentity: "live-acceptance-vault",
+		repositoryIdentity,
 	});
 	if (options.activate !== false) await admitActivationForTest(store);
 	const run = (args: readonly string[]) =>

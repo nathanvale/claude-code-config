@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, constants, openSync } from "node:fs";
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,9 +12,11 @@ import {
 	createNodeVaultGitDurabilityPort,
 	createReceiptStore,
 	launchCapabilityProcess,
+	VaultGitLegacyActivationRecordError,
 	type VaultGitDurabilityOperation,
 	type VaultGitDurabilityPort,
 } from "../src/store.ts";
+import { preparedEvidenceForTest } from "./activation-fixture.ts";
 
 const roots: string[] = [];
 
@@ -480,35 +482,75 @@ describe("private receipt store", () => {
 		expect((await readdir(store.paths.history)).length).toBe(3);
 	});
 
-	test("persists the runtime activation admission privately and validates its shape", async () => {
+	test("keeps V2 prepared evidence non-authoritative until a matching admission", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
 		expect(await store.readActivation()).toBeNull();
+		expect(await store.readPreparedEvidence()).toBeNull();
+		const evidence = preparedEvidenceForTest();
+		await store.publishPreparedEvidence(evidence);
+		expect(await store.readActivation()).toBeNull();
+		const storedEvidence = await store.readPreparedEvidence();
+		expect(storedEvidence).toEqual(evidence);
+		expect(Object.isFrozen(storedEvidence)).toBe(true);
+		expect((await stat(store.paths.preparedEvidence)).mode & 0o777).toBe(0o600);
+
 		await store.admitActivation({
-			schemaVersion: 1,
+			schemaVersion: 2,
+			evidenceId: evidence.evidenceId,
 			admittedAt: "2026-08-09T00:00:00.000Z",
 			note: "U9 qualification admission",
 		});
 		expect(await store.readActivation()).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
+			evidenceId: evidence.evidenceId,
 			admittedAt: "2026-08-09T00:00:00.000Z",
 			note: "U9 qualification admission",
 		});
 		expect((await stat(store.paths.activation)).mode & 0o777).toBe(0o600);
 		await expect(
 			store.admitActivation({
-				schemaVersion: 1,
+				schemaVersion: 2,
+				evidenceId: evidence.evidenceId,
 				admittedAt: "not-a-timestamp",
 				note: "invalid",
 			}),
 		).rejects.toThrow("activation record invalid");
 		await expect(
 			store.admitActivation({
-				schemaVersion: 1,
+				schemaVersion: 2,
+				evidenceId: evidence.evidenceId,
 				admittedAt: "2026-08-09T00:00:00.000Z",
 				note: "multi\nline",
 			}),
 		).rejects.toThrow("activation record invalid");
+		await expect(
+			store.admitActivation({
+				schemaVersion: 2,
+				evidenceId: `vault-git:prepared:v2:${"f".repeat(64)}`,
+				admittedAt: "2026-08-09T00:00:00.000Z",
+				note: "wrong evidence",
+			}),
+		).rejects.toThrow("activation evidence does not match");
+	});
+
+	test("rejects legacy V1 activation records without upgrading them", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		await mkdir(store.paths.repositoryRoot, { recursive: true, mode: 0o700 });
+		await writeFile(
+			store.paths.activation,
+			JSON.stringify({
+				schemaVersion: 1,
+				admittedAt: "2026-08-09T00:00:00.000Z",
+				note: "legacy admission",
+			}),
+			{ mode: 0o600 },
+		);
+
+		await expect(store.readActivation()).rejects.toBeInstanceOf(
+			VaultGitLegacyActivationRecordError,
+		);
 	});
 
 	test("persists admitted checker hashes privately and prunes only closed or stale material", async () => {

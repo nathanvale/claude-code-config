@@ -1,0 +1,543 @@
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import type { Dirent } from "node:fs";
+import {
+	mkdir,
+	readFile,
+	readdir,
+	readlink,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, test } from "bun:test";
+
+import {
+	createVaultGitActivationAuthority,
+	createVaultGitActivationPreparer,
+	resolveVaultGitActivationIdentities,
+	resolveVaultRepositoryIdentity,
+	VAULT_GIT_ABSENT_LEDGER_GENERATION,
+} from "../src/index.ts";
+import {
+	createNodeProcessPort,
+} from "../src/git-adapter.ts";
+import { createVaultCheckerPort } from "../src/cli.ts";
+import type { VaultGitCheckerPort } from "../src/ports.ts";
+import type { VaultGitProcessRequest } from "../src/ports.ts";
+import { createReceiptStore } from "../src/store.ts";
+import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
+
+const tempDirectories = createTempDirectoryFixture();
+afterEach(tempDirectories.cleanup);
+
+describe("isolated activation preparation", () => {
+	test("publishes V2 evidence without changing canonical Git or granting authority", async () => {
+		const fixture = await preparationFixture();
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		const result = await fixture.preparer.prepare();
+
+		expect(result).toMatchObject({
+			status: "prepared",
+			result: {
+				status: "prepared",
+				authority: "evidence_only",
+				write_permission: "denied",
+				changed_state: "none",
+			},
+		});
+		if (result.status !== "prepared") throw new Error("expected prepared");
+		expect(result.evidence.localMainHead).toBe(fixture.mainHead);
+		expect(result.evidence.remoteMainHead).toBe(fixture.mainHead);
+		expect(result.evidence.ledgerGeneration).toBe(fixture.ledgerGeneration);
+		expect(await fixture.store.readPreparedEvidence()).toEqual(result.evidence);
+		expect(await fixture.store.readActivation()).toBeNull();
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	test("remote preparation uses the exact admitted Git transport closure", async () => {
+		const observed: VaultGitProcessRequest[] = [];
+		const admittedGitEnvironment = {
+			GIT_SSH_COMMAND: "'/usr/bin/ssh' -F /dev/null -o BatchMode=yes",
+			GIT_SSH_VARIANT: "ssh",
+		} as const;
+		const fixture = await preparationFixture({
+			admittedGitEnvironment,
+			observeProcess(request) {
+				observed.push(request);
+			},
+		});
+
+		expect((await fixture.preparer.prepare()).status).toBe("prepared");
+		const remoteRequests = observed.filter(({ args }) =>
+			["clone", "ls-remote", "fetch"].includes(args[0] ?? ""),
+		);
+		expect(remoteRequests.length).toBeGreaterThan(0);
+		for (const request of remoteRequests) {
+			expect(request.env).toMatchObject(admittedGitEnvironment);
+		}
+	});
+
+	test("workspace cleanup failure refuses before evidence publication", async () => {
+		const fixture = await preparationFixture({
+			async removeWorkspace() {
+				throw new Error("fixture cleanup failure");
+			},
+		});
+
+		expect(await fixture.preparer.prepare()).toEqual({
+			status: "unknown",
+			reason: "preparation_interrupted",
+			changedState: "none",
+		});
+		expect(await fixture.store.readPreparedEvidence()).toBeNull();
+	});
+
+	test("workspace cleanup failure makes live revalidation unavailable", async () => {
+		const fixture = await preparationFixture({
+			async removeWorkspace() {
+				throw new Error("fixture cleanup failure");
+			},
+		});
+
+		await expect(fixture.preparer.revalidate()).rejects.toThrow(
+			"activation preparation cleanup failed",
+		);
+	});
+
+	test("checker refusal leaves worktree, index, every ref, and object database byte-identical", async () => {
+		const fixture = await preparationFixture({
+			createChecker() {
+				return checkerFailure();
+			},
+		});
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		const result = await fixture.preparer.prepare();
+
+		expect(result).toEqual({
+			status: "refused",
+			reason: "checker_failed",
+			changedState: "none",
+		});
+		expect(await fixture.store.readPreparedEvidence()).toBeNull();
+		expect(await fixture.store.readActivation()).toBeNull();
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	for (const [name, stdout] of [
+		["malformed structured success", JSON.stringify({ schema_version: 1 })],
+		[
+			"non-empty findings with exit zero",
+			JSON.stringify({ schema_version: 1, findings: [{ id: "unsafe" }] }),
+		],
+	] as const) {
+		test(`${name} refuses preparation`, async () => {
+			const fixture = await preparationFixture({
+				createChecker: () => checkerResult({ exitCode: 0, stdout }),
+			});
+			const before = await canonicalSnapshot(fixture.repositoryPath);
+
+			expect(await fixture.preparer.prepare()).toEqual({
+				status: "refused",
+				reason: "checker_failed",
+				changedState: "none",
+			});
+			expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+		});
+	}
+
+	test("remote refusal leaves every canonical surface byte-identical", async () => {
+		const fixture = await preparationFixture();
+		git(fixture.remotePath, ["update-ref", "-d", "refs/heads/main"]);
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		const result = await fixture.preparer.prepare();
+
+		expect(result).toEqual({
+			status: "refused",
+			reason: "remote_unavailable",
+			changedState: "none",
+		});
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	test("prepares the exact absent-ledger generation before the first transaction", async () => {
+		const fixture = await preparationFixture();
+		git(fixture.remotePath, [
+			"update-ref",
+			"-d",
+			"refs/heads/vault-system/transaction-ledger",
+		]);
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		const result = await fixture.preparer.prepare();
+
+		if (result.status !== "prepared") throw new Error("expected prepared");
+		expect(result.evidence.ledgerGeneration).toBe(
+			VAULT_GIT_ABSENT_LEDGER_GENERATION,
+		);
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	test("live admission revalidation invalidates remote drift without canonical mutation", async () => {
+		const fixture = await preparationFixture();
+		const prepared = await fixture.preparer.prepare();
+		if (prepared.status !== "prepared") throw new Error("expected prepared");
+		const capability = new Uint8Array([4, 2]);
+		const authority = createVaultGitActivationAuthority({
+			store: fixture.store,
+			clock: () => "2026-08-11T00:00:01.000Z",
+			validateHumanCapability: async (candidate) =>
+				candidate.length === capability.length &&
+				candidate.every((byte, index) => byte === capability[index]),
+			revalidate: fixture.preparer.revalidate,
+		});
+		expect(
+			await authority.admit({
+				evidenceId: prepared.evidence.evidenceId,
+				humanCapability: capability,
+				note: "fixture human review",
+			}),
+		).toMatchObject({ status: "admitted" });
+		git(fixture.remotePath, [
+			"update-ref",
+			"refs/heads/main",
+			fixture.ledgerGeneration,
+		]);
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		expect(await authority.validate()).toEqual({
+			status: "denied",
+			reason: "binding_changed",
+			binding: "remoteMainHead",
+		});
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	for (const scenario of [
+		{
+			name: "timeout",
+			checker: () => checkerResult({ timedOut: true, exitCode: null }),
+			reason: "preparation_timed_out",
+		},
+		{
+			name: "crash",
+			checker: () => checkerCrash(),
+			reason: "preparation_interrupted",
+		},
+	] as const) {
+		test(`${scenario.name} leaves every canonical surface byte-identical`, async () => {
+			const fixture = await preparationFixture({
+				createChecker: scenario.checker,
+			});
+			const before = await canonicalSnapshot(fixture.repositoryPath);
+
+			const result = await fixture.preparer.prepare();
+
+			expect(result).toEqual({
+				status: "unknown",
+				reason: scenario.reason,
+				changedState: "none",
+			});
+			expect(await fixture.store.readPreparedEvidence()).toBeNull();
+			expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+		});
+	}
+
+	test("cancellation after isolated setup leaves every canonical surface byte-identical", async () => {
+		let observations = 0;
+		const fixture = await preparationFixture({
+			cancelled() {
+				observations += 1;
+				return observations === 3;
+			},
+		});
+		const before = await canonicalSnapshot(fixture.repositoryPath);
+
+		const result = await fixture.preparer.prepare();
+
+		expect(result).toEqual({
+			status: "unknown",
+			reason: "preparation_cancelled",
+			changedState: "none",
+		});
+		expect(await fixture.store.readPreparedEvidence()).toBeNull();
+		expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+	});
+
+	test("cancellation during cleanup refuses before evidence publication", async () => {
+		let cancelled = false;
+		const fixture = await preparationFixture({
+			cancelled: () => cancelled,
+			async removeWorkspace(workspace) {
+				await rm(workspace, { recursive: true, force: true });
+				cancelled = true;
+			},
+		});
+
+		expect(await fixture.preparer.prepare()).toEqual({
+			status: "unknown",
+			reason: "preparation_cancelled",
+			changedState: "none",
+		});
+		expect(await fixture.store.readPreparedEvidence()).toBeNull();
+	});
+});
+
+async function preparationFixture(overrides: {
+	readonly createChecker?: (repositoryPath: string) => VaultGitCheckerPort;
+	readonly cancelled?: () => boolean;
+	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
+	readonly observeProcess?: (request: VaultGitProcessRequest) => void;
+	readonly removeWorkspace?: (workspace: string) => Promise<void>;
+} = {}): Promise<{
+	readonly repositoryPath: string;
+	readonly remotePath: string;
+	readonly mainHead: string;
+	readonly ledgerGeneration: string;
+	readonly store: ReturnType<typeof createReceiptStore>;
+	readonly preparer: ReturnType<typeof createVaultGitActivationPreparer>;
+}> {
+	const root = await tempDirectories.create("vault-git-activation-prepare-");
+	const remotePath = join(root, "remote.git");
+	const repositoryPath = join(root, "vault");
+	const stateRoot = join(root, "state");
+	const publicKeyPath = join(root, "writer.pub");
+	const knownHostsPath = join(root, "known_hosts");
+	await mkdir(stateRoot);
+	await writeFile(publicKeyPath, "ssh-ed25519 fixture-public-key\n");
+	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n");
+	git(root, ["init", "--bare", remotePath]);
+	git(root, ["clone", remotePath, repositoryPath]);
+	git(repositoryPath, ["switch", "-c", "main"]);
+	await mkdir(join(repositoryPath, "scripts"));
+	await writeFile(
+		join(repositoryPath, "package.json"),
+		JSON.stringify({
+			name: "activation-fixture",
+			private: true,
+			scripts: { check: "bun run scripts/check.ts" },
+		}),
+	);
+	await writeFile(join(repositoryPath, "bun.lock"), "");
+	await writeFile(
+		join(repositoryPath, "scripts", "check.ts"),
+		'await Bun.write(".activation-checker-ran", "ran\\n");\nprocess.stdout.write(JSON.stringify({ schema_version: 1, findings: [] }) + "\\n");\n',
+	);
+	git(repositoryPath, ["add", "package.json", "bun.lock", "scripts/check.ts"]);
+	git(repositoryPath, [
+		"-c",
+		"user.name=Fixture",
+		"-c",
+		"user.email=fixture@example.invalid",
+		"commit",
+		"-m",
+		"fixture main",
+	]);
+	git(repositoryPath, ["push", "-u", "origin", "main"]);
+	const mainHead = gitOutput(repositoryPath, ["rev-parse", "refs/heads/main"]);
+
+	git(repositoryPath, ["switch", "--orphan", "ledger-seed"]);
+	git(repositoryPath, ["rm", "-rf", "--ignore-unmatch", "."]);
+	await writeFile(
+		join(repositoryPath, "ledger.json"),
+		JSON.stringify({ schema_version: 1, operation: "release", lease: null }),
+	);
+	git(repositoryPath, ["add", "ledger.json"]);
+	git(repositoryPath, [
+		"-c",
+		"user.name=Fixture",
+		"-c",
+		"user.email=fixture@example.invalid",
+		"commit",
+		"-m",
+		"fixture ledger",
+	]);
+	const ledgerGeneration = gitOutput(repositoryPath, ["rev-parse", "HEAD"]);
+	git(repositoryPath, [
+		"push",
+		"origin",
+		"HEAD:refs/heads/vault-system/transaction-ledger",
+	]);
+	git(repositoryPath, ["switch", "main"]);
+	git(repositoryPath, ["branch", "-D", "ledger-seed"]);
+
+	const nodeProcessPort = createNodeProcessPort();
+	const processPort = {
+		run(request: VaultGitProcessRequest) {
+			overrides.observeProcess?.(request);
+			return nodeProcessPort.run(request);
+		},
+	};
+	const repositoryIdentity = (
+		await resolveVaultRepositoryIdentity({
+			repositoryPath,
+			process: processPort,
+			timeoutMs: 5_000,
+		})
+	).identity;
+	const store = createReceiptStore({ stateRoot, repositoryIdentity });
+	const identityOptions = {
+		repositoryPath,
+		stateRoot,
+		remoteName: "origin",
+		hostId: "fixture-host",
+		runtimeBinaryPath: process.execPath,
+		runtimeVersion: Bun.version,
+		executablePath: join(import.meta.dir, "../src/cli.ts"),
+		gitBinaryPath: "/usr/bin/git",
+		sshBinaryPath: "/usr/bin/ssh",
+		sshIdentityPublicKeyPath: publicKeyPath,
+		sshKnownHostsPath: knownHostsPath,
+		process: processPort,
+		timeoutMs: 5_000,
+	} as const;
+	return {
+		repositoryPath,
+		remotePath,
+		mainHead,
+		ledgerGeneration,
+		store,
+		preparer: createVaultGitActivationPreparer({
+			repositoryPath,
+			privateStateRoot: stateRoot,
+			remoteName: "origin",
+			repositoryIdentity,
+			jobGeneration: 1,
+			process: processPort,
+			admittedGitEnvironment: overrides.admittedGitEnvironment,
+			store,
+			resolveRepositoryIdentity: async () =>
+				(
+					await resolveVaultRepositoryIdentity({
+						repositoryPath,
+						process: processPort,
+						timeoutMs: 5_000,
+					})
+				).identity,
+			resolveActivationIdentities: () =>
+				resolveVaultGitActivationIdentities(identityOptions),
+			createChecker:
+				overrides.createChecker ??
+				((isolatedPath) => createVaultCheckerPort(isolatedPath, processPort)),
+			clock: () => "2026-08-11T00:00:00.000Z",
+			cancelled: overrides.cancelled,
+			removeWorkspace: overrides.removeWorkspace,
+			timeouts: { localMs: 5_000, fetchMs: 5_000 },
+		}),
+	};
+}
+
+function checkerFailure(): VaultGitCheckerPort {
+	return checkerResult({ exitCode: 1 });
+}
+
+function checkerResult(overrides: {
+	readonly exitCode?: number | null;
+	readonly timedOut?: boolean;
+	readonly stdout?: string;
+}): VaultGitCheckerPort {
+	return {
+		async fingerprint() {
+			return {
+				entrypointHash: "a".repeat(64),
+				dependencyBundleHash: "b".repeat(64),
+			};
+		},
+		async runCheck() {
+			return {
+				exitCode: overrides.exitCode ?? 1,
+				stdout:
+					overrides.stdout ??
+					JSON.stringify({ schema_version: 1, findings: [{}] }),
+				stderr: "",
+				timedOut: overrides.timedOut ?? false,
+			};
+		},
+		async readRepairRegistry() {
+			throw new Error("not used");
+		},
+		async applyRepair() {
+			throw new Error("not used");
+		},
+	};
+}
+
+function checkerCrash(): VaultGitCheckerPort {
+	return {
+		...checkerResult({ exitCode: 0 }),
+		async runCheck() {
+			throw new Error("fixture checker crash");
+		},
+	};
+}
+
+async function canonicalSnapshot(repositoryPath: string): Promise<{
+	readonly worktree: string;
+	readonly index: string;
+	readonly refs: string;
+	readonly objects: string;
+}> {
+	const gitDirectory = join(repositoryPath, ".git");
+	return {
+		worktree: await treeHash(repositoryPath, new Set([".git"])),
+		index: await fileHash(join(gitDirectory, "index")),
+		refs: createHash("sha256")
+			.update(await treeHash(join(gitDirectory, "refs")))
+			.update(await optionalFileHash(join(gitDirectory, "packed-refs")))
+			.digest("hex"),
+		objects: await treeHash(join(gitDirectory, "objects")),
+	};
+}
+
+async function treeHash(
+	root: string,
+	excluded: ReadonlySet<string> = new Set(),
+): Promise<string> {
+	const hash = createHash("sha256");
+	const entries = (await readdir(root, { withFileTypes: true }))
+		.filter((entry) => !excluded.has(entry.name))
+		.sort((left, right) => left.name.localeCompare(right.name));
+	const contents = await Promise.all(
+		entries.map(async (entry) => ({
+			name: entry.name,
+			bytes: await treeEntryBytes(root, entry),
+		})),
+	);
+	for (const entry of contents) {
+		hash.update(entry.name).update("\0").update(entry.bytes).update("\0");
+	}
+	return hash.digest("hex");
+}
+
+async function treeEntryBytes(
+	root: string,
+	entry: Dirent,
+): Promise<string | Buffer> {
+	const path = join(root, entry.name);
+	if (entry.isDirectory()) return treeHash(path);
+	if (entry.isSymbolicLink()) return readlink(path);
+	return readFile(path);
+}
+
+async function fileHash(path: string): Promise<string> {
+	return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function optionalFileHash(path: string): Promise<string> {
+	return (await stat(path).catch(() => null)) === null ? "absent" : fileHash(path);
+}
+
+function git(cwd: string, args: readonly string[]): void {
+	gitOutput(cwd, args);
+}
+
+function gitOutput(cwd: string, args: readonly string[]): string {
+	const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+	if (result.status !== 0) throw new Error(result.stderr);
+	return result.stdout.trim();
+}

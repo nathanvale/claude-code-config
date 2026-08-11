@@ -4,8 +4,20 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { createVaultGitTransactionEngine } from "../src/engine.ts";
-import { admitActivationForTest } from "./activation-fixture.ts";
+import {
+	createVaultGitActivationAuthority,
+	type VaultGitLiveActivationBindings,
+} from "../src/activation-authority.ts";
+import {
+	createVaultGitTransactionEngine,
+	type VaultGitTransactionEngineOptions,
+} from "../src/engine.ts";
+import {
+	admitActivationForTest,
+	admittedActivationAuthorityForTest,
+	persistedActivationAuthorityForTest,
+	preparedEvidenceForTest,
+} from "./activation-fixture.ts";
 import type {
 	VaultGitAtomicPushCapability,
 	VaultGitClockPort,
@@ -68,6 +80,7 @@ describe("transaction engine lifecycle", () => {
 			ledger: { git: fixture.remote, clock: recoveredRuntime },
 			runtime: recoveredRuntime,
 			repositoryIdentity: "canonical-vault",
+			activationAuthority: admittedActivationAuthorityForTest,
 		});
 		expect(await recoveredStore.load()).toMatchObject({
 			status: "loaded",
@@ -411,6 +424,10 @@ describe("transaction engine lifecycle", () => {
 			blocker: "activation_blocked",
 			retrySafety: "same_input_safe",
 			nextAction: { id: "request_operator_admission" },
+			activationRestriction: {
+				cause: { id: "admission_missing" },
+				nextAction: { id: "review_prepared" },
+			},
 		});
 		expect(fixture.remote.appendCalls).toBe(0);
 		expect(await fixture.store.load()).toEqual({ status: "absent" });
@@ -422,9 +439,186 @@ describe("transaction engine lifecycle", () => {
 		await admitActivationForTest(fixture.store);
 		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({ status: "admitted" });
 	});
+
+	for (const [reason, restrictionNextAction] of [
+		["evidence_changed", "prepare_fresh"],
+		["binding_changed", "prepare_fresh"],
+		["revoked", "prepare_fresh"],
+		["revalidation_unavailable", "run_doctor"],
+	] as const) {
+		test(`preserves ${reason} activation restriction semantics`, async () => {
+			const fixture = await engineFixture(undefined, {
+				activationAuthority: {
+					async validate() {
+						return { status: "denied" as const, reason };
+					},
+				},
+			});
+
+			expect(
+				await fixture.engine.begin({
+					event: "note_created",
+					requestedPaths: ["notes/new.md"],
+					remote: "origin",
+					leaseDurationMs: 60_000,
+				}),
+			).toMatchObject({
+				status: "refused",
+				blocker: "activation_blocked",
+				nextAction: { id: "request_operator_admission" },
+				activationRestriction: {
+					cause: { id: reason },
+					nextAction: { id: restrictionNextAction },
+				},
+			});
+		});
+	}
+
+	test("maps activation validation throws to revalidation_unavailable", async () => {
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					throw new Error("fixture private-state failure");
+				},
+			},
+		});
+
+		expect(
+			await fixture.engine.begin({
+				event: "note_created",
+				requestedPaths: ["notes/new.md"],
+				remote: "origin",
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+			nextAction: { id: "request_operator_admission" },
+			activationRestriction: {
+				cause: { id: "revalidation_unavailable" },
+				nextAction: { id: "run_doctor" },
+			},
+		});
+	});
+
+	test("uses live activation authority even when a persisted admission exists", async () => {
+		let admitted = false;
+		let validations = 0;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					validations += 1;
+					return admitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "denied" as const, reason: "binding_changed" as const };
+				},
+			},
+		});
+		const input = { event: "note_created" as const, requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 };
+
+		expect(await fixture.engine.begin(input)).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+		});
+		expect(validations).toBe(1);
+		admitted = true;
+		expect(await fixture.engine.begin(input)).toMatchObject({ status: "admitted" });
+		expect(validations).toBe(2);
+	});
+
+	test("begin and complete use the real authority across transaction-owned ledger movement", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-engine-authority-"));
+		roots.push(root);
+		const evidence = preparedEvidenceForTest({
+			localMainHead: HEAD,
+			remoteMainHead: HEAD,
+			ledgerGeneration: "0".repeat(40),
+		});
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "canonical-vault",
+		});
+		await store.publishPreparedEvidence(evidence);
+		let live: VaultGitLiveActivationBindings = activationBindings(evidence);
+		const humanCapability = new Uint8Array([9, 1]);
+		const authority = createVaultGitActivationAuthority({
+			store,
+			clock: () => "2026-08-09T00:00:00.000Z",
+			validateHumanCapability: async (candidate) =>
+				candidate.length === humanCapability.length &&
+				candidate.every((byte, index) => byte === humanCapability[index]),
+			revalidate: async () => live,
+		});
+		await authority.admit({
+			evidenceId: evidence.evidenceId,
+			humanCapability,
+			note: "fixture review",
+		});
+		const scopes: string[] = [];
+		const repository = new FakeRepository();
+		const remote = new FakeRemote();
+		const runtime = new FakeRuntime();
+		remote.onAppend = async () => {
+			live = { ...live, ledgerGeneration: GENERATION };
+		};
+		const engine = createVaultGitTransactionEngine({
+			store,
+			repository,
+			ledger: { git: remote, clock: runtime },
+			runtime,
+			repositoryIdentity: "canonical-vault",
+			activationAuthority: {
+				async validate(scope) {
+					scopes.push(scope ?? "admission");
+					return authority.validate(scope);
+				},
+			},
+		});
+
+		const begun = await engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const owner = await store.readCapability(begun.receiptId, "owner");
+		expect(
+			await engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability: owner,
+			}),
+		).toMatchObject({ status: "advanced", phase: "checking" });
+		expect(scopes).toEqual(["admission", "continuation"]);
+	});
 });
 
-async function engineFixture(interruptAt?: string, options: { admitActivation?: boolean } = {}) {
+function activationBindings(
+	evidence: ReturnType<typeof preparedEvidenceForTest>,
+): VaultGitLiveActivationBindings {
+	return {
+		repositoryIdentity: evidence.repositoryIdentity,
+		remoteIdentity: evidence.remoteIdentity,
+		hostIdentity: evidence.hostIdentity,
+		runtimeIdentity: evidence.runtimeIdentity,
+		executableIdentity: evidence.executableIdentity,
+		privateStateIdentity: evidence.privateStateIdentity,
+		localMainHead: evidence.localMainHead,
+		remoteMainHead: evidence.remoteMainHead,
+		ledgerGeneration: evidence.ledgerGeneration,
+		gitIdentity: evidence.gitIdentity,
+		sshIdentity: evidence.sshIdentity,
+		checkerClosure: evidence.checkerClosure,
+	};
+}
+
+async function engineFixture(interruptAt?: string, options: {
+	admitActivation?: boolean;
+	activationAuthority?: VaultGitTransactionEngineOptions["activationAuthority"];
+} = {}) {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-engine-"));
 	roots.push(root);
 	const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "canonical-vault" });
@@ -432,7 +626,7 @@ async function engineFixture(interruptAt?: string, options: { admitActivation?: 
 	const repository = new FakeRepository();
 	const remote = new FakeRemote();
 	const runtime = new FakeRuntime(interruptAt);
-	const engine = createVaultGitTransactionEngine({ store, repository, ledger: { git: remote, clock: runtime }, runtime, repositoryIdentity: "canonical-vault" });
+	const engine = createVaultGitTransactionEngine({ store, repository, ledger: { git: remote, clock: runtime }, runtime, repositoryIdentity: "canonical-vault", activationAuthority: options.activationAuthority ?? persistedActivationAuthorityForTest(store) });
 	return { root, store, repository, remote, runtime, engine };
 }
 

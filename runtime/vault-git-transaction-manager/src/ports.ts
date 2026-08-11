@@ -1,4 +1,5 @@
 import type {
+	VaultGitActivationBinding,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
@@ -334,6 +335,36 @@ export interface VaultGitRemotePort {
 export interface VaultGitClockPort {
 	/** Read current wall-clock time. */
 	now(): Date;
+}
+
+/** Live activation validation depth for admission or fenced continuation. */
+export type VaultGitActivationValidationScope = "admission" | "continuation";
+
+/** Closed fail-closed cause returned by the engine's activation port. */
+export type VaultGitActivationDenialReason =
+	| "admission_missing"
+	| "human_capability_required"
+	| "evidence_changed"
+	| "binding_changed"
+	| "invalidated"
+	| "revoked"
+	| "revalidation_unavailable";
+
+/** Complete validation result retained across the engine port boundary. */
+export type VaultGitActivationValidationResult =
+	| { readonly status: "admitted"; readonly evidenceId?: string }
+	| { readonly status: "revoked"; readonly evidenceId?: string }
+	| {
+			readonly status: "denied";
+			readonly reason: VaultGitActivationDenialReason;
+			readonly binding?: VaultGitActivationBinding;
+	  };
+
+/** Minimal activation gate owned by the engine port boundary. */
+export interface VaultGitActivationValidationPort {
+	validate(
+		scope?: VaultGitActivationValidationScope,
+	): Promise<VaultGitActivationValidationResult>;
 }
 
 /** Canonical configured-vault identity resolved at one write-capable phase. */

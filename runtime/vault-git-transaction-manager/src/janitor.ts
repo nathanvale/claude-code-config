@@ -1,6 +1,7 @@
 import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitEngineResult } from "./engine.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitCheckerAdmissionRecord,
 	VaultGitDoctorFinding,
@@ -26,6 +27,7 @@ export type VaultGitJanitorPreflight =
 			readonly status: "refused";
 			readonly blocker: VaultGitBlockerId;
 			readonly doctor: VaultGitDoctorResult;
+			readonly activationRestriction?: VaultGitActivationRestriction;
 	  };
 
 /** One engine-owned hygiene transaction request. */
@@ -129,6 +131,8 @@ export interface VaultGitJanitorReport {
 	readonly blocker?: VaultGitBlockerId;
 	/** Mutation extent reported by the hygiene transaction engine, when one ran. */
 	readonly changedState?: VaultGitEngineResult["changedState"];
+	/** Cause-specific public activation refusal, when activation stopped writes. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 	/** Cooperative posture; read_only while a hygiene lease stays held. */
 	readonly vaultPosture: VaultGitHygieneVaultPosture;
 	/** Foreground work outside the vault remains eligible. */
@@ -235,7 +239,12 @@ export function createVaultGitJanitor(
 					trigger: policy.trigger,
 					...anomalies,
 					blocker: preflight.blocker,
-					nextAction: actionForBlocker(preflight.blocker),
+					...(preflight.activationRestriction
+						? {
+								activationRestriction: preflight.activationRestriction,
+								nextAction: actionForBlocker(preflight.blocker),
+							}
+						: { nextAction: actionForBlocker(preflight.blocker) }),
 				}));
 			}
 
@@ -638,6 +647,9 @@ function baseReport(
 		...(input.blocker ? { blocker: input.blocker } : {}),
 		...(input.changedState !== undefined
 			? { changedState: input.changedState }
+			: {}),
+		...(input.activationRestriction
+			? { activationRestriction: input.activationRestriction }
 			: {}),
 		vaultPosture: input.vaultPosture ?? "normal",
 		foregroundNonVaultWorkAllowed: true,

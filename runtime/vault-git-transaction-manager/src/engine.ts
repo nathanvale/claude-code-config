@@ -1,5 +1,10 @@
-import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
+import {
+	createVaultGitActivationRestriction,
+	VAULT_GIT_LEDGER_REF,
+	nextVaultGitReceipt,
+} from "./model.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitCheckerAdmissionRecord,
 	VaultGitEngineNextActionId,
@@ -14,6 +19,9 @@ import type {
 	VaultGitWritePermission,
 } from "./model.ts";
 import type {
+	VaultGitActivationValidationPort,
+	VaultGitActivationValidationResult,
+	VaultGitActivationValidationScope,
 	VaultGitAtomicCloseResult,
 	VaultGitCheckPort,
 	VaultGitOwnedPathContentHash,
@@ -62,6 +70,8 @@ export interface VaultGitTransactionEngineOptions {
 	readonly repositoryIdentity: string;
 	/** Injected vault-owned validation command. */
 	readonly check?: VaultGitCheckPort;
+	/** Live V2 activation revalidation before admission and fenced continuation. */
+	readonly activationAuthority: VaultGitActivationValidationPort;
 }
 
 /** Input for one transaction admission attempt. */
@@ -107,6 +117,11 @@ export interface VaultGitEngineNextAction {
 	readonly summary: string;
 }
 
+const LEGACY_ACTIVATION_NEXT_ACTION: VaultGitEngineNextAction = {
+	id: "request_operator_admission",
+	summary: "Ask an operator to admit runtime activation before canonical vault writes.",
+};
+
 /** Optional non-mutating transaction selector for one inspection pass. */
 export interface VaultGitInspectInput {
 	/**
@@ -137,6 +152,8 @@ export interface VaultGitEngineResult {
 	readonly transactionId?: string;
 	readonly receiptId?: string;
 	readonly diagnosticsReference?: string;
+	/** Cause-specific public activation refusal with one safe continuation. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 }
 
 /**
@@ -178,6 +195,7 @@ export interface VaultGitTransactionEngine {
 				readonly status: "refused";
 				readonly blocker: VaultGitBlockerId;
 				readonly doctor: VaultGitDoctorResult;
+				readonly activationRestriction?: VaultGitActivationRestriction;
 		  }
 	>;
 	/** Read checker admission through engine-owned private-state custody. */
@@ -222,41 +240,57 @@ export function createVaultGitTransactionEngine(
 	const doctorEngine = createVaultGitDoctor(options);
 	const repairEngine = createVaultGitRepair(options);
 
-	/** R34 activation gate: true only after an operator admitted this runtime. */
-	async function activationAdmitted(): Promise<boolean> {
+	/** R34 activation gate retaining the exact public refusal cause. */
+	async function activationRestriction(
+		scope: VaultGitActivationValidationScope = "admission",
+	): Promise<VaultGitActivationRestriction | null> {
+		let validation: VaultGitActivationValidationResult;
 		try {
-			return (await options.store.readActivation()) !== null;
+			validation = await options.activationAuthority.validate(scope);
 		} catch {
-			// A corrupt admission record fails closed: the runtime stays blocked.
-			return false;
+			validation = { status: "denied", reason: "revalidation_unavailable" };
 		}
+		if (validation.status === "admitted") return null;
+		return createVaultGitActivationRestriction({
+			stoppedAction: "vault_write",
+			cause:
+				validation.status === "revoked" ? "revoked" : validation.reason,
+		});
 	}
 
 	/** Shared write-command refusal until operator admission exists (R34). */
-	function activationRefusal(): VaultGitEngineResult {
-		return refusal(
+	function activationRefusal(
+		restriction: VaultGitActivationRestriction,
+	): VaultGitEngineResult {
+		return {
+			...refusal(
 			"absent",
 			"blocked",
 			"activation_blocked",
-			"request_operator_admission",
-			ACTIVATION_SUMMARY,
+			LEGACY_ACTIVATION_NEXT_ACTION.id,
+			LEGACY_ACTIVATION_NEXT_ACTION.summary,
 			"none",
-			"same_input_safe",
-		);
+			activationRetrySafety(restriction),
+			),
+			activationRestriction: restriction,
+		};
 	}
 
 	/** Read-only doctor surface for the un-admitted runtime. */
-	function activationDoctorResult(): VaultGitDoctorResult {
+	function activationDoctorResult(
+		restriction: VaultGitActivationRestriction,
+	): VaultGitDoctorResult {
 		return {
 			status: "diagnosed",
 			state: "absent",
 			phase: "blocked",
 			finding: "activation_missing",
 			changedState: "none",
-			retrySafety: "same_input_safe",
-			nextAction: { id: "request_operator_admission", summary: ACTIVATION_SUMMARY },
+			retrySafety: activationRetrySafety(restriction),
+			nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
 			diagnosticsReference: `doctor:${options.store.repositoryId}`,
 			blocker: "activation_blocked",
+			activationRestriction: restriction,
 		};
 	}
 
@@ -342,36 +376,38 @@ export function createVaultGitTransactionEngine(
 
 	const engine: VaultGitTransactionEngine = {
 		async doctor(input) {
-			if (!(await activationAdmitted())) return activationDoctorResult();
+			const restriction = await activationRestriction("continuation");
+			if (restriction) return activationDoctorResult(restriction);
 			return doctorEngine.diagnose(input);
 		},
 
 		async repair(input) {
-			if (!(await activationAdmitted())) {
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
 				return {
 					status: "refused",
 					action: input.action,
 					state: "absent",
 					phase: "blocked",
 					changedState: "none",
-					retrySafety: "same_input_safe",
-					nextAction: {
-						id: "request_operator_admission",
-						summary: ACTIVATION_SUMMARY,
-					},
+					retrySafety: activationRetrySafety(restriction),
+					nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
 					diagnosticsReference: `doctor:${options.store.repositoryId}`,
 					blocker: "activation_blocked",
+					activationRestriction: restriction,
 				};
 			}
 			return repairEngine.run(input);
 		},
 
 		async inspectJanitorPreflight(remote) {
-			if (!(await activationAdmitted())) {
+			const restriction = await activationRestriction();
+			if (restriction) {
 				return {
 					status: "refused",
 					blocker: "activation_blocked",
-					doctor: activationDoctorResult(),
+					doctor: activationDoctorResult(restriction),
+					activationRestriction: restriction,
 				};
 			}
 			const doctor = await doctorEngine.diagnose({ issueTakeoverToken: false });
@@ -554,7 +590,8 @@ export function createVaultGitTransactionEngine(
 
 		async begin(input) {
 			validateBegin(input);
-			if (!(await activationAdmitted())) return activationRefusal();
+			const restriction = await activationRestriction();
+			if (restriction) return activationRefusal(restriction);
 			if (input.offline) {
 				return refusal("absent", "blocked", "offline_mode", "capture_private_draft", "Keep the canonical vault read-only while offline.");
 			}
@@ -708,7 +745,8 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async join(input) {
-			if (!(await activationAdmitted())) return activationRefusal();
+			const restriction = await activationRestriction("continuation");
+			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one outer transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "join", input.capability);
@@ -747,7 +785,8 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async complete(input) {
-			if (!(await activationAdmitted())) return activationRefusal();
+			const restriction = await activationRestriction("continuation");
+			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
@@ -968,7 +1007,8 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async inspect(input = {}) {
-			if (!(await activationAdmitted())) {
+			const restriction = await activationRestriction("continuation");
+			if (restriction) {
 				// Read-only surface of the same blocker: status and the dashboard
 				// show activation_blocked without refusing the inspection itself.
 				return {
@@ -977,12 +1017,10 @@ export function createVaultGitTransactionEngine(
 					phase: "blocked",
 					writePermission: "denied",
 					changedState: "none",
-					retrySafety: "same_input_safe",
+					retrySafety: activationRetrySafety(restriction),
 					blocker: "activation_blocked",
-					nextAction: {
-						id: "request_operator_admission",
-						summary: ACTIVATION_SUMMARY,
-					},
+					nextAction: LEGACY_ACTIVATION_NEXT_ACTION,
+					activationRestriction: restriction,
 				};
 			}
 			const loaded = await loadReceipt();
@@ -1015,7 +1053,8 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async recordPhase(input) {
-			if (!(await activationAdmitted())) return activationRefusal();
+			const restriction = await activationRestriction("continuation");
+			if (restriction) return activationRefusal(restriction);
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) {
 				return loaded ?? refusal("human_required", "human_required", "transaction_mismatch", "inspect_status", "Inspect the active transaction before recording a phase.");
@@ -1055,9 +1094,13 @@ export function createVaultGitTransactionEngine(
 	return engine;
 }
 
-/** One shared operator-admission continuation summary (R34). */
-const ACTIVATION_SUMMARY =
-	"Ask an operator to admit runtime activation; the same input is safe after admission.";
+function activationRetrySafety(
+	restriction: VaultGitActivationRestriction,
+): VaultGitRetrySafety {
+	return restriction.cause.id === "admission_missing"
+		? "same_input_safe"
+		: "same_input_unsafe";
+}
 
 async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, transactionId: string, role: VaultGitCapabilityRole, capability: Uint8Array): Promise<VaultGitEngineResult | null> {
 	if (receipt.transactionId !== transactionId) return refusal("human_required", receipt.phase, "transaction_mismatch", "inspect_status", "Inspect the active transaction id.");

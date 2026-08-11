@@ -36,11 +36,16 @@ import {
 	createVaultGitCliComposition,
 } from "../src/cli.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
+import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
-import { admitActivationForTest } from "./activation-fixture.ts";
+import {
+	admitActivationForTest,
+	admittedActivationAuthorityForTest,
+} from "./activation-fixture.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cliPath = join(packageRoot, "src", "cli.ts");
+const cliPath = join(packageRoot, "tests", "process-cli.ts");
+const productionCliPath = join(packageRoot, "src", "cli.ts");
 const roots: string[] = [];
 let sharedFixture: Promise<Fixture> | undefined;
 
@@ -211,7 +216,7 @@ describe("vault-git catalog-driven process boundary", () => {
 					argv: [
 						"bun",
 						"run",
-						cliPath,
+						productionCliPath,
 						"begin",
 						"--event",
 						"note_created",
@@ -292,20 +297,7 @@ describe("vault-git catalog-driven process boundary", () => {
 
 	test("closes one admitted checker repair as exactly one hygiene commit", async () => {
 		const fixture = await createFixture({ checkerRepair: true });
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		const before = Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"]));
 		const result = await fixture.run(["janitor", "--json"]);
 		expect(result.exitCode).toBe(0);
@@ -342,6 +334,10 @@ describe("vault-git catalog-driven process boundary", () => {
 				outcome: "read_only",
 				blockers: ["activation_blocked"],
 				next_action: { id: "request_operator_admission" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+					next_action: { id: "review_prepared" },
+				},
 			},
 		});
 		const begun = await fixture.begin("notes/a.md");
@@ -354,6 +350,10 @@ describe("vault-git catalog-driven process boundary", () => {
 				changed_state: "none",
 				blockers: ["activation_blocked"],
 				next_action: { id: "request_operator_admission" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+					next_action: { id: "review_prepared" },
+				},
 			},
 		});
 		const before = Number(
@@ -364,7 +364,13 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(parseCliProcessJson(janitor)).toMatchObject({
 			status: "error",
 			error: { code: "activation_blocked" },
-			data: { blockers: ["activation_blocked"] },
+			data: {
+				blockers: ["activation_blocked"],
+				next_action: { id: "request_operator_admission" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+				},
+			},
 		});
 		expect(
 			Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
@@ -373,20 +379,7 @@ describe("vault-git catalog-driven process boundary", () => {
 
 	test("keeps an on-disk checker entrypoint change zero-commit as a checker_changed preview", async () => {
 		const fixture = await createFixture({ checkerRepair: true });
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		// Change the admitted entrypoint ON DISK after admission — committed and
 		// pushed so the tree stays clean and main stays aligned; only the
 		// fingerprint disagrees with the admitted record.
@@ -420,20 +413,7 @@ describe("vault-git catalog-driven process boundary", () => {
 		git(fixture.clone, ["add", "scripts/vault-check.ts"]);
 		git(fixture.clone, ["commit", "-m", "chore: emit an unregistered repair id"]);
 		git(fixture.clone, ["push", "origin", "main"]);
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		await assertJanitorZeroCommitPreview(fixture, "unknown_repair");
 	});
 
@@ -452,6 +432,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-foreground",
 				host: "host-foreground",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			const hygiene = await createVaultGitCliComposition({
 				repositoryPath: cloneB,
@@ -460,6 +441,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-hygiene",
 				host: "host-hygiene",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(foreground.store);
 			await admitActivationForTest(hygiene.store);
@@ -537,6 +519,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-hygiene",
 				host: "host-hygiene",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(hygiene.store);
 			const refused = await hygiene.engine.runHygieneTransaction({
@@ -573,6 +556,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-foreground",
 				host: "host-foreground",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(foreground.store);
 			const next = await foreground.engine.begin({
@@ -598,6 +582,23 @@ function ledgerTip(fixture: Fixture): string {
 	} catch {
 		return "absent";
 	}
+}
+
+/** Admit the fixture's current checker fingerprint into its derived state root. */
+async function admitCurrentChecker(fixture: Fixture): Promise<void> {
+	const store = createReceiptStore({
+		stateRoot: fixture.stateRoot,
+		repositoryIdentity: fixture.repositoryIdentity,
+	});
+	const checker = createVaultCheckerPort(
+		fixture.clone,
+		createNodeProcessPort(),
+	);
+	await store.admitChecker({
+		schemaVersion: 1,
+		...(await checker.fingerprint()),
+		admittedAt: "2026-08-09T00:00:00.000Z",
+	});
 }
 
 /**
@@ -751,6 +752,7 @@ interface Fixture {
 	readonly root: string;
 	readonly clone: string;
 	readonly stateRoot: string;
+	readonly repositoryIdentity: string;
 	readonly env: NodeJS.ProcessEnv;
 	run(args: readonly string[]): Promise<CliProcessResult>;
 	begin(path: string): Promise<CliProcessResult>;
@@ -845,12 +847,19 @@ async function createFixture(
 	git(clone, ["commit", "-m", "chore: initialize vault fixture"]);
 	git(clone, ["push", "-u", "origin", "main"]);
 	git(bare, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+	const repositoryIdentity = (
+		await resolveVaultRepositoryIdentity({
+			repositoryPath: clone,
+			process: createNodeProcessPort(),
+			timeoutMs: 5_000,
+		})
+	).identity;
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		VAULT_GIT_REPOSITORY_PATH: clone,
 		VAULT_GIT_CHECK_REPOSITORY_PATH: clone,
 		VAULT_GIT_STATE_ROOT: stateRoot,
-		VAULT_GIT_REPOSITORY_IDENTITY: "fixture-vault",
+		VAULT_GIT_REPOSITORY_IDENTITY: "ignored-fixture-override",
 		VAULT_GIT_ACTOR: "agent-a",
 		VAULT_GIT_HOST: "host-a",
 		VAULT_GIT_REMOTE: "origin",
@@ -884,7 +893,7 @@ async function createFixture(
 	};
 	const store = createReceiptStore({
 		stateRoot,
-		repositoryIdentity: "fixture-vault",
+		repositoryIdentity,
 	});
 	if (options.admitActivation !== false) await admitActivationForTest(store);
 	const launchWithRole = async (
@@ -969,6 +978,7 @@ async function createFixture(
 		root,
 		clone,
 		stateRoot,
+		repositoryIdentity,
 		env,
 		run,
 		begin,

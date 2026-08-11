@@ -1,5 +1,6 @@
 import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitEngineNextActionId,
 	VaultGitReceipt,
@@ -72,6 +73,8 @@ export interface VaultGitRepairResult {
 	readonly diagnosticsReference: string;
 	/** Stable refusal reason when no action completed. */
 	readonly blocker?: VaultGitBlockerId;
+	/** Cause-specific public activation refusal, when activation stopped writes. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 }
 
 /** Named deterministic repair executor. */
