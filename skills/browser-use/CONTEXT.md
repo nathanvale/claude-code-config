@@ -86,6 +86,10 @@ _Avoid_: task type guess, adapter name, freeform intent string, capability claim
 Within `browser-use`, the native tool surface selected after browser-connect returns a Verified Handoff Envelope. The Browser Adapter owns target discovery, tab and session continuity, navigation, actions, snapshots, screenshots, evaluation, debug output, and adapter-specific recovery. The LLM reads and invokes that native surface; Browser Use does not translate it. Browser Adapters do not own authenticated browser state, browser entry, policy, authority, or durable browser knowledge, and they never find Chrome themselves. The canonical environment-agnostic definition is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
 _Avoid_: Browser Use executor, command mapping, cold adapter, isolated adapter, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter
 
+**Adapter Session Lease**:
+The per-run lifetime owner for one agent-browser daemon session, keyed by the derived name `browser-use-<runId>`. It releases the session at each lane's terminal seam through the browser-connect registry `releaseSession` mechanic.
+_Avoid_: browser authentication access lease, credential lease, env/profile run lease, leaseKeyForRun
+
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure. It is the failure-direction mirror of browser-connect's success-direction **Verified Handoff Envelope** (a proven connection handed forward to a consumer): the Browser Entry Handoff hands an *unready* state back; the Verified Handoff Envelope hands a *proven* connection forward. Both names live; do not conflate them.
 _Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure, self-repair, direct browser launch, adapter fallback, operator stop

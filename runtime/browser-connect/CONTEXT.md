@@ -57,6 +57,18 @@ lane; browser-connect injects the verified endpoint into `attach --cdp=<http>
 _Avoid example_: "Let playwright-cli pick a browser channel and connect
 itself."
 
+**Adapter Session Release**:
+The per-adapter `releaseSession` member of the AdapterDefinition registry.
+Agent-browser closes its named session without `--cdp` and verifies absence
+with a bounded inventory re-read; playwright-cdp detaches its named session.
+Browser Connect owns the argv. Consumers resolve the mechanic by adapter id
+and never encode close or detach themselves.
+_Avoid_: loose release export, browser-use-owned release argv, universal close
+command, broad session sweep
+_Developer example_: "Resolve `releaseSession` for `agent-browser` from the
+registry and release only the run-owned session name."
+_Avoid example_: "Build `agent-browser close` argv inside Browser Use."
+
 **Verified Handoff Envelope**:
 The success-direction result: a proven connection handed to a consumer. It
 carries the verified endpoint evidence from the environment proof plus the
