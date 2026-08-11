@@ -48,4 +48,23 @@ export async function generateOpenApiBaseline(fetcher: typeof fetch = fetch, out
 	};
 }
 
-if (import.meta.main) console.log(JSON.stringify(await generateOpenApiBaseline()));
+/** Run the generator front door with a structured success or failure envelope. */
+export async function runGeneratorCli(
+	generate: () => Promise<Record<string, unknown>> = () => generateOpenApiBaseline(),
+	write: (text: string) => void = console.log,
+): Promise<number> {
+	try {
+		write(JSON.stringify(await generate()));
+		return 0;
+	} catch (error) {
+		write(JSON.stringify({
+			status: "error",
+			changed_state: "none",
+			message: error instanceof Error ? error.message : String(error),
+			next_safe_action: "Check network access to the Bitbucket OpenAPI URL, then rerun the generator.",
+		}));
+		return 1;
+	}
+}
+
+if (import.meta.main) process.exitCode = await runGeneratorCli();

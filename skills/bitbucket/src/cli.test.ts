@@ -244,6 +244,36 @@ describe("bb command surface", () => {
 		expect(first.issue_draft?.dedupe_key).toBe(second.issue_draft?.dedupe_key);
 	});
 
+	test("distinguishes contract metadata changes in breaking drift dedupe keys", () => {
+		const baseline = buildOpenApiBaseline(openApiFixture);
+		const swaggerChange = analyzeOpenApiDrift({ ...openApiFixture, swagger: "3.0" }, baseline);
+		const basePathChange = analyzeOpenApiDrift({ ...openApiFixture, basePath: "/3.0" }, baseline);
+		expect(swaggerChange.issue_draft?.dedupe_key).not.toBe(basePathChange.issue_draft?.dedupe_key);
+	});
+
+	test("builds semantic schema digests when an upstream value is undefined", () => {
+		const baseline = buildOpenApiBaseline({
+			swagger: "2.0",
+			basePath: "/2.0",
+			paths: { "/x": { get: { responses: { "200": { schema: undefined } } } } },
+		});
+		expect(baseline.operations["GET /x"]).toEqual({
+			parameters: [],
+			responses: { "200": { schema: { semantic_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } },
+		});
+	});
+
+	test("neutralizes upstream backticks in issue-draft code spans", () => {
+		const baseline = buildOpenApiBaseline({
+			swagger: "2.0",
+			basePath: "/2.0",
+			paths: { "/unsafe`heading": { get: { responses: { "200": {} } } } },
+		});
+		const result = analyzeOpenApiDrift({ swagger: "2.0", basePath: "/2.0", paths: {} }, baseline);
+		expect(result.issue_draft?.body).toContain("- `GET /unsafe'heading`");
+		expect(result.issue_draft?.body).not.toContain("- `GET /unsafe`heading`");
+	});
+
 	test("detects Atlassian auth-scope drift", () => {
 		const baseline = buildOpenApiBaseline(openApiFixture);
 		const live = structuredClone(openApiFixture);
@@ -557,6 +587,17 @@ describe("bb command surface", () => {
 		expect(result.data.truncated).toBe(true);
 		expect(result.data.content).toHaveLength(1000);
 		expect(result.data.original_characters).toBe(1500);
+	});
+
+	test("rejects invalid max-chars before executing a generic write", async () => {
+		let calls = 0;
+		const run = harness(async () => {
+			calls += 1;
+			return Response.json({ ok: true });
+		});
+		expect(await runCli(["api", "/x", "--method", "POST", "--max-chars", "999", "--execute"], run.dependencies)).toBe(2);
+		expect(JSON.parse(run.stderr[0]).error.code).toBe("usage_error");
+		expect(calls).toBe(0);
 	});
 
 	test("rejects unknown flags before auth or network work", async () => {

@@ -291,6 +291,9 @@ async function executeCommand(
 	authHeader: string,
 	dependencies: CliDependencies,
 ): Promise<CommandResult> {
+	const maximumCharacters = input.command.name === "diff" || input.command.name === "api"
+		? boundedInteger(stringFlag(input.flags, "--max-chars") ?? "50000", "max chars", 1000, 500000)
+		: undefined;
 	const request = buildRequest(input, repository);
 	const effect = resolveEffect(input);
 	const execute = input.flags.has("--execute");
@@ -306,8 +309,7 @@ async function executeCommand(
 
 	let data = await callApi(request, authHeader, dependencies.fetcher, effect);
 	data = redactSensitiveValues(data);
-	if ((input.command.name === "diff" || input.command.name === "api") && typeof data === "string") {
-		const maximumCharacters = boundedInteger(stringFlag(input.flags, "--max-chars") ?? "50000", "max chars", 1000, 500000);
+	if (maximumCharacters !== undefined && typeof data === "string") {
 		data = {
 			format: input.command.name === "diff" ? "diff" : "text",
 			content: data.slice(0, maximumCharacters),
@@ -365,12 +367,10 @@ function buildGenericApiRequest(input: ParsedInput): ApiRequest {
 		contentType ??= "text/plain";
 	} else if (bodyFile) {
 		if (!existsSync(bodyFile)) throw usage(`Body file does not exist: ${bodyFile}`);
-		const file = Bun.file(bodyFile);
 		const bytes = readFileSync(bodyFile);
-		const digest = createHash("sha256").update(bytes).digest("hex");
 		body = bytes;
-		previewBody = { source: "file", path: bodyFile, bytes: file.size };
-		contentType ??= file.type || "application/octet-stream";
+		previewBody = { source: "file", path: bodyFile, bytes: bytes.byteLength };
+		contentType ??= Bun.file(bodyFile).type || "application/octet-stream";
 	}
 	const approvedDigest = stringFlag(input.flags, "--body-sha256");
 	if (body === undefined && approvedDigest) throw usage("--body-sha256 is valid only when a request body is present.");

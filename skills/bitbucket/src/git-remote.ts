@@ -34,12 +34,35 @@ export async function resolveRepository(options: {
 	if (exitCode !== 0) throw new Error("No readable Git remotes. Pass --workspace and --repo.");
 
 	for (const line of output.split("\n")) {
-		const url = line.trim().split(/\s+/)[1];
-		if (!url || !url.includes("bitbucket.org")) continue;
-		const match = url.match(/bitbucket\.org(?::|\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
-		if (match) return validateRepository({ workspace: match[1], repo: match[2] });
+		const remote = line.trim().split(/\s+/)[1];
+		if (!remote) continue;
+		const repository = parseBitbucketRemote(remote);
+		if (repository) return validateRepository(repository);
 	}
 	throw new Error("No Bitbucket Cloud remote found. Pass --workspace and --repo.");
+}
+
+function parseBitbucketRemote(remote: string): BitbucketRepository | undefined {
+	const ssh = remote.match(/^git@([^:]+):([^/]+)\/([^/]+)$/);
+	if (ssh) {
+		if (ssh[1].toLowerCase() !== "bitbucket.org") return undefined;
+		return { workspace: ssh[2], repo: stripGitSuffix(ssh[3]) };
+	}
+
+	let url: URL;
+	try {
+		url = new URL(remote);
+	} catch {
+		return undefined;
+	}
+	if ((url.protocol !== "https:" && url.protocol !== "ssh:") || url.hostname.toLowerCase() !== "bitbucket.org") return undefined;
+	const path = url.pathname.split("/").filter(Boolean);
+	if (path.length !== 2) return undefined;
+	return { workspace: path[0], repo: stripGitSuffix(path[1]) };
+}
+
+function stripGitSuffix(repo: string): string {
+	return repo.endsWith(".git") ? repo.slice(0, -4) : repo;
 }
 
 function validateRepository(repository: BitbucketRepository): BitbucketRepository {

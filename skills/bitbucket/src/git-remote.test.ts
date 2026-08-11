@@ -36,6 +36,29 @@ describe("resolveRepository", () => {
 		expect(await resolveRepository({ environment: {}, cwd: temporaryDirectory })).toEqual({ workspace: "esol-monash", repo: "experience-sdk" });
 	});
 
+	test("detects an HTTPS Bitbucket remote", async () => {
+		execFileSync("git", ["init", "--quiet"], { cwd: temporaryDirectory });
+		execFileSync("git", ["remote", "add", "origin", "https://bitbucket.org/esol-monash/experience-sdk.git"], { cwd: temporaryDirectory });
+		expect(await resolveRepository({ environment: {}, cwd: temporaryDirectory })).toEqual({ workspace: "esol-monash", repo: "experience-sdk" });
+	});
+
+	test("detects an ssh URL Bitbucket remote", async () => {
+		execFileSync("git", ["init", "--quiet"], { cwd: temporaryDirectory });
+		execFileSync("git", ["remote", "add", "origin", "ssh://git@bitbucket.org/esol-monash/experience-sdk.git"], { cwd: temporaryDirectory });
+		expect(await resolveRepository({ environment: {}, cwd: temporaryDirectory })).toEqual({ workspace: "esol-monash", repo: "experience-sdk" });
+	});
+
+	test.each([
+		"https://evil-bitbucket.org/esol-monash/experience-sdk.git",
+		"https://bitbucket.org.evil.example/esol-monash/experience-sdk.git",
+		"ssh://git@evil-bitbucket.org/esol-monash/experience-sdk.git",
+		"git@evil-bitbucket.org:esol-monash/experience-sdk.git",
+	])("rejects a Bitbucket lookalike host: %s", async (remote) => {
+		execFileSync("git", ["init", "--quiet"], { cwd: temporaryDirectory });
+		execFileSync("git", ["remote", "add", "origin", remote], { cwd: temporaryDirectory });
+		await expect(resolveRepository({ environment: {}, cwd: temporaryDirectory })).rejects.toThrow("No Bitbucket Cloud remote found");
+	});
+
 	test("rejects unsafe environment coordinates", async () => {
 		await expect(resolveRepository({
 			environment: { BB_WORKSPACE: "../escape", BB_REPO_SLUG: "repo" },

@@ -452,6 +452,7 @@ function digestBaseline(value: OpenApiBaseline): string {
 }
 
 function stableStringify(value: unknown): string {
+	if (value === undefined) return "undefined";
 	if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
 	if (!value || typeof value !== "object") return JSON.stringify(value);
 	return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`).join(",")}}`;
@@ -461,7 +462,12 @@ function breakingFingerprint(drift: Omit<OpenApiDrift, "totals" | "truncated">, 
 	const changedOperations = Object.fromEntries(drift.changed_operations.map((key) => [key, { before: baseline.operations[key], after: live.operations[key] }]));
 	const baselineComponents = flattenComponents(baseline);
 	const liveComponents = flattenComponents(live);
-	const changedComponents = Object.fromEntries(drift.changed_components.map((key) => [key, { before: baselineComponents[key], after: liveComponents[key] }]));
+	const changedComponents = Object.fromEntries(drift.changed_components.map((key) => [key, key === "contract_metadata"
+		? {
+			before: { swagger: baseline.swagger, base_path: baseline.base_path },
+			after: { swagger: live.swagger, base_path: live.base_path },
+		}
+		: { before: baselineComponents[key], after: liveComponents[key] }]));
 	return createHash("sha256").update(stableStringify({
 		removed_operations: Object.fromEntries(drift.removed_operations.map((key) => [key, baseline.operations[key]])),
 		changed_operations: changedOperations,
@@ -495,7 +501,7 @@ function renderIssueSection(title: string, entries: string[], total: number): st
 	const bounded = entries.slice(0, 20);
 	return [
 		`## ${title}`,
-		...bounded.map((entry) => `- \`${entry}\``),
+		...bounded.map((entry) => `- \`${entry.replaceAll("`", "'")}\``),
 		...(total > bounded.length ? [`- ${total - bounded.length} more omitted from this draft`] : []),
 		"",
 	];
