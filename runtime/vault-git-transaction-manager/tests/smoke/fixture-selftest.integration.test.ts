@@ -98,4 +98,23 @@ describe("smoke fixture primitives", () => {
 			true,
 		);
 	});
+
+	test("cleanup kills a prepared subprocess before removing its fixture", async () => {
+		const fixture = await mkSmokeFixture();
+		const prepared = await fixture.prepareAtInterrupt(
+			[
+				"begin",
+				"--event",
+				"note_created",
+				"--path",
+				"notes/event.md",
+				"--json",
+			],
+			"before_remote_cas",
+		);
+
+		expect(() => process.kill(prepared.pid, 0)).not.toThrow();
+		await cleanupSmokeFixtures();
+		expect(() => process.kill(prepared.pid, 0)).toThrow();
+	});
 });
