@@ -225,6 +225,13 @@ async function fileBinding(path: string): Promise<IdentityFileBinding> {
 async function resolvePrivateStateBinding(
 	stateRoot: string,
 ): Promise<readonly string[]> {
+	// lstat the configured path BEFORE realpath: realpath resolves every symlink,
+	// so lstat on the resolved path can never observe one. A symlinked state root
+	// must be refused, not silently bound to the link target's inode.
+	const link = await lstat(stateRoot, { bigint: true });
+	if (link.isSymbolicLink()) {
+		throw new Error("activation identity configuration invalid");
+	}
 	const canonical = await realpath(stateRoot);
 	const metadata = await lstat(canonical, { bigint: true });
 	if (!metadata.isDirectory() || metadata.isSymbolicLink()) {

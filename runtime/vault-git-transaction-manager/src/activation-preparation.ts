@@ -3,6 +3,7 @@ import { isAbsolute, join } from "node:path";
 
 import {
 	createVaultGitPreparedEvidence,
+	GIT_OBJECT_ID,
 	projectVaultGitPreparedActivationResult,
 	VAULT_GIT_ABSENT_LEDGER_GENERATION,
 	type VaultGitPreparedActivationResultV1,
@@ -576,7 +577,7 @@ async function runGit(
 
 function objectId(value: string): string {
 	const candidate = value.trim();
-	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(candidate)) {
+	if (!GIT_OBJECT_ID.test(candidate)) {
 		throw new PreparationFailure("refused", "remote_unavailable");
 	}
 	return candidate;

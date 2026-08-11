@@ -134,6 +134,23 @@ describe("activation result contract", () => {
 		}
 	});
 
+	test("sanitizes clock-skewed evidence to invalidated instead of throwing", () => {
+		const evidence = createVaultGitPreparedEvidence(
+			preparedInput({ capturedAt: "2026-08-11T00:05:00.000Z" }),
+		);
+
+		// Observer clock one second behind the preparer: capturedAt is ahead of
+		// now. This must fail closed for the read surface, not crash it.
+		expect(
+			evaluateVaultGitPreparedEvidence(evidence, "2026-08-11T00:04:59.000Z"),
+		).toMatchObject({
+			status: "invalidated",
+			authority: "none",
+			write_permission: "denied",
+			next_action: { id: "prepare_fresh" },
+		});
+	});
+
 	test("projects fresh evidence as reviewable and explicitly non-authoritative", () => {
 		const evidence = createVaultGitPreparedEvidence(preparedInput());
 		const result = projectVaultGitPreparedActivationResult(

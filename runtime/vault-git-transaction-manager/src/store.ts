@@ -17,6 +17,7 @@ import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 
 import {
+	EVIDENCE_ID,
 	parseVaultGitPreparedEvidence,
 	type VaultGitPreparedEvidenceV2,
 } from "./activation-contract.ts";
@@ -1268,7 +1269,7 @@ function validateActivationRecord(
 		]) ||
 		value.schemaVersion !== 2 ||
 		typeof value.evidenceId !== "string" ||
-		!/^vault-git:prepared:v2:[0-9a-f]{64}$/.test(value.evidenceId) ||
+		!EVIDENCE_ID.test(value.evidenceId) ||
 		!isIso(value.admittedAt) ||
 		!isOneLine(value.note) ||
 		(value.note as string).length > 500
@@ -1396,10 +1397,7 @@ function activationMarkerTime(record: object): number {
 }
 
 function isPreparedEvidenceId(value: unknown): value is string {
-	return (
-		typeof value === "string" &&
-		/^vault-git:prepared:v2:[0-9a-f]{64}$/.test(value)
-	);
+	return typeof value === "string" && EVIDENCE_ID.test(value);
 }
 
 function validateCheckerAdmission(
@@ -1684,7 +1682,7 @@ function isOwnedPath(value: unknown): value is string {
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
 function isReceiptId(value: unknown): value is string { return typeof value === "string" && /^receipt_[0-9a-f]{32}$/.test(value); }
 function isTransactionId(value: unknown): value is string { return typeof value === "string" && /^txn_[0-9a-f]{32}$/.test(value); }
-function isObjectId(value: unknown): value is string { return typeof value === "string" && /^[0-9a-f]{40,64}$/.test(value); }
+function isObjectId(value: unknown): value is string { return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value); }
 function isNullableObjectId(value: unknown): boolean { return value === null || isObjectId(value); }
 function isIso(value: unknown): value is string { return typeof value === "string" && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value; }
 function isOneLine(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && !/[\r\n\0]/.test(value); }

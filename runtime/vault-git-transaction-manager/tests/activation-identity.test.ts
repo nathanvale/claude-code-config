@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -82,6 +82,21 @@ describe("owner-controlled activation identities", () => {
 		await expect(
 			resolveVaultGitActivationIdentities(fixture.options),
 		).rejects.toThrow("activation remote identity is ambiguous");
+	});
+
+	test("refuses a private state root that is itself a symlink", async () => {
+		const fixture = await identityFixture();
+		const target = join(fixture.root, "real-state");
+		const linkedStateRoot = join(fixture.root, "linked-state");
+		await mkdir(target);
+		await symlink(target, linkedStateRoot);
+
+		await expect(
+			resolveVaultGitActivationIdentities({
+				...fixture.options,
+				stateRoot: linkedStateRoot,
+			}),
+		).rejects.toThrow("activation identity configuration invalid");
 	});
 
 	test("resolves one exact fail-closed SSH execution environment", async () => {

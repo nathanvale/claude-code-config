@@ -19,9 +19,11 @@ export const VAULT_GIT_ABSENT_LEDGER_GENERATION = "0".repeat(40);
 
 const PREPARED_EVIDENCE_DIGEST_DOMAIN = "vault-git.prepared-evidence.v2";
 const OPAQUE_IDENTITY = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*:v[1-9]\d*:[0-9a-f]{64}$/;
-const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** Exact git object-id shape: 40-hex sha1 or 64-hex sha256, nothing between. */
+export const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const EVIDENCE_ID = /^vault-git:prepared:v2:[0-9a-f]{64}$/;
+/** Prepared-evidence identifier shape shared by the store validators. */
+export const EVIDENCE_ID = /^vault-git:prepared:v2:[0-9a-f]{64}$/;
 
 /** Exact pinned checker closure captured by one preparation. */
 export interface VaultGitPreparedCheckerClosure {
@@ -183,7 +185,14 @@ export function evaluateVaultGitPreparedEvidence(
 			now,
 		);
 	} catch (error) {
-		if (!(error instanceof Error) || error.message === "activation result time invalid") {
+		// Sanitize the expected validation failures for untrusted or clock-skewed
+		// input into an invalidated result; propagate anything unexpected. A
+		// capturedAt ahead of the observer must fail closed, not crash the reader.
+		if (
+			!(error instanceof Error) ||
+			(error.message !== "prepared evidence invalid" &&
+				error.message !== "activation result time invalid")
+		) {
 			throw error;
 		}
 		return invalidPreparedEvidenceResult();
