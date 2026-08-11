@@ -17,14 +17,25 @@ export function agentBrowserReleaseResult(
 	input: AdapterCommandInput,
 ): AdapterCommandResult | undefined {
 	if (input.command !== expectedCommand) return undefined;
-	if (input.args.includes("close")) {
+	if (
+		input.args.length === 4 &&
+		input.args[0] === "--session" &&
+		input.args[1] !== "" &&
+		input.args[2] === "close" &&
+		input.args[3] === "--json"
+	) {
 		return {
 			exitCode: 0,
 			stdout: JSON.stringify({ success: true }),
 			stderr: "",
 		};
 	}
-	if (input.args.includes("list")) {
+	if (
+		input.args.length === 3 &&
+		input.args[0] === "session" &&
+		input.args[1] === "list" &&
+		input.args[2] === "--json"
+	) {
 		return {
 			exitCode: 0,
 			stdout: JSON.stringify({ success: true, data: { sessions: [] } }),
