@@ -4,7 +4,10 @@ import {
 	type VaultGitPreparedEvidenceV2,
 } from "../src/activation-contract.ts";
 import type { VaultGitReceiptStore } from "../src/store.ts";
-import type { VaultGitActivationAuthority } from "../src/activation-authority.ts";
+import type {
+	VaultGitActivationAuthority,
+	VaultGitLiveActivationBindings,
+} from "../src/activation-authority.ts";
 
 const identity = (owner: string, byte: string): string =>
 	`${owner}:v1:${byte.repeat(64)}`;
@@ -71,6 +74,26 @@ export function preparedEvidenceForTest(
 	overrides: Partial<VaultGitPreparedEvidenceInput> = {},
 ): VaultGitPreparedEvidenceV2 {
 	return createVaultGitPreparedEvidence(preparedEvidenceInputForTest(overrides));
+}
+
+/** Exact live binding projection for activation tests. */
+export function liveActivationBindingsForTest(
+	evidence: VaultGitPreparedEvidenceV2,
+): VaultGitLiveActivationBindings {
+	return {
+		repositoryIdentity: evidence.repositoryIdentity,
+		remoteIdentity: evidence.remoteIdentity,
+		hostIdentity: evidence.hostIdentity,
+		runtimeIdentity: evidence.runtimeIdentity,
+		executableIdentity: evidence.executableIdentity,
+		privateStateIdentity: evidence.privateStateIdentity,
+		localMainHead: evidence.localMainHead,
+		remoteMainHead: evidence.remoteMainHead,
+		ledgerGeneration: evidence.ledgerGeneration,
+		gitIdentity: evidence.gitIdentity,
+		sshIdentity: evidence.sshIdentity,
+		checkerClosure: evidence.checkerClosure,
+	};
 }
 
 /**

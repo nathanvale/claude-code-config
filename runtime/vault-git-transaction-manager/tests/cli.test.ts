@@ -9,6 +9,7 @@ import {
 	runVaultGitForTest,
 	type VaultGitCliComposition,
 } from "../src/cli.ts";
+import type { VaultGitActivationFrontDoor } from "../src/activation-front-door.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { createVaultGitActivationRestriction } from "../src/activation-restriction.ts";
 import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
@@ -30,6 +31,8 @@ import {
 import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
 
 const tempDirectories = createTempDirectoryFixture();
+const ACTIVATION_EVIDENCE_REFERENCE =
+	`vault-git:prepared:v2:${"f".repeat(64)}`;
 
 afterEach(tempDirectories.cleanup);
 
@@ -237,6 +240,165 @@ describe("vault-git CLI composition", () => {
 		expect(text.stderr).toContain("cause: revoked | A human revoked this activation evidence.");
 		expect(text.stderr).toContain("next: prepare_fresh | Prepare fresh V2 evidence");
 		expect(text.stderr).not.toContain("request_operator_admission");
+	});
+
+	test("routes activation inspect and prepare through the V2 public result", async () => {
+		const frontDoor = fakeActivationFrontDoor();
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			activationFrontDoor: frontDoor,
+		};
+
+		const inspected = await runVaultGitForTest(["activation", "--json"], {
+			composition,
+		});
+		const prepared = await runVaultGitForTest(
+			["activation", "prepare", "--no-input", "--json"],
+			{ composition },
+		);
+
+		for (const run of [inspected, prepared]) {
+			expect(run.exitCode).toBe(0);
+			expect(run.stderr).toBe("");
+			expect(JSON.parse(run.stdout)).toMatchObject({
+				status: "ok",
+				data: {
+					contract_id: "vault-git.activation-result",
+					schema_version: "2",
+					status: "prepared",
+					authority: "evidence_only",
+					write_permission: "denied",
+					changed_state: "none",
+					next_action: { id: "review_prepared" },
+				},
+				continuation: { next_action_id: "review_prepared" },
+			});
+		}
+
+		const plain = await runVaultGitForTest(["activation"], { composition });
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stderr).toBe("");
+		expect(plain.stdout).toContain("status: prepared");
+		expect(plain.stdout).toContain("write_permission: denied");
+		expect(plain.stdout).toContain("next: review_prepared");
+	});
+
+	test("keeps review non-agent-callable and passes only a confirmed human choice", async () => {
+		const decisions: string[] = [];
+		const frontDoor = fakeActivationFrontDoor({
+			async review(request) {
+				decisions.push(request.decision);
+				return activatedResult();
+			},
+		});
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			activationFrontDoor: frontDoor,
+		};
+		const argv = [
+			"activation",
+			"review",
+			ACTIVATION_EVIDENCE_REFERENCE,
+			"--json",
+		] as const;
+
+		const nonInteractive = await runVaultGitForTest(argv, { composition });
+		expect(nonInteractive.exitCode).toBe(1);
+		expect(JSON.parse(nonInteractive.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "human_capability_required", retryable: false },
+			data: {
+				contract_id: "vault-git.activation-result",
+				status: "restricted",
+				cause: { id: "human_capability_required" },
+				changed_state: "none",
+				next_action: { id: "return_to_human_review" },
+			},
+		});
+		expect(decisions).toEqual([]);
+
+		const noInput = await runVaultGitForTest([...argv, "--no-input"], {
+			composition,
+			humanActivationReview: {
+				isInteractive: () => true,
+				async decide() {
+					decisions.push("unexpected-human-review");
+					return "activate";
+				},
+			},
+		});
+		expect(noInput.exitCode).toBe(1);
+		expect(JSON.parse(noInput.stdout).error.code).toBe(
+			"human_capability_required",
+		);
+		expect(decisions).toEqual([]);
+
+		const confirmed = await runVaultGitForTest(argv, {
+			composition,
+			humanActivationReview: {
+				isInteractive: () => true,
+				async decide() {
+					return "activate";
+				},
+			},
+		});
+		expect(confirmed.exitCode).toBe(0);
+		expect(JSON.parse(confirmed.stdout).data).toMatchObject({
+			status: "activated",
+			authority: "human_admission",
+			changed_state: "local",
+		});
+		expect(decisions).toEqual(["activate"]);
+	});
+
+	test("routes explicit Defer and Revoke only after matching human confirmation", async () => {
+		const calls: string[] = [];
+		const frontDoor = fakeActivationFrontDoor({
+			async review(request) {
+				calls.push(request.decision);
+				return {
+					...preparedActivationResult(),
+					status: "deferred",
+				};
+			},
+			async revoke() {
+				calls.push("revoke");
+				return {
+					...preparedActivationResult(),
+					status: "revoked",
+					authority: "none",
+					changed_state: "local",
+					next_action: {
+						id: "prepare_fresh",
+						summary: "Prepare fresh evidence before later review.",
+					},
+				};
+			},
+		});
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			activationFrontDoor: frontDoor,
+		};
+		const choices = ["defer", "revoke"] as const;
+		for (const choice of choices) {
+			const run = await runVaultGitForTest(
+				["activation", choice, ACTIVATION_EVIDENCE_REFERENCE, "--json"],
+				{
+					composition,
+					humanActivationReview: {
+						isInteractive: () => true,
+						async decide() {
+							return choice;
+						},
+					},
+				},
+			);
+			expect(run.exitCode).toBe(0);
+			expect(JSON.parse(run.stdout).data.status).toBe(
+				choice === "defer" ? "deferred" : "revoked",
+			);
+		}
+		expect(calls).toEqual(["defer", "revoke"]);
 	});
 
 	test("keeps the configured dashboard read-only with one continuation", async () => {
@@ -604,6 +766,75 @@ function fakeComposition(
 		remote: "origin",
 		leaseDurationMs: 60_000,
 		privateEntrypointPath: import.meta.path,
+	};
+}
+
+function fakeActivationFrontDoor(
+	overrides: Partial<VaultGitActivationFrontDoor> = {},
+): VaultGitActivationFrontDoor {
+	return {
+		async inspect() {
+			return preparedActivationResult();
+		},
+		async prepare() {
+			return preparedActivationResult();
+		},
+		async review() {
+			return activatedResult();
+		},
+		async revoke() {
+			return {
+				...preparedActivationResult(),
+				status: "revoked",
+				authority: "none",
+				changed_state: "local",
+				next_action: {
+					id: "prepare_fresh",
+					summary: "Prepare fresh evidence before later review.",
+				},
+			};
+		},
+		async validate() {
+			return {
+				status: "admitted",
+				evidenceId: ACTIVATION_EVIDENCE_REFERENCE,
+			};
+		},
+		...overrides,
+	};
+}
+
+function preparedActivationResult() {
+	return {
+		contract_id: "vault-git.activation-result" as const,
+		schema_version: "2" as const,
+		status: "prepared" as const,
+		authority: "evidence_only" as const,
+		write_permission: "denied" as const,
+		changed_state: "none" as const,
+		evidence_reference: ACTIVATION_EVIDENCE_REFERENCE,
+		captured_at: "2026-08-12T00:00:00.000Z",
+		display_fresh_until: "2026-08-12T00:10:00.000Z",
+		next_action: {
+			id: "review_prepared" as const,
+			summary: "Review the prepared evidence without granting write permission.",
+		},
+	};
+}
+
+function activatedResult() {
+	return {
+		contract_id: "vault-git.activation-result" as const,
+		schema_version: "2" as const,
+		status: "activated" as const,
+		authority: "human_admission" as const,
+		write_permission: "denied" as const,
+		changed_state: "local" as const,
+		evidence_reference: ACTIVATION_EVIDENCE_REFERENCE,
+		next_action: {
+			id: "begin_transaction" as const,
+			summary: "Begin one fenced transaction.",
+		},
 	};
 }
 

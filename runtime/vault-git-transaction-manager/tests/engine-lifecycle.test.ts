@@ -6,7 +6,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
 	createVaultGitActivationAuthority,
-	type VaultGitLiveActivationBindings,
 } from "../src/activation-authority.ts";
 import {
 	createVaultGitTransactionEngine,
@@ -15,6 +14,7 @@ import {
 import {
 	admitActivationForTest,
 	admittedActivationAuthorityForTest,
+	liveActivationBindingsForTest,
 	persistedActivationAuthorityForTest,
 	preparedEvidenceForTest,
 } from "./activation-fixture.ts";
@@ -1186,7 +1186,7 @@ describe("transaction engine lifecycle", () => {
 			repositoryIdentity: "canonical-vault",
 		});
 		await store.publishPreparedEvidence(evidence);
-		let live: VaultGitLiveActivationBindings = activationBindings(evidence);
+		let live = liveActivationBindingsForTest(evidence);
 		const humanCapability = new Uint8Array([9, 1]);
 		const authority = createVaultGitActivationAuthority({
 			store,
@@ -1263,25 +1263,6 @@ describe("transaction engine lifecycle", () => {
 		expect(scopes).toEqual(Array(8).fill("continuation"));
 	});
 });
-
-function activationBindings(
-	evidence: ReturnType<typeof preparedEvidenceForTest>,
-): VaultGitLiveActivationBindings {
-	return {
-		repositoryIdentity: evidence.repositoryIdentity,
-		remoteIdentity: evidence.remoteIdentity,
-		hostIdentity: evidence.hostIdentity,
-		runtimeIdentity: evidence.runtimeIdentity,
-		executableIdentity: evidence.executableIdentity,
-		privateStateIdentity: evidence.privateStateIdentity,
-		localMainHead: evidence.localMainHead,
-		remoteMainHead: evidence.remoteMainHead,
-		ledgerGeneration: evidence.ledgerGeneration,
-		gitIdentity: evidence.gitIdentity,
-		sshIdentity: evidence.sshIdentity,
-		checkerClosure: evidence.checkerClosure,
-	};
-}
 
 async function engineFixture(interruptAt?: string, options: {
 	admitActivation?: boolean;

@@ -5,6 +5,7 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
 
 import {
 	type CliWriter,
@@ -66,11 +67,20 @@ import {
 	type VaultGitActivationAuthority,
 } from "./activation-authority.ts";
 import {
+	createVaultGitActivationFrontDoor,
+	type VaultGitActivationFrontDoor,
+	type VaultGitActivationFrontDoorResult,
+} from "./activation-front-door.ts";
+import {
 	resolveVaultGitActivationIdentities,
 	resolveVaultGitSshTransportEnvironment,
 } from "./activation-identity.ts";
 import { createVaultGitActivationPreparer } from "./activation-preparation.ts";
-import { parseVaultGitPreparedEvidence } from "./activation-contract.ts";
+import {
+	EVIDENCE_ID,
+	parseVaultGitPreparedEvidence,
+} from "./activation-contract.ts";
+import { renderVaultGitActivationResult } from "./activation-result.ts";
 import {
 	projectVaultGitActivationRestrictionJson,
 	renderVaultGitActivationRestriction,
@@ -99,6 +109,7 @@ const CLI_PATH = fileURLToPath(import.meta.url);
 const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"activation-authority.ts",
 	"activation-contract.ts",
+	"activation-front-door.ts",
 	"activation-identity.ts",
 	"activation-preparation.ts",
 	"activation-restriction.ts",
@@ -176,6 +187,10 @@ export interface VaultGitCliComposition {
 	readonly remote: string;
 	readonly leaseDurationMs: number;
 	readonly privateEntrypointPath?: string;
+	/** Guarded activation operations; absent when host activation configuration is incomplete. */
+	readonly activationFrontDoor?: VaultGitActivationFrontDoor;
+	/** Stable public field names missing from activation configuration. */
+	readonly activationConfigurationMissing?: readonly VaultGitActivationConfigurationField[];
 }
 
 /** Explicit production composition input. */
@@ -238,6 +253,30 @@ export interface VaultGitCliOptions {
 	readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 	/** Disable the public-to-internal FD launcher in in-process tests. */
 	readonly launchPrivate?: boolean;
+	/** Human-only review interaction; tests inject explicit decisions. */
+	readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
+}
+
+/** Human-review action selected by the guarded activation journey. */
+export type VaultGitHumanActivationReviewAction = "review" | "defer" | "revoke";
+
+/** Human decision returned only from an interactive review surface. */
+export type VaultGitHumanActivationDecision =
+	| "activate"
+	| "defer"
+	| "revoke"
+	| "cancel";
+
+/** Interactive human-review boundary. Agent and non-TTY callers receive no decision. */
+export interface VaultGitHumanActivationReviewPort {
+	/** Whether this invocation has a human-owned interactive surface. */
+	isInteractive(): boolean;
+	/** Ask for one explicit decision after showing only the sanitized result. */
+	decide(input: {
+		readonly action: VaultGitHumanActivationReviewAction;
+		readonly evidenceReference: string;
+		readonly result: VaultGitActivationFrontDoorResult;
+	}): Promise<VaultGitHumanActivationDecision>;
 }
 
 /** Invocation shape after the discovery early return removed `commands`. */
@@ -395,9 +434,9 @@ async function createVaultGitCliCompositionFromSelection(
 		processPort,
 		input.activationIdentity?.runtimeBinaryPath ?? process.execPath,
 	);
-	const activationAuthority =
-		input.activationAuthority ??
-		createConfiguredActivationAuthority({
+	const activationRuntime = input.activationAuthority
+		? { validation: input.activationAuthority }
+		: createConfiguredActivationRuntime({
 			input,
 			repositoryPath,
 			repositoryIdentity,
@@ -415,7 +454,7 @@ async function createVaultGitCliCompositionFromSelection(
 		runtime,
 		repositoryIdentity,
 		check,
-		activationAuthority,
+		activationAuthority: activationRuntime.validation,
 	});
 	const janitor = createVaultGitJanitor({
 		engine,
@@ -432,6 +471,15 @@ async function createVaultGitCliCompositionFromSelection(
 		remote: input.remote ?? DEFAULT_REMOTE,
 		leaseDurationMs: input.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS,
 		privateEntrypointPath: input.privateEntrypointPath ?? CLI_PATH,
+		...(activationRuntime.frontDoor
+			? { activationFrontDoor: activationRuntime.frontDoor }
+			: {}),
+		...(input.activationConfigurationMissing
+			? {
+					activationConfigurationMissing:
+						input.activationConfigurationMissing,
+				}
+			: {}),
 	};
 }
 
@@ -550,7 +598,7 @@ async function privateStateNamespaceIsPopulated(
 	}
 }
 
-function createConfiguredActivationAuthority(input: {
+function createConfiguredActivationRuntime(input: {
 	readonly input: VaultGitCliCompositionInput;
 	readonly repositoryPath: string;
 	readonly repositoryIdentity: string;
@@ -559,12 +607,16 @@ function createConfiguredActivationAuthority(input: {
 	readonly runtime: VaultGitRuntimePort;
 	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
 	readonly resolveRepositoryIdentity: () => Promise<string>;
-}): Pick<VaultGitActivationAuthority, "validate"> {
+}): {
+	readonly validation: Pick<VaultGitActivationAuthority, "validate">;
+	readonly frontDoor?: VaultGitActivationFrontDoor;
+} {
 	const identity = input.input.activationIdentity;
 	if (!identity) {
 		const missingConfiguration = input.input.activationConfigurationMissing;
 		return {
-			async validate() {
+			validation: {
+				async validate() {
 				return missingConfiguration && missingConfiguration.length > 0
 					? {
 							status: "denied" as const,
@@ -575,6 +627,7 @@ function createConfiguredActivationAuthority(input: {
 							status: "denied" as const,
 							reason: "revalidation_unavailable" as const,
 						};
+				},
 			},
 		};
 	}
@@ -613,12 +666,49 @@ function createConfiguredActivationAuthority(input: {
 			? { admittedGitEnvironment: input.admittedGitEnvironment }
 			: {}),
 	});
-	return createVaultGitActivationAuthority({
+	const frontDoor = createVaultGitActivationFrontDoor({
 		store: input.store,
+		preparer,
 		clock: () => input.runtime.now().toISOString(),
-		validateHumanCapability: async () => false,
-		revalidate: preparer.revalidate,
+		createAuthority: (validateHumanCapability) =>
+			createVaultGitActivationAuthority({
+				store: input.store,
+				clock: () => input.runtime.now().toISOString(),
+				validateHumanCapability,
+				revalidate: preparer.revalidate,
+			}),
 	});
+	return { validation: frontDoor, frontDoor };
+}
+
+function createTerminalActivationReviewPort(): VaultGitHumanActivationReviewPort {
+	return {
+		isInteractive: () =>
+			process.stdin.isTTY === true && process.stderr.isTTY === true,
+		async decide(input) {
+			process.stderr.write(renderVaultGitActivationResult(input.result));
+			const choices =
+				input.action === "review"
+					? "Activate or Defer"
+					: input.action === "defer"
+						? "Defer"
+						: "Revoke";
+			const terminal = createInterface({
+				input: process.stdin,
+				output: process.stderr,
+			});
+			try {
+				const answer = (await terminal.question(`Type ${choices}: `))
+					.trim()
+					.toLowerCase();
+				return ["activate", "defer", "revoke"].includes(answer)
+					? (answer as VaultGitHumanActivationDecision)
+					: "cancel";
+			} finally {
+				terminal.close();
+			}
+		},
+	};
 }
 
 /** Render bounded root help from the live facade contracts. */
@@ -628,8 +718,8 @@ export function renderVaultGitHelp(): string {
 		"",
 		"Usage:",
 		"  vault-git",
-		...VAULT_GIT_COMMANDS.map(
-			(command) => `  ${vaultGitContracts[command].usage[0] ?? command}`,
+		...VAULT_GIT_COMMANDS.flatMap((command) =>
+			vaultGitContracts[command].usage.map((usage) => `  ${usage}`),
 		),
 		"",
 		"No arguments show a read-only dashboard with one next safe action.",
@@ -644,6 +734,8 @@ export async function main(
 	const stdout = options.stdout ?? process.stdout;
 	const stderr = options.stderr ?? process.stderr;
 	const now = options.now ?? Date.now;
+	const humanActivationReview =
+		options.humanActivationReview ?? createTerminalActivationReviewPort();
 	let diagnostics: ReturnType<typeof parseCliDiagnosticArgv>;
 	try {
 		diagnostics = parseCliDiagnosticArgv(argv);
@@ -781,6 +873,7 @@ export async function main(
 			invocation,
 			composition,
 			options.readCapability ?? readInheritedCapability,
+			humanActivationReview,
 		);
 		return emitRuntimeResult({
 			invocation,
@@ -814,6 +907,7 @@ export async function runVaultGitForTest(
 		) => Promise<VaultGitCliComposition | null>;
 		readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 		readonly launchPrivate?: boolean;
+		readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
 	} = {},
 ): Promise<VaultGitCliRun> {
 	const stdout = new BufferWriter();
@@ -831,6 +925,9 @@ export async function runVaultGitForTest(
 		...(options.launchPrivate === undefined
 			? {}
 			: { launchPrivate: options.launchPrivate }),
+		...(options.humanActivationReview
+			? { humanActivationReview: options.humanActivationReview }
+			: {}),
 	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
@@ -1125,6 +1222,18 @@ function validateInvocation(invocation: ParsedVaultGitInvocation): void {
 		if (!invocation.transactionId) throw usageError("complete requires --transaction-id");
 		if (!invocation.summary) throw usageError("complete requires --summary");
 	}
+	if (
+		invocation.command === "activation" &&
+		["review", "defer", "revoke"].includes(
+			invocation.activationAction ?? "inspect",
+		) &&
+		(!invocation.evidenceReference ||
+			!EVIDENCE_ID.test(invocation.evidenceReference))
+	) {
+		throw usageError(
+			"activation review actions require an opaque V2 evidence reference",
+		);
+	}
 	if (invocation.command === "repair") {
 		// Only the generation-bound takeover requires the transaction selector;
 		// other repairs may resume a pre-acknowledgement receipt that never
@@ -1225,12 +1334,19 @@ type RuntimeResult =
 	| { readonly kind: "engine"; readonly value: VaultGitEngineResult }
 	| { readonly kind: "doctor"; readonly value: VaultGitDoctorResult }
 	| { readonly kind: "repair"; readonly value: VaultGitRepairResult }
-	| { readonly kind: "janitor"; readonly value: VaultGitJanitorReport };
+	| { readonly kind: "janitor"; readonly value: VaultGitJanitorReport }
+	| {
+			readonly kind: "activation";
+			readonly value: VaultGitActivationFrontDoorResult;
+			readonly success: boolean;
+			readonly errorCode?: string;
+	  };
 
 async function executeInvocation(
 	invocation: VaultGitRuntimeInvocation,
 	composition: VaultGitCliComposition,
 	readCapability: (descriptor: number) => Promise<Uint8Array>,
+	humanActivationReview: VaultGitHumanActivationReviewPort,
 ): Promise<RuntimeResult> {
 	switch (invocation.command) {
 		case "begin":
@@ -1277,6 +1393,12 @@ async function executeInvocation(
 			};
 		case "status":
 			return { kind: "engine", value: await composition.engine.inspect() };
+		case "activation":
+			return executeActivationInvocation(
+				invocation,
+				composition,
+				humanActivationReview,
+			);
 		case "preview":
 			// Preview honors its transaction selector: naming another
 			// transaction refuses with transaction_mismatch instead of echoing
@@ -1347,6 +1469,103 @@ async function executeInvocation(
 				value: await composition.janitor.run({ trigger: "nightly" }),
 			};
 	}
+}
+
+async function executeActivationInvocation(
+	invocation: VaultGitRuntimeInvocation,
+	composition: VaultGitCliComposition,
+	humanReview: VaultGitHumanActivationReviewPort,
+): Promise<Extract<RuntimeResult, { readonly kind: "activation" }>> {
+	const frontDoor = composition.activationFrontDoor;
+	if (!frontDoor) {
+		const missing = composition.activationConfigurationMissing ?? [];
+		const cause = missing.length > 0
+			? "configuration_missing"
+			: "revalidation_unavailable";
+		return activationRuntimeResult(
+			projectVaultGitActivationRestrictionJson(
+				createVaultGitActivationRestriction({
+					stoppedAction: activationStoppedAction(invocation),
+					cause,
+					...(cause === "configuration_missing"
+						? { missingConfiguration: missing }
+						: {}),
+				}),
+			),
+			invocation.activationAction === "inspect",
+		);
+	}
+	const action = invocation.activationAction ?? "inspect";
+	if (action === "inspect") {
+		return activationRuntimeResult(await frontDoor.inspect(), true);
+	}
+	if (action === "prepare") {
+		const result = await frontDoor.prepare();
+		return activationRuntimeResult(result, result.status !== "restricted");
+	}
+	const evidenceReference = requirePresent(
+		invocation.evidenceReference,
+		"activation evidence reference",
+	);
+	if (invocation.noInput || !humanReview.isInteractive()) {
+		return activationRuntimeResult(humanCapabilityRestriction(action), false);
+	}
+	const decision = await humanReview.decide({
+		action,
+		evidenceReference,
+		result: await frontDoor.inspect(),
+	});
+	if (
+		(action === "review" && decision !== "activate" && decision !== "defer") ||
+		(action === "defer" && decision !== "defer") ||
+		(action === "revoke" && decision !== "revoke")
+	) {
+		return activationRuntimeResult(humanCapabilityRestriction(action), false);
+	}
+	const result =
+		action === "revoke"
+			? await frontDoor.revoke({ evidenceReference })
+			: await frontDoor.review({
+					evidenceReference,
+					decision: action === "defer" ? "defer" : decision as "activate" | "defer",
+				});
+	return activationRuntimeResult(result, result.status !== "restricted");
+}
+
+function activationRuntimeResult(
+	value: VaultGitActivationFrontDoorResult,
+	success: boolean,
+): Extract<RuntimeResult, { readonly kind: "activation" }> {
+	return {
+		kind: "activation",
+		value,
+		success,
+		...(success || value.status !== "restricted"
+			? {}
+			: { errorCode: value.cause.id }),
+	};
+}
+
+function humanCapabilityRestriction(
+	action: VaultGitHumanActivationReviewAction,
+): VaultGitActivationFrontDoorResult {
+	return projectVaultGitActivationRestrictionJson(
+		createVaultGitActivationRestriction({
+			stoppedAction:
+				action === "revoke"
+					? "activation_revocation"
+					: "activation_admission",
+			cause: "human_capability_required",
+		}),
+	);
+}
+
+function activationStoppedAction(
+	invocation: ParsedVaultGitInvocation,
+): "activation_preparation" | "activation_admission" | "activation_revocation" {
+	if (invocation.activationAction === "prepare") return "activation_preparation";
+	if (invocation.activationAction === "revoke") return "activation_revocation";
+	return "activation_admission";
 }
 
 function requirePresent<T>(value: T | undefined, label: string): T {
@@ -1479,6 +1698,12 @@ function emitRuntimeResult(input: EmitContext & {
 	readonly result: RuntimeResult;
 	readonly stderr: CliWriter;
 }): number {
+	if (input.result.kind === "activation") {
+		return emitActivationRuntimeResult({ ...input, result: input.result });
+	}
+	if (input.invocation.command === "activation") {
+		throw new Error("activation invocation returned a lifecycle result");
+	}
 	const payload = payloadForRuntime(input.invocation.command, input.result);
 	const success =
 		input.result.kind === "engine"
@@ -1492,14 +1717,53 @@ function emitRuntimeResult(input: EmitContext & {
 	return emitPayload({ ...input, payload, success, errorCode });
 }
 
+function emitActivationRuntimeResult(input: EmitContext & {
+	readonly invocation: VaultGitRuntimeInvocation;
+	readonly result: Extract<RuntimeResult, { readonly kind: "activation" }>;
+	readonly stderr: CliWriter;
+}): number {
+	const next = input.result.value.next_action;
+	const runtime = runtimeAction(next);
+	if (input.invocation.json) {
+		const envelope = input.result.success
+			? createCliRuntimeSuccessEnvelope({
+					run_id: input.runId,
+					data: input.result.value,
+					runtime_actions: [runtime],
+					continuation: { next_action_id: next.id },
+				})
+			: createCliRuntimeErrorEnvelope({
+					run_id: input.runId,
+					process_exit_code: 1,
+					error: createCliRuntimeError({
+						run_id: input.runId,
+						code: input.result.errorCode ?? "activation_restricted",
+						message: "Activation stopped at its guarded human or evidence boundary.",
+						exit_code: 1,
+						recoverability: "contact_support",
+						retryable: false,
+					}),
+					data: input.result.value,
+					runtime_actions: [runtime],
+					continuation: { next_action_id: next.id },
+				});
+		writeJsonEnvelope(input.stdout, envelope, envelopeRuntime(input));
+	} else if (input.result.success) {
+		input.stdout.write(renderVaultGitActivationResult(input.result.value));
+	} else {
+		input.stderr.write(renderVaultGitActivationResult(input.result.value));
+	}
+	return input.result.success ? 0 : 1;
+}
+
 type RuntimePayload = VaultGitLifecycleResultPayload & {
 	readonly janitor_report?: ReturnType<typeof projectJanitorReport>;
 	readonly worker_eligibility?: ReturnType<typeof projectWorkerEligibility>;
 };
 
 function payloadForRuntime(
-	command: VaultGitCommand,
-	result: RuntimeResult,
+	command: Exclude<VaultGitCommand, "activation">,
+	result: Exclude<RuntimeResult, { readonly kind: "activation" }>,
 ): RuntimePayload {
 	if (result.kind === "engine") {
 		const value = result.value;
@@ -1707,7 +1971,7 @@ function emitPayload(input: EmitContext & {
 	readonly errorCode: string;
 }): number {
 	const data = createCommandResultData(
-		vaultGitContracts[input.invocation.command],
+		vaultGitContracts.status,
 		input.payload,
 	);
 	const runtime = runtimeAction(input.payload.next_action);

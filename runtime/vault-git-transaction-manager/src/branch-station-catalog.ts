@@ -4,6 +4,7 @@ import {
 	findBranchStationCatalogDrift,
 	projectStationMap,
 } from "@side-quest/cli-command-facade";
+import { VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID } from "./activation-contract.ts";
 import { projectVaultGitCommandDiscoveryTree } from "./command-contract.ts";
 import {
 	VAULT_GIT_COMMANDS_CONTRACT_ID,
@@ -18,6 +19,13 @@ export const VAULT_GIT_STATION_IDS = [
 	"status.dashboard",
 	"status.read_only",
 	"status.invalid_usage",
+	"activation.inspect",
+	"activation.prepare",
+	"activation.review_noninteractive",
+	"activation.review_activate",
+	"activation.defer",
+	"activation.revoke",
+	"activation.invalid_usage",
 	"preview.read_only",
 	"doctor.read_only",
 	"commands.discovery",
@@ -38,6 +46,13 @@ export const vaultGitBranchStationCatalog = [
 	station("status.dashboard", "status", "success", "bare invocation renders one bounded configured dashboard action", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("status.read_only", "status", "success", "explicit status inspects manager state without mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("status.invalid_usage", "status", "usage_failure", "unknown command or foreign flag fails before composition", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("activation.inspect", "activation", "success", "activation home reads sanitized private state without live admission", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "read_only_projection", undefined, "begin_transaction"),
+	station("activation.prepare", "activation", "success", "prepare publishes evidence-only private state without write authority", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_evidence_only", undefined, "review_prepared"),
+	station("activation.review_noninteractive", "activation", "refusal", "non-interactive review cannot make the final human choice", 1, "error", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "no_activation_state_change", "human_capability_required", "return_to_human_review"),
+	station("activation.review_activate", "activation", "success", "human review admits only the exact freshly revalidated evidence", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_activation_admission", undefined, "begin_transaction"),
+	station("activation.defer", "activation", "success", "human defer leaves prepared evidence non-authoritative and changes no state", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "no_activation_state_change", undefined, "review_prepared"),
+	station("activation.revoke", "activation", "success", "human revocation records one exact append-only private marker", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_activation_revocation", undefined, "prepare_fresh"),
+	station("activation.invalid_usage", "activation", "usage_failure", "public admit spelling is absent from the activation action vocabulary", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
 	station("preview.read_only", "preview", "success", "preview uses the same read-only engine inspection", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("doctor.read_only", "doctor", "success", "doctor classifies evidence without canonical mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("commands.discovery", "commands", "success", "machine discovery projects the live command contracts", 0, "ok", VAULT_GIT_COMMANDS_CONTRACT_ID, "read_only_projection"),
