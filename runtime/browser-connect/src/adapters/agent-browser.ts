@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
@@ -7,11 +8,13 @@ import {
 	type AdapterPackagePolicy,
 	type AdapterProbeResult,
 	type AdapterProvenanceResult,
+	type AdapterReleaseResult,
 	type AdapterRuntime,
 	errorMessage,
 	extractVersion,
 	isMissingAdapterCommandResult,
 	PROBE_TIMEOUT_MS,
+	RELEASE_TIMEOUT_MS,
 	VERSION_READ_TIMEOUT_MS,
 } from "./registry.ts";
 
@@ -84,6 +87,44 @@ export const AGENT_BROWSER_CDP_FLAG = "--cdp" as const;
  * endpoint from `AGENT_BROWSER_CDP`.
  */
 export const AGENT_BROWSER_CDP_ENV_VAR = "AGENT_BROWSER_CDP" as const;
+
+/** Fixed prefix for agent-browser attachment probe sessions. */
+export const AGENT_BROWSER_PROBE_SESSION_PREFIX =
+	"browser-connect-agent-browser-probe" as const;
+
+/** Derive a unique, recognizable session name for one attachment probe. */
+export function deriveProbeSessionName(): string {
+	return `${AGENT_BROWSER_PROBE_SESSION_PREFIX}-${process.pid}-${randomBytes(4).toString("hex")}`;
+}
+
+const RELEASE_VERIFY_ATTEMPTS = 6;
+const RELEASE_VERIFY_DELAY_MS = 1000;
+
+function waitForReleaseRetry(
+	runtime: AdapterRuntime,
+	delayMs: number,
+): Promise<void> {
+	if (runtime.wait) return runtime.wait(delayMs);
+	return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function releaseDeadlineExceeded(
+	inventoryReads: number,
+	sessionName: string,
+): AdapterReleaseResult {
+	if (inventoryReads === 0) {
+		return {
+			released: false,
+			cause: "command-failed",
+			detail: `${AGENT_BROWSER_EXECUTABLE} release deadline expired before session inventory verification.`,
+		};
+	}
+	return {
+		released: false,
+		cause: "still-present",
+		detail: `${AGENT_BROWSER_EXECUTABLE} session ${sessionName} remains present after ${inventoryReads} inventory reads; the ${RELEASE_TIMEOUT_MS}ms release deadline is exhausted.`,
+	};
+}
 
 /**
  * Adapter Definition for agent-browser (KTD9 — a plain binary invocation, a
@@ -176,47 +217,209 @@ export const agentBrowserDefinition = {
 			};
 		}
 		const injection = this.inject(endpoint);
-		let result: AdapterCommandResult;
+		const sessionName = deriveProbeSessionName();
+		let probeResult: AdapterProbeResult;
 		try {
-			result = await runtime.runCommand({
+			const result = await runtime.runCommand({
 				command: resolution.path,
 				// Read-only invocation: attach via injected endpoint and snapshot
 				// (no navigation, no mutation) through the adapter's own binary.
-				args: [...injection.argv, "snapshot"],
+				args: [...injection.argv, "--session", sessionName, "snapshot"],
 				timeoutMs: PROBE_TIMEOUT_MS,
 			});
+			if (result.timedOut) {
+				probeResult = {
+					attached: false,
+					failureClass: "attachment-failed",
+					cause: "transient_probe_failure",
+					detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe timed out.`,
+				};
+			} else if (result.exitCode !== 0) {
+				probeResult = {
+					attached: false,
+					failureClass: "attachment-failed",
+					cause: "probe_failed",
+					detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
+				};
+			} else {
+				probeResult = {
+					attached: true,
+					attachment: {
+						adapter_id: "agent-browser",
+						route,
+						probe_executable: resolution.path,
+					},
+					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+				};
+			}
 		} catch (error) {
-			return {
+			probeResult = {
 				attached: false,
 				failureClass: "attachment-failed",
 				cause: "transient_probe_failure",
 				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe did not start: ${errorMessage(error)}.`,
 			};
 		}
-		if (result.timedOut) {
-			return {
-				attached: false,
-				failureClass: "attachment-failed",
-				cause: "transient_probe_failure",
-				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe timed out.`,
-			};
-		}
-		if (result.exitCode !== 0) {
+
+		const releaseSession = this.releaseSession;
+		if (!releaseSession) {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
 				cause: "probe_failed",
-				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe session release mechanic is unavailable.`,
 			};
 		}
+		const release = await releaseSession(runtime, { sessionName });
+		if (probeResult.attached && !release.released) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "probe_failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe session release failed: ${release.detail}`,
+			};
+		}
+		return probeResult;
+	},
+
+	async releaseSession(
+		runtime: AdapterRuntime,
+		input: Readonly<{ sessionName: string }>,
+	): Promise<AdapterReleaseResult> {
+		const resolution = await runtime.resolveExecutable(AGENT_BROWSER_EXECUTABLE);
+		if (!resolution.resolved) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} could not be resolved for session release.`,
+			};
+		}
+		const now = runtime.now ?? Date.now;
+		const releaseDeadlineMs = now() + RELEASE_TIMEOUT_MS;
+		const remainingReleaseTimeMs = (): number =>
+			Math.max(
+				0,
+				Math.min(RELEASE_TIMEOUT_MS, releaseDeadlineMs - now()),
+			);
+
+		let close: AdapterCommandResult;
+		try {
+			close = await runtime.runCommand({
+				command: resolution.path,
+				args: ["--session", input.sessionName, "close", "--json"],
+				env: { MCPORTER_NO_KEEPALIVE: "*" },
+				timeoutMs: RELEASE_TIMEOUT_MS,
+			});
+		} catch (error) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} session close did not start: ${errorMessage(error)}.`,
+			};
+		}
+		if (close.timedOut) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} session close timed out.`,
+			};
+		}
+		if (close.exitCode !== 0) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} session close exited ${close.exitCode}.`,
+			};
+		}
+		try {
+			const envelope = JSON.parse(close.stdout) as { success?: unknown };
+			if (envelope.success !== true) {
+				return {
+					released: false,
+					cause: "invalid-response",
+					detail: `${AGENT_BROWSER_EXECUTABLE} session close returned an invalid success envelope.`,
+				};
+			}
+		} catch {
+			return {
+				released: false,
+				cause: "invalid-response",
+				detail: `${AGENT_BROWSER_EXECUTABLE} session close returned unparseable output.`,
+			};
+		}
+
+		let inventoryReads = 0;
+		for (let attempt = 0; attempt < RELEASE_VERIFY_ATTEMPTS; attempt += 1) {
+			const inventoryTimeoutMs = remainingReleaseTimeMs();
+			if (inventoryTimeoutMs <= 0) {
+				return releaseDeadlineExceeded(inventoryReads, input.sessionName);
+			}
+			let inventory: AdapterCommandResult;
+			try {
+				inventory = await runtime.runCommand({
+					command: resolution.path,
+					args: ["session", "list", "--json"],
+					env: { MCPORTER_NO_KEEPALIVE: "*" },
+					timeoutMs: inventoryTimeoutMs,
+				});
+			} catch (error) {
+				return {
+					released: false,
+					cause: "command-failed",
+					detail: `${AGENT_BROWSER_EXECUTABLE} session inventory did not start: ${errorMessage(error)}.`,
+				};
+			}
+			if (inventory.timedOut || inventory.exitCode !== 0) {
+				return {
+					released: false,
+					cause: "command-failed",
+					detail: inventory.timedOut
+						? `${AGENT_BROWSER_EXECUTABLE} session inventory timed out.`
+						: `${AGENT_BROWSER_EXECUTABLE} session inventory exited ${inventory.exitCode}.`,
+				};
+			}
+			inventoryReads += 1;
+			try {
+				const envelope = JSON.parse(inventory.stdout) as {
+					success?: unknown;
+					data?: { sessions?: unknown };
+				};
+				if (
+					envelope.success !== true ||
+					!Array.isArray(envelope.data?.sessions) ||
+					!envelope.data.sessions.every((name) => typeof name === "string")
+				) {
+					return {
+						released: false,
+						cause: "invalid-response",
+						detail: `${AGENT_BROWSER_EXECUTABLE} session inventory returned an invalid response.`,
+					};
+				}
+				if (!envelope.data.sessions.includes(input.sessionName)) {
+					return { released: true };
+				}
+			} catch {
+				return {
+					released: false,
+					cause: "invalid-response",
+					detail: `${AGENT_BROWSER_EXECUTABLE} session inventory returned unparseable output.`,
+				};
+			}
+			if (attempt + 1 < RELEASE_VERIFY_ATTEMPTS) {
+				const remainingTimeMs = remainingReleaseTimeMs();
+				if (remainingTimeMs <= 0) {
+					return releaseDeadlineExceeded(inventoryReads, input.sessionName);
+				}
+				await waitForReleaseRetry(
+					runtime,
+					Math.min(RELEASE_VERIFY_DELAY_MS, remainingTimeMs),
+				);
+			}
+		}
 		return {
-			attached: true,
-			attachment: {
-				adapter_id: "agent-browser",
-				route,
-				probe_executable: resolution.path,
-			},
-			evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+			released: false,
+			cause: "still-present",
+			detail: `${AGENT_BROWSER_EXECUTABLE} session ${input.sessionName} remains present after ${RELEASE_VERIFY_ATTEMPTS} inventory reads.`,
 		};
 	},
 } as const satisfies AdapterDefinition;

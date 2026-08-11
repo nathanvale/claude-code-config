@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Lease Spike Fixture — PROTOTYPE</title>
+</head>
+<body>
+<h1>Adapter Session Lease spike fixture</h1>
+<p>PROTOTYPE — throwaway. This page mints one probe value at load time.
+If two CLI invocations read the same value, they share one live page instance.</p>
+<script>
+  // Minted once per page load. A reload or a fresh tab mints a new value,
+  // so value equality across invocations proves daemon-held continuity.
+  window.__leaseProbe = "alive-" + Math.random().toString(36).slice(2, 10);
+  document.body.appendChild(document.createElement("code")).textContent = window.__leaseProbe;
+</script>
+</body>
+</html>

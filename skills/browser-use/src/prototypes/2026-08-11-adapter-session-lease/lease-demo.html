@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PROTOTYPE — Adapter Session Lease demo</title>
+<style>
+  :root { --accent: #059669; --accent-soft: #d1fae5; --ink: #0f172a; --muted: #64748b; --bad: #dc2626; --warn: #b45309; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #fafaf9; color: var(--ink); line-height: 1.5; }
+  main { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+  .proto-banner { display: inline-block; background: var(--warn); color: #fff; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; padding: 2px 10px; border-radius: 999px; margin-bottom: 10px; }
+  .question { background: #fff; border: 1px solid #e7e5e4; border-left: 4px solid var(--accent); border-radius: 8px; padding: 14px 18px; font-size: 0.95rem; margin: 14px 0 28px; }
+  section { margin-bottom: 28px; }
+  .panel { background: #fff; border: 1px solid #e7e5e4; border-radius: 10px; padding: 18px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .field { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px dashed #f1f0ee; font-size: 0.9rem; }
+  .field:last-child { border-bottom: none; }
+  .field .k { color: var(--muted); }
+  .field .v { font-weight: 600; text-align: right; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 0.78rem; font-weight: 600; }
+  .pill.ok { background: var(--accent-soft); color: #065f46; }
+  .pill.bad { background: #fee2e2; color: #991b1b; }
+  .pill.warn { background: #fef3c7; color: #92400e; }
+  .pill.idle { background: #f1f5f9; color: #475569; }
+  .chip { display: inline-block; border: 1px solid #d6d3d1; background: #fff; border-radius: 8px; padding: 6px 10px; margin: 3px 4px 3px 0; font-size: 0.78rem; }
+  .chip.owned { border-color: var(--accent); background: var(--accent-soft); }
+  .chip.orphan { border-color: var(--bad); background: #fee2e2; }
+  .chip .meta { color: var(--muted); font-size: 0.7rem; display: block; }
+  button { font: inherit; font-size: 0.85rem; font-weight: 600; border: 1px solid #d6d3d1; background: #fff; color: var(--ink); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.done { opacity: 0.45; }
+  button.next { outline: 3px solid var(--accent-soft); border-color: var(--accent); }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px; font-size: 0.85rem; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .event { border-radius: 8px; padding: 10px 14px; font-size: 0.9rem; margin-bottom: 14px; border: 1px solid transparent; }
+  .event.ok { background: var(--accent-soft); border-color: #a7f3d0; }
+  .event.refused { background: #fee2e2; border-color: #fecaca; }
+  .log { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.74rem; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 14px; max-height: 220px; overflow-y: auto; }
+  .log .who { color: #34d399; }
+  .log .note { color: #94a3b8; }
+  .log div { padding: 1px 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tabs button { border-radius: 999px; font-weight: 500; }
+  .tabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .scenario-desc { font-size: 0.9rem; color: #44403c; margin-bottom: 12px; }
+  .watch { font-size: 0.82rem; color: var(--muted); font-style: italic; }
+  .steps { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .steps button { text-align: left; }
+  .steps .n { display: inline-block; width: 1.4em; color: var(--muted); font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <span class="proto-banner">PROTOTYPE — THROWAWAY</span>
+  <h1>Adapter Session Lease — does the lifetime model feel right?</h1>
+  <div class="question">
+    <strong>The question:</strong> when browser work runs, the browser tool quietly creates a named background
+    session that nobody ever cleans up — they pile up forever. The proposed fix is a <em>lease</em>:
+    the run takes out the session once at the start, every piece of work reuses it, a login block
+    <em>keeps</em> it alive, and finishing the run hands it back. Cleanup commands come from a small
+    per-tool registry, so the run itself never learns tool commands. Click through and see whether
+    that model survives the awkward cases: a blocked login you resume later, a cleanup that fails,
+    a crash, and the alternative "clean up after every step" rule the current draft code uses.
+  </div>
+
+  <div id="event"></div>
+
+  <section class="grid">
+    <div class="panel">
+      <h2>The run and its lease</h2>
+      <div id="run-state"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="toggle-break" /> Break the next cleanup (simulate tool failure)</label>
+      </div>
+      <div class="toggles">
+        <label>Lifetime rule:
+          <select id="mode-select">
+            <option value="per-run">Per-run lease (proposed)</option>
+            <option value="per-invocation">Release after every step (current draft)</option>
+          </select>
+        </label>
+        <label>Browser tool:
+          <select id="adapter-select">
+            <option value="agent-browser">Agent Browser</option>
+            <option value="playwright-cdp">Playwright CLI</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Live sessions in the browser daemon</h2>
+      <p class="watch" style="margin-top:0">Two sessions belong to other people's work — cleanup must never touch them.</p>
+      <div id="daemon-state"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Actions — free play</h2>
+    <div class="btnrow" id="freeplay"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Guided walkthroughs</h2>
+    <div class="tabs" id="tabs"></div>
+    <div id="scenario"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Commands sent to the browser tool (via the registry)</h2>
+    <div class="log" id="cmdlog"></div>
+  </section>
+</main>
+
+<script>
+/* ============================================================
+   PURE MODULE — the liftable bit.
+   Candidate 1: adapterRegistry — per-tool release mechanics.
+   Candidate 2: leaseReducer — session identity + lifetime.
+   No DOM in here.
+   ============================================================ */
+const LeaseModel = (() => {
+
+  // ---- Candidate 1: the registry seam. The run never builds these argv. ----
+  const adapterRegistry = {
+    "agent-browser": {
+      displayName: "Agent Browser",
+      spawnArgv: (session, subcommand) =>
+        ["agent-browser", "--cdp", "ws://127.0.0.1:9222/devtools/…", "--session", session, ...subcommand, "--json"],
+      // Safety invariant lives HERE, once: release omits --cdp so close
+      // can never mint a replacement attachment while shutting down.
+      releaseArgv: (session) =>
+        ["agent-browser", "--session", session, "close", "--json"],
+    },
+    "playwright-cdp": {
+      displayName: "Playwright CLI",
+      spawnArgv: (session, subcommand) =>
+        ["playwright-cli", ...subcommand, "--cdp=http://127.0.0.1:9222", "--session=" + session],
+      releaseArgv: (session) =>
+        ["playwright-cli", "detach", "--session=" + session],
+    },
+  };
+
+  // ---- Candidate 2: the lease reducer. ----
+  let runCounter = 41;
+
+  const initialState = () => ({
+    mode: "per-run",              // "per-run" | "per-invocation"
+    adapter: "agent-browser",
+    releaseWillFail: false,
+    run: null,                    // { id, status: active|blocked|completed|failed|crashed }
+    lease: null,                  // { sessionName, adapter, status: held|released|release-failed }
+    lastRelease: null,            // { sessionName, result: released|command-failed }
+    daemon: {                     // simulated daemon inventory — sessions are STATEFUL
+      "oncore-daily":   { url: "https://oncore.example/timesheet", refs: 12, foreign: true },
+      "codex-spike-9":  { url: "https://github.example/pull/300",  refs: 3,  foreign: true },
+    },
+    commands: [],                 // { argv, note }
+  });
+
+  const clone = (s) => JSON.parse(JSON.stringify(s));
+
+  function emit(state, argv, note) {
+    state.commands.push({ argv: argv.join(" "), note });
+  }
+
+  // Release through the registry — the ONLY path that produces release argv.
+  function releaseViaRegistry(state, sessionName, why) {
+    const adapter = adapterRegistry[state.lease ? state.lease.adapter : state.adapter];
+    emit(state, adapter.releaseArgv(sessionName), why);
+    if (state.releaseWillFail) {
+      state.releaseWillFail = false;
+      state.lastRelease = { sessionName, result: "command-failed" };
+      if (state.lease && state.lease.sessionName === sessionName) state.lease.status = "release-failed";
+      return false;
+    }
+    delete state.daemon[sessionName];
+    state.lastRelease = { sessionName, result: "released" };
+    if (state.lease && state.lease.sessionName === sessionName) state.lease.status = "released";
+    return true;
+  }
+
+  // Spawn one tool invocation; creates the daemon session implicitly if absent.
+  function spawn(state, subcommand, work) {
+    const name = state.lease.sessionName;
+    const adapter = adapterRegistry[state.lease.adapter];
+    emit(state, adapter.spawnArgv(name, subcommand), work.note);
+    let fresh = false;
+    if (!state.daemon[name]) {
+      state.daemon[name] = { url: "about:blank", refs: 0, foreign: false };
+      fresh = true;
+    }
+    if (work.url) state.daemon[name].url = work.url;
+    if (work.refs) state.daemon[name].refs += work.refs;
+    return fresh;
+  }
+
+  function afterInvocation(state) {
+    // The current draft's rule: hand the session back after every single step.
+    if (state.mode === "per-invocation" && state.lease && state.lease.status === "held") {
+      releaseViaRegistry(state, state.lease.sessionName, "per-invocation rule: release after the step");
+      // lease stays around conceptually; next spawn recreates the daemon session cold
+      if (state.lease.status === "released") state.lease.status = "held-but-cold";
+    }
+  }
+
+  const refuse = (msg) => ({ ok: false, message: msg });
+  const okay = (msg) => ({ ok: true, message: msg });
+
+  const actions = {
+    startRun(state) {
+      if (state.run && ["active", "blocked"].includes(state.run.status))
+        return refuse("A run is already going. Finish, fail, or crash it first.");
+      runCounter += 1;
+      const id = "run-" + runCounter;
+      state.run = { id, status: "active" };
+      // The ONE place the session name is ever constructed.
+      state.lease = { sessionName: "browser-use-" + id, adapter: state.adapter, status: "held" };
+      state.lastRelease = null;
+      return okay("Run " + id + " started. Lease acquired — session name minted once, here and nowhere else.");
+    },
+
+    discover(state) {
+      if (!state.run || !["active"].includes(state.run.status))
+        return refuse("No active run. Discovery has no lease to work under — start a run first.");
+      const fresh = spawn(state, ["tab", "list"], { note: "discovery: list tabs", url: "https://example.test/", refs: 0 });
+      afterInvocation(state);
+      return okay(fresh
+        ? "Discovery ran. The daemon quietly created the session — this is the moment the leak is born."
+        : "Discovery ran on the existing session — no new session created.");
+    },
+
+    taskStep(state) {
+      if (!state.run || state.run.status !== "active")
+        return refuse(state.run && state.run.status === "blocked"
+          ? "The run is blocked. Resume it before doing more work."
+          : "No active run — a task step without a lease would be an unowned session.");
+      const name = state.lease.sessionName;
+      const hadState = !!state.daemon[name];
+      spawn(state, ["snapshot"], { note: "task step: snapshot + act", url: "https://example.test/form", refs: 4 });
+      afterInvocation(state);
+      return okay(hadState
+        ? "Task step ran. It reused the session's remembered page and refs — continuity paid off."
+        : "Task step ran, but the session was COLD — its remembered page and refs were lost when the previous step released it. It had to start over.");
+    },
+
+    hitBlock(state) {
+      if (!state.run || state.run.status !== "active")
+        return refuse("Only an active run can hit a login block.");
+      state.run.status = "blocked";
+      return okay(state.mode === "per-run"
+        ? "Login block. The run is paused — and the lease is HELD, not released. The session waits, state intact."
+        : "Login block. Under the per-step rule the session was already released — nothing is being kept warm for the resume.");
+    },
+
+    resume(state) {
+      if (!state.run || state.run.status !== "blocked")
+        return refuse("Nothing to resume — the run isn't blocked.");
+      state.run.status = "active";
+      const alive = !!state.daemon[state.lease.sessionName];
+      return okay(alive
+        ? "Resumed. The session is still alive with its page and refs — the lease held it across the pause."
+        : "Resumed — but the session is gone. The next step starts from a cold browser attachment.");
+    },
+
+    finishRun(state) {
+      if (!state.run || !["active", "blocked"].includes(state.run.status))
+        return refuse("No run to finish.");
+      state.run.status = "completed";
+      const name = state.lease.sessionName;
+      if (state.daemon[name]) {
+        const released = releaseViaRegistry(state, name, "terminal seam: run completed → release lease");
+        return okay(released
+          ? "Run completed AND the lease released cleanly. Two truths, both good."
+          : "Run completed — but the release FAILED. Note: the run outcome stays 'completed'; the release failure is recorded separately, never folded into task truth. The session is now visible as a leftover.");
+      }
+      state.lease.status = "released";
+      return okay("Run completed. Session was already gone, nothing to release.");
+    },
+
+    failRun(state) {
+      if (!state.run || !["active", "blocked"].includes(state.run.status))
+        return refuse("No run to fail.");
+      state.run.status = "failed";
+      const name = state.lease.sessionName;
+      if (state.daemon[name]) {
+        const released = releaseViaRegistry(state, name, "terminal seam: run failed → release lease");
+        return okay(released
+          ? "Run failed, lease still released — a failed run is terminal too. Failure never excuses a leak."
+          : "Run failed and the release also failed — two separate bad outcomes, reported separately.");
+      }
+      state.lease.status = "released";
+      return okay("Run failed. Session was already gone.");
+    },
+
+    crash(state) {
+      if (!state.run || !["active", "blocked"].includes(state.run.status))
+        return refuse("Nothing is running to crash.");
+      state.run.status = "crashed";
+      // Nobody ran the terminal seam. The lease says held; the daemon still has the session.
+      return okay("CRASH — the process died mid-run. No terminal seam ran, so the session is now an orphan sitting in the daemon. This is the escape path no in-run lease can cover.");
+    },
+
+    sweepOrphans(state) {
+      const owned = Object.entries(state.daemon).filter(([name, s]) =>
+        !s.foreign && name.startsWith("browser-use-") &&
+        (!state.run || !["active", "blocked"].includes(state.run.status) || state.lease.sessionName !== name));
+      if (owned.length === 0)
+        return refuse("Sweep found nothing to clean: no browser-use sessions without a live run. Foreign sessions are never candidates.");
+      for (const [name] of owned) releaseViaRegistry(state, name, "orphan sweep: named close for " + name + " (never mass-kill)");
+      return okay("Sweep released " + owned.length + " orphan(s) — each by its exact name, one close at a time. The two foreign sessions were never touched.");
+    },
+
+    setMode(state, mode) {
+      if (state.run && ["active", "blocked"].includes(state.run.status))
+        return refuse("Changing the lifetime rule mid-run would change the meaning of the current lease. Finish the run first.");
+      state.mode = mode;
+      return okay(mode === "per-run"
+        ? "Lifetime rule: one lease per run, released only at the end."
+        : "Lifetime rule: release after every step — the current draft code's behaviour.");
+    },
+
+    setAdapter(state, adapter) {
+      if (state.run && ["active", "blocked"].includes(state.run.status))
+        return refuse("The lease is bound to one browser tool for its whole run. Switching lanes mid-run is illegal.");
+      state.adapter = adapter;
+      return okay("Browser tool: " + adapterRegistry[adapter].displayName + ". Same lease model — the registry supplies this tool's own cleanup command.");
+    },
+
+    toggleBreak(state, on) {
+      state.releaseWillFail = on;
+      return okay(on ? "The next cleanup will fail — watch how the model reports it." : "Cleanup will behave again.");
+    },
+  };
+
+  function reduce(state, action, arg) {
+    const next = clone(state);
+    const result = actions[action](next, arg);
+    return { state: result.ok ? next : state, result };
+  }
+
+  return { initialState, reduce, adapterRegistry };
+})();
+
+/* ============================================================
+   PAGE SHELL — throwaway. Renders state, wires buttons, tabs.
+   ============================================================ */
+(() => {
+  let state = LeaseModel.initialState();
+  let lastResult = null;
+  let activeTab = 0;
+  let stepIndex = 0;
+
+  const FREEPLAY = [
+    ["Start a browser run", "startRun"],
+    ["Discover tabs", "discover"],
+    ["Do a task step", "taskStep"],
+    ["Hit a login block", "hitBlock"],
+    ["Resume the run", "resume"],
+    ["Finish the run", "finishRun"],
+    ["Run fails", "failRun"],
+    ["Crash mid-run", "crash"],
+    ["Sweep orphans", "sweepOrphans"],
+  ];
+
+  const SCENARIOS = [
+    {
+      name: "Happy path",
+      desc: "One run, start to finish, under the proposed per-run lease.",
+      watch: "The session name is minted once at the start. Every step reuses it. The cleanup command at the end has no endpoint flag — it can only close, never reattach. The daemon ends with just the two foreign sessions.",
+      setup: { mode: "per-run", adapter: "agent-browser" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Do a task step", "taskStep"],
+        ["Finish the run", "finishRun"],
+      ],
+    },
+    {
+      name: "Blocked login, resumed",
+      desc: "The run hits a login wall mid-task and is resumed later — possibly from a completely separate command invocation. This is the continuity case the whole lifetime question hangs on.",
+      watch: "At the block, the lease is HELD, not released. On resume, the session still remembers its page and refs. Release happens only at the true end.",
+      setup: { mode: "per-run", adapter: "agent-browser" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Do a task step", "taskStep"],
+        ["Hit a login block", "hitBlock"],
+        ["Resume the run", "resume"],
+        ["Do another task step", "taskStep"],
+        ["Finish the run", "finishRun"],
+      ],
+    },
+    {
+      name: "Cleanup fails",
+      desc: "The run finishes fine, but the cleanup command itself fails. The old draft folded these into one failure; the lease model keeps them separate.",
+      watch: "The run outcome stays 'completed'. The release failure is its own recorded outcome. The leftover session stays visible — a future sweep's candidate — instead of poisoning the run's result.",
+      setup: { mode: "per-run", adapter: "agent-browser" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Break the next cleanup", "toggleBreak", true],
+        ["Finish the run", "finishRun"],
+        ["Sweep orphans", "sweepOrphans"],
+      ],
+    },
+    {
+      name: "Crash and sweep",
+      desc: "The process dies mid-run. No in-run cleanup can ever cover this — which is why the sweep exists as a backstop.",
+      watch: "After the crash the session sits in the daemon as an orphan (red). The sweep closes it by its exact name. The two foreign sessions are never candidates — no mass-kill, ever.",
+      setup: { mode: "per-run", adapter: "agent-browser" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Do a task step", "taskStep"],
+        ["Crash mid-run", "crash"],
+        ["Sweep orphans", "sweepOrphans"],
+      ],
+    },
+    {
+      name: "The current draft's rule",
+      desc: "Same flow as 'Blocked login' but under the draft code's rule: release after every step. This is what the already-green discovery test locks in.",
+      watch: "After discovery the session is gone. The task step starts COLD — page and refs lost. The block keeps nothing warm, and the resume has nothing to come back to. Continuity and per-step release cannot both be true.",
+      setup: { mode: "per-invocation", adapter: "agent-browser" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Do a task step", "taskStep"],
+        ["Hit a login block", "hitBlock"],
+        ["Resume the run", "resume"],
+        ["Finish the run", "finishRun"],
+      ],
+    },
+    {
+      name: "Same lease, other tool",
+      desc: "The identical lease flow on the Playwright CLI lane. The run's code doesn't change — only the registry entry does.",
+      watch: "The command log: spawn and cleanup argv are completely different from Agent Browser's, yet no run-side step changed. Two tools behind one seam is what makes the seam real.",
+      setup: { mode: "per-run", adapter: "playwright-cdp" },
+      steps: [
+        ["Start a browser run", "startRun"],
+        ["Discover tabs", "discover"],
+        ["Do a task step", "taskStep"],
+        ["Finish the run", "finishRun"],
+      ],
+    },
+  ];
+
+  function dispatch(action, arg) {
+    const out = LeaseModel.reduce(state, action, arg);
+    state = out.state;
+    lastResult = out.result;
+    render();
+  }
+
+  function scenarioDispatch(action, arg) {
+    dispatch(action, arg);
+    if (lastResult && lastResult.ok) stepIndex += 1;
+    render();
+  }
+
+  function startScenario(i) {
+    activeTab = i;
+    stepIndex = 0;
+    state = LeaseModel.initialState();
+    const s = SCENARIOS[i];
+    if (s.setup) {
+      state = LeaseModel.reduce(state, "setMode", s.setup.mode).state;
+      state = LeaseModel.reduce(state, "setAdapter", s.setup.adapter).state;
+    }
+    lastResult = { ok: true, message: "Walkthrough reset: “" + s.name + "”. Fresh state — press step 1." };
+    render();
+  }
+
+  const el = (id) => document.getElementById(id);
+  const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  function pill(text, kind) { return '<span class="pill ' + kind + '">' + esc(text) + "</span>"; }
+
+  function render() {
+    // event banner
+    el("event").innerHTML = lastResult
+      ? '<div class="event ' + (lastResult.ok ? "ok" : "refused") + '">' +
+        (lastResult.ok ? "" : "<strong>Refused:</strong> ") + esc(lastResult.message) + "</div>"
+      : "";
+
+    // run + lease panel
+    const r = state.run, l = state.lease;
+    const runPill = !r ? pill("no run", "idle")
+      : r.status === "active" ? pill("active", "ok")
+      : r.status === "blocked" ? pill("blocked — waiting on login", "warn")
+      : r.status === "crashed" ? pill("crashed", "bad")
+      : pill(r.status, "idle");
+    const leasePill = !l ? pill("none", "idle")
+      : l.status === "held" ? pill("held", "ok")
+      : l.status === "held-but-cold" ? pill("held (session released per-step)", "warn")
+      : l.status === "release-failed" ? pill("release FAILED", "bad")
+      : pill("released", "idle");
+    el("run-state").innerHTML =
+      '<div class="field"><span class="k">Run</span><span class="v">' + (r ? esc(r.id) + " " : "") + runPill + "</span></div>" +
+      '<div class="field"><span class="k">Lease</span><span class="v">' + leasePill + "</span></div>" +
+      '<div class="field"><span class="k">Session name</span><span class="v">' + (l ? esc(l.sessionName) : "—") + "</span></div>" +
+      '<div class="field"><span class="k">Browser tool</span><span class="v">' + esc(LeaseModel.adapterRegistry[l ? l.adapter : state.adapter].displayName) + "</span></div>" +
+      '<div class="field"><span class="k">Last cleanup outcome</span><span class="v">' +
+        (state.lastRelease
+          ? (state.lastRelease.result === "released" ? pill("released", "ok") : pill("command-failed", "bad"))
+          : pill("not attempted", "idle")) + "</span></div>";
+
+    // daemon panel
+    const names = Object.keys(state.daemon);
+    el("daemon-state").innerHTML = names.length === 0
+      ? '<span class="watch">daemon empty</span>'
+      : names.map((n) => {
+          const s = state.daemon[n];
+          const orphan = !s.foreign && (!state.run || !["active", "blocked"].includes(state.run.status) || !state.lease || state.lease.sessionName !== n);
+          const cls = s.foreign ? "" : orphan ? "orphan" : "owned";
+          const tag = s.foreign ? "someone else's" : orphan ? "ORPHAN — no live run owns this" : "owned by the live run";
+          return '<span class="chip ' + cls + '"><strong>' + esc(n) + "</strong><span class=\"meta\">" +
+            esc(s.url) + " · " + s.refs + " refs · " + tag + "</span></span>";
+        }).join("");
+
+    // controls
+    el("toggle-break").checked = state.releaseWillFail;
+    el("mode-select").value = state.mode;
+    el("adapter-select").value = (state.lease && ["active","blocked"].includes(state.run?.status) ? state.lease.adapter : state.adapter);
+
+    // free play
+    el("freeplay").innerHTML = "";
+    for (const [label, action] of FREEPLAY) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => dispatch(action);
+      el("freeplay").appendChild(b);
+    }
+
+    // tabs
+    el("tabs").innerHTML = "";
+    SCENARIOS.forEach((s, i) => {
+      const b = document.createElement("button");
+      b.textContent = s.name;
+      b.className = i === activeTab ? "active" : "";
+      b.onclick = () => startScenario(i);
+      el("tabs").appendChild(b);
+    });
+
+    // scenario body
+    const sc = SCENARIOS[activeTab];
+    const stepsHtml = document.createElement("div");
+    stepsHtml.className = "steps";
+    sc.steps.forEach(([label, action, arg], i) => {
+      const b = document.createElement("button");
+      b.innerHTML = '<span class="n">' + (i + 1) + "</span>" + esc(label);
+      b.className = i < stepIndex ? "done" : i === stepIndex ? "next" : "";
+      b.onclick = () => { stepIndex = i; scenarioDispatch(action, arg); };
+      stepsHtml.appendChild(b);
+    });
+    el("scenario").innerHTML =
+      '<p class="scenario-desc">' + esc(sc.desc) + '</p><p class="watch">Watch for: ' + esc(sc.watch) + "</p>";
+    el("scenario").appendChild(stepsHtml);
+    const restart = document.createElement("button");
+    restart.textContent = "↺ Restart walkthrough";
+    restart.style.marginTop = "10px";
+    restart.onclick = () => startScenario(activeTab);
+    el("scenario").appendChild(restart);
+
+    // command log
+    el("cmdlog").innerHTML = state.commands.length === 0
+      ? '<div class="note">no commands yet — the log shows the exact argv the registry emits</div>'
+      : state.commands.map((c) =>
+          '<div><span class="who">$</span> ' + esc(c.argv) + ' <span class="note"># ' + esc(c.note) + "</span></div>").join("");
+    const logBox = el("cmdlog");
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  el("toggle-break").addEventListener("change", (e) => dispatch("toggleBreak", e.target.checked));
+  el("mode-select").addEventListener("change", (e) => dispatch("setMode", e.target.value));
+  el("adapter-select").addEventListener("change", (e) => dispatch("setAdapter", e.target.value));
+
+  startScenario(0);
+})();
+</script>
+</body>
+</html>

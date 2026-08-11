@@ -825,6 +825,14 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 			},
 			runCommand: async (call) => {
 				calls.push(call);
+				if (call.args.includes("close")) {
+					return okCommand(JSON.stringify({ success: true }));
+				}
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({ success: true, data: { sessions: [] } }),
+					);
+				}
 				return {
 					exitCode: 0,
 					stdout: JSON.stringify({
@@ -853,9 +861,9 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		const json = parseJson(result.stdout);
 		expect(json.status).toBe("ok");
 		expect(json.data).toMatchObject({ operation_ready: true });
-		// The spawn is the agent-browser tab-list subcommand argv, verbatim from
-		// the envelope's ws endpoint and inherited run id.
-		expect(calls).toHaveLength(1);
+		// Discovery lists through the verified endpoint, then the registry closes
+		// only the owned session and verifies its absence from session inventory.
+		expect(calls).toHaveLength(3);
 		expect(commandVector(calls[0])).toEqual([
 			FIXTURE_ENVELOPE.data.attachment.probe_executable,
 			"--cdp",
@@ -863,6 +871,20 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 			"--session",
 			`browser-use-${fixtureRunId}`,
 			"tab",
+			"list",
+			"--json",
+		]);
+		expect(commandVector(calls[1])).toEqual([
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+			"--session",
+			`browser-use-${fixtureRunId}`,
+			"close",
+			"--json",
+		]);
+		expect(commandVector(calls[1])).not.toContain("--cdp");
+		expect(commandVector(calls[2])).toEqual([
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+			"session",
 			"list",
 			"--json",
 		]);
@@ -892,6 +914,14 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 		const runtime = makeRuntime({
 			runCommand: async (call) => {
 				calls.push(call);
+				if (call.args.includes("close")) {
+					return okCommand(JSON.stringify({ success: true }));
+				}
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({ success: true, data: { sessions: [] } }),
+					);
+				}
 				return {
 					exitCode: 0,
 					stdout: tabListStdout([
@@ -909,7 +939,7 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 		expect(discovery.pages).toEqual([
 			{ id: "T-1", url: "http://127.0.0.1:8912/", title: "Fixture" },
 		]);
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(3);
 		expect(commandVector(calls[0])).toEqual([
 			AGENT_BROWSER_FACTS.probeExecutable,
 			"--cdp",
@@ -920,29 +950,143 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 			"list",
 			"--json",
 		]);
+		expect(commandVector(calls[1])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"--session",
+			"browser-use-run-42",
+			"close",
+			"--json",
+		]);
+		expect(commandVector(calls[1])).not.toContain("--cdp");
+		expect(commandVector(calls[2])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"session",
+			"list",
+			"--json",
+		]);
+	});
+
+	test("releases the adapter session after discovery", async () => {
+		const activeSessions = new Set<string>();
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({
+							success: true,
+							data: { sessions: [...activeSessions] },
+						}),
+					);
+				}
+				const sessionFlagIndex = call.args.indexOf("--session");
+				const sessionName = call.args[sessionFlagIndex + 1];
+				if (sessionName === undefined) throw new Error("missing session");
+				if (call.args.includes("close")) {
+					activeSessions.delete(sessionName);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({ success: true, data: {} }),
+						stderr: "",
+						timedOut: false,
+					};
+				}
+				activeSessions.add(sessionName);
+				return {
+					exitCode: 0,
+					stdout: tabListStdout([
+						{
+							tabId: "T-1",
+							url: "http://127.0.0.1:8912/",
+							active: true,
+						},
+					]),
+					stderr: "",
+					timedOut: false,
+				};
+			},
+		});
+
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+
+		expect(discovery.ok).toBe(true);
+		expect(activeSessions).toEqual(new Set());
+	});
+
+	test("keeps successful tab-list truth when session release fails", async () => {
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				if (call.args.includes("close")) {
+					return {
+						exitCode: 7,
+						stdout: "",
+						stderr: "close failed",
+						timedOut: false,
+					};
+				}
+				return {
+					exitCode: 0,
+					stdout: tabListStdout([
+						{
+							tabId: "T-1",
+							url: "http://127.0.0.1:8912/",
+							title: "Fixture",
+						},
+					]),
+					stderr: "",
+					timedOut: false,
+				};
+			},
+		});
+
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+
+		expect(discovery).toMatchObject({
+			ok: true,
+			pages: [
+				{ id: "T-1", url: "http://127.0.0.1:8912/", title: "Fixture" },
+			],
+			release: { released: false, cause: "command-failed" },
+		});
 	});
 
 	test("an empty tab set is an empty page list, never a failure", async () => {
 		const runtime = makeRuntime({
-			runCommand: async () => ({
-				exitCode: 0,
-				stdout: tabListStdout([]),
-				stderr: "",
-				timedOut: false,
-			}),
+			runCommand: async (call) => {
+				if (call.args.includes("close")) {
+					return okCommand(JSON.stringify({ success: true }));
+				}
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({ success: true, data: { sessions: [] } }),
+					);
+				}
+				return okCommand(tabListStdout([]));
+			},
 		});
 		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
 		expect(discovery).toEqual({ ok: true, pages: [] });
 	});
 
 	test("a non-zero tab-list exit fails closed as a transport failure", async () => {
+		const calls: McporterCommandInput[] = [];
 		const runtime = makeRuntime({
-			runCommand: async () => ({
-				exitCode: 3,
-				stdout: "",
-				stderr: "boom",
-				timedOut: false,
-			}),
+			runCommand: async (call) => {
+				calls.push(call);
+				if (call.args.includes("close")) {
+					return okCommand(JSON.stringify({ success: true }));
+				}
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({ success: true, data: { sessions: [] } }),
+					);
+				}
+				return {
+					exitCode: 3,
+					stdout: "",
+					stderr: "boom",
+					timedOut: false,
+				};
+			},
 		});
 		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
 		expect(discovery.ok).toBe(false);
@@ -952,6 +1096,11 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 				recoverability: "retry",
 			});
 		}
+		const closeCalls = calls.filter((call) => call.args.includes("close"));
+		expect(closeCalls).toHaveLength(1);
+		const closeCall = closeCalls[0];
+		if (!closeCall) throw new Error("missing release call");
+		expect(commandVector(closeCall)).not.toContain("--cdp");
 	});
 
 	test("an unsafe run id is rejected before any spawn", async () => {

@@ -12,7 +12,8 @@
 	},
 	"exports": {
 		"./cli": "./src/cli.ts",
-		"./contract": "./src/contract.ts"
+		"./contract": "./src/contract.ts",
+		"./adapters": "./src/adapters/registry.ts"
 	},
 	"scripts": {
 		"browser-connect": "bun run src/cli.ts",

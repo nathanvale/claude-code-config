@@ -67,6 +67,10 @@ export type AdapterRuntime = {
 		command: string,
 	) => Promise<AdapterExecutableResolution> | AdapterExecutableResolution;
 	runCommand: (input: AdapterCommandInput) => Promise<AdapterCommandResult>;
+	/** Optional test clock for aggregate deadlines; production uses `Date.now`. */
+	now?: () => number;
+	/** Optional test wait for bounded settle loops; production uses real timers. */
+	wait?: (delayMs: number) => Promise<void>;
 };
 
 /**
@@ -135,6 +139,25 @@ export type AdapterProbeResult =
 			cause: "transient_probe_failure" | "probe_failed";
 			detail: string;
 	  };
+
+/**
+ * The result of releasing one adapter-owned named session. Release truth is
+ * separate from command exit truth: adapters may verify their own inventory
+ * before reporting success.
+ */
+export type AdapterReleaseResult =
+	| { released: true }
+	| {
+			released: false;
+			cause: "command-failed" | "invalid-response" | "still-present";
+			detail: string;
+	  };
+
+/** The failed arm of a release result — the release debt a consumer records. */
+export type AdapterSessionReleaseDebt = Extract<
+	AdapterReleaseResult,
+	{ released: false }
+>;
 
 /**
  * One exact, maintainer-authored safe upgrade transition (R21/R22): the ONLY
@@ -235,6 +258,14 @@ export type AdapterDefinition = {
 		endpoint: BrowserConnectVerifiedEndpoint,
 		route: BrowserConnectRouteId,
 	) => Promise<AdapterProbeResult>;
+	/**
+	 * Release one named adapter session through adapter-native argv. Optional
+	 * because not every registered adapter exposes a session-release mechanic.
+	 */
+	releaseSession?: (
+		runtime: AdapterRuntime,
+		input: Readonly<{ sessionName: string }>,
+	) => Promise<AdapterReleaseResult>;
 };
 
 import { agentBrowserDefinition } from "./agent-browser.ts";
@@ -345,6 +376,9 @@ export const VERSION_READ_TIMEOUT_MS = 8000;
 
 /** Bounded read for an adapter's read-only attachment probe. Shared by both adapters. */
 export const PROBE_TIMEOUT_MS = 8000;
+
+/** Aggregate deadline for one adapter-native release operation. */
+export const RELEASE_TIMEOUT_MS = 30_000;
 
 /**
  * Extract a semantic version from adapter `--version` output. Reads the first

@@ -2731,6 +2731,8 @@ describe("runbook family — live (U4 wiring)", () => {
 			{ stdout: agentSuccess({ selected: true }) },
 			{ stdout: agentSuccess({ url: "https://example.test/" }) },
 			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
+			{ stdout: agentSuccess({}) },
+			{ stdout: agentSuccess({ sessions: [] }) },
 		]);
 		const result = await runForTest(
 			[
@@ -2744,8 +2746,18 @@ describe("runbook family — live (U4 wiring)", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(calls).toHaveLength(5);
+		expect(calls).toHaveLength(7);
 		expect(calls.some((call) => call.includes("open"))).toBe(false);
+		expect(calls.slice(-2)).toEqual([
+			[
+				"/opt/browser-connect/probe",
+				"--session",
+				"browser-use-run-runbook-bound-cursor",
+				"close",
+				"--json",
+			],
+			["/opt/browser-connect/probe", "session", "list", "--json"],
+		]);
 	});
 
 	test("concurrent bound resumes produce one executor dispatch", async () => {
@@ -3082,6 +3094,8 @@ describe("task run — internal envelope mint (D4)", () => {
 			{ stdout: agentSuccess({ opened: true }) },
 			{ stdout: agentSuccess({ url: "https://example.test/" }) },
 			{ stdout: agentSuccess({ snapshot: "- page snapshot" }) },
+			{ stdout: agentSuccess({}) },
+			{ stdout: agentSuccess({ sessions: [] }) },
 		]);
 		const mintCalls: Array<{ adapterId: string; runId?: string }> = [];
 		scripted.runtime.mintHandoff = async (input) => {
@@ -3105,6 +3119,11 @@ describe("task run — internal envelope mint (D4)", () => {
 		);
 		expect(mintCalls).toHaveLength(1);
 		expect(mintCalls[0]?.adapterId).toBe("agent-browser");
+		const mintedRunId = mintCalls[0]?.runId;
+		expect(typeof mintedRunId).toBe("string");
+		if (typeof mintedRunId !== "string") {
+			throw new Error("fixture mint did not receive a run id");
+		}
 		expect(result.exitCode).toBe(0);
 		const payload = parseJson(result.stdout) as {
 			data?: {
@@ -3133,7 +3152,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		const plain = await runForTest(
 			[
 				"run", "status",
-				"--run", mintCalls[0]?.runId ?? "",
+				"--run", mintedRunId,
 				"--plain",
 			],
 			makeRuntime({
@@ -3147,7 +3166,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		);
 		expect(plain.stdout).not.toContain("binding_id");
 		expect(plain.stdout).not.toContain("target_candidate_id");
-		expect(scripted.calls.map((call) => call.slice(5))).toEqual([
+		expect(scripted.calls.slice(0, -2).map((call) => call.slice(5))).toEqual([
 			["tab", "list", "--json"],
 			["tab", "list", "--json"],
 			["tab", "t1", "--json"],
@@ -3155,6 +3174,16 @@ describe("task run — internal envelope mint (D4)", () => {
 			["open", "https://example.test/", "--json"],
 			["get", "url", "--json"],
 			["snapshot", "-i", "--json"],
+		]);
+		expect(scripted.calls.slice(-2)).toEqual([
+			[
+				"/opt/browser-connect/probe",
+				"--session",
+				`browser-use-${mintedRunId}`,
+				"close",
+				"--json",
+			],
+			["/opt/browser-connect/probe", "session", "list", "--json"],
 		]);
 	});
 });

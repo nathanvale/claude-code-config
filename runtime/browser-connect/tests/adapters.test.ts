@@ -8,6 +8,7 @@ import {
 	AGENT_BROWSER_CDP_FLAG,
 	AGENT_BROWSER_EXECUTABLE,
 	AGENT_BROWSER_PINNED_VERSION,
+	AGENT_BROWSER_PROBE_SESSION_PREFIX,
 	agentBrowserDefinition,
 } from "../src/adapters/agent-browser.ts";
 import {
@@ -38,6 +39,7 @@ import {
 	spawnAdapterCommand,
 	validateAdapterLockPackages,
 } from "../src/adapters/registry.ts";
+import { agentBrowserReleaseResult } from "./agent-browser-release-fixture.ts";
 
 const ENDPOINT: BrowserConnectVerifiedEndpoint = {
 	http: "http://127.0.0.1:41337",
@@ -330,7 +332,12 @@ describe("agent-browser definition (non-MCP seam)", () => {
 
 	test("probe success → attached naming the probe executable", async () => {
 		const { runtime, log } = fakeRuntime({
-			respond: () => ({ exitCode: 0, stdout: "snapshot", stderr: "" }),
+			respond: (input) =>
+				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
+					exitCode: 0,
+					stdout: "snapshot",
+					stderr: "",
+				},
 		});
 		const result = await agentBrowserDefinition.probeAttachment(
 			runtime,
@@ -342,14 +349,43 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			expect(result.attachment.adapter_id).toBe("agent-browser");
 			expect(result.attachment.probe_executable).toBe(RESOLVED_PATH);
 		}
-		const probeCall = log.commands.at(-1);
+		expect(log.commands).toHaveLength(3);
+		const probeCall = log.commands[0];
 		expect(probeCall?.command).toBe(RESOLVED_PATH);
-		expect(probeCall?.args).toContain(ENDPOINT.ws);
+		const sessionFlag = probeCall?.args.indexOf("--session") ?? -1;
+		expect(sessionFlag).toBeGreaterThanOrEqual(0);
+		const probeSessionName = probeCall?.args[sessionFlag + 1];
+		expect(probeSessionName).toMatch(
+			new RegExp(
+				`^${AGENT_BROWSER_PROBE_SESSION_PREFIX}-${process.pid}-[a-f0-9]{8}$`,
+			),
+		);
+		if (!probeSessionName) throw new Error("probe session name missing");
+		expect(probeCall?.args).toEqual([
+			AGENT_BROWSER_CDP_FLAG,
+			ENDPOINT.ws,
+			"--session",
+			probeSessionName,
+			"snapshot",
+		]);
+		expect(log.commands[1]?.args).toEqual([
+			"--session",
+			probeSessionName,
+			"close",
+			"--json",
+		]);
+		expect(log.commands[1]?.args).not.toContain(AGENT_BROWSER_CDP_FLAG);
+		expect(log.commands[2]?.args).toEqual(["session", "list", "--json"]);
 	});
 
 	test("probe non-zero exit → attachment-failed", async () => {
-		const { runtime } = fakeRuntime({
-			respond: () => ({ exitCode: 2, stdout: "", stderr: "no cdp" }),
+		const { runtime, log } = fakeRuntime({
+			respond: (input) =>
+				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
+					exitCode: 2,
+					stdout: "",
+					stderr: "no cdp",
+				},
 		});
 		const result = await agentBrowserDefinition.probeAttachment(
 			runtime,
@@ -360,6 +396,15 @@ describe("agent-browser definition (non-MCP seam)", () => {
 		if (!result.attached) {
 			expect(result.failureClass).toBe("attachment-failed");
 		}
+		const probeCall = log.commands.find((command) =>
+			command.args.includes("snapshot"),
+		);
+		const sessionFlag = probeCall?.args.indexOf("--session") ?? -1;
+		const probeSessionName = probeCall?.args[sessionFlag + 1];
+		if (!probeSessionName) throw new Error("probe session name missing");
+		expect(
+			log.commands.find((command) => command.args.includes("close"))?.args,
+		).toEqual(["--session", probeSessionName, "close", "--json"]);
 	});
 
 	test("executable + pinned version constants stay stable", () => {

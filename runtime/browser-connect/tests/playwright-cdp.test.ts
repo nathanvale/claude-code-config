@@ -114,6 +114,22 @@ describe("playwright-cdp Adapter Definition", () => {
 		);
 	});
 
+	test("releaseSession detaches the caller-owned named session", async () => {
+		const releaseSession = findAdapterDefinition("playwright-cdp")?.releaseSession;
+		expect(releaseSession).toBeFunction();
+		if (!releaseSession) throw new Error("releaseSession missing");
+		const { runtime, commands } = runtimeWith(successfulResponse);
+
+		expect(
+			await releaseSession(runtime, { sessionName: "browser-use-owned-session" }),
+		).toEqual({ released: true });
+		expect(commands).toHaveLength(1);
+		expect(commands[0]).toMatchObject({
+			command: EXECUTABLE_PATH,
+			args: ["--session=browser-use-owned-session", "detach"],
+		});
+	});
+
 	test("absent executable fails provenance before any command", async () => {
 		const commands: AdapterCommandInput[] = [];
 		const runtime: AdapterRuntime = {

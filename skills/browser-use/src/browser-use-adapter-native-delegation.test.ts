@@ -30,6 +30,7 @@ const FROZEN_IMPORTERS = [
 	"browser-use.ts",
 	"fixtures/confidential-runbook-delivery-fixture.ts",
 	"fixtures/fasttrack-login-runbook-fixture.ts",
+	"prototypes/2026-08-11-adapter-session-lease/acceptance.ts",
 ];
 const ADR_VIOLATION =
 	"A new import of adapter mechanics violates ADR 0031. A new adapter must not require a Browser Use action executor or parser — add a new adapter, do not spread these modules.";
