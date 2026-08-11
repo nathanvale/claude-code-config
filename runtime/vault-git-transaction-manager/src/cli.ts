@@ -1724,6 +1724,7 @@ function emitActivationRuntimeResult(input: EmitContext & {
 }): number {
 	const next = input.result.value.next_action;
 	const runtime = runtimeAction(next);
+	const errorCode = input.result.errorCode ?? "activation_restricted";
 	if (input.invocation.json) {
 		const envelope = input.result.success
 			? createCliRuntimeSuccessEnvelope({
@@ -1735,14 +1736,7 @@ function emitActivationRuntimeResult(input: EmitContext & {
 			: createCliRuntimeErrorEnvelope({
 					run_id: input.runId,
 					process_exit_code: 1,
-					error: createCliRuntimeError({
-						run_id: input.runId,
-						code: input.result.errorCode ?? "activation_restricted",
-						message: "Activation stopped at its guarded human or evidence boundary.",
-						exit_code: 1,
-						recoverability: "contact_support",
-						retryable: false,
-					}),
+					error: activationRuntimeError(input.runId, errorCode),
 					data: input.result.value,
 					runtime_actions: [runtime],
 					continuation: { next_action_id: next.id },
@@ -1754,6 +1748,34 @@ function emitActivationRuntimeResult(input: EmitContext & {
 		input.stderr.write(renderVaultGitActivationResult(input.result.value));
 	}
 	return input.result.success ? 0 : 1;
+}
+
+function activationRuntimeError(runId: string, code: string) {
+	const common = {
+		run_id: runId,
+		code,
+		message: "Activation stopped at its guarded human or evidence boundary.",
+		exit_code: 1,
+	} as const;
+	if (
+		code === "configuration_missing" ||
+		code === "admission_missing" ||
+		code === "revalidation_unavailable"
+	) {
+		return createCliRetryRuntimeError(common);
+	}
+	if (
+		code === "evidence_changed" ||
+		code === "binding_changed" ||
+		code === "invalidated"
+	) {
+		return createCliRepairStateRuntimeError(common);
+	}
+	return createCliRuntimeError({
+		...common,
+		recoverability: "contact_support",
+		retryable: false,
+	});
 }
 
 type RuntimePayload = VaultGitLifecycleResultPayload & {

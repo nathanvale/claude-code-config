@@ -368,9 +368,9 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		usage: [
 			`vault-git activation [--json] ${diagnosticsUsage}`,
 			`vault-git activation prepare [--no-input] [--json] ${diagnosticsUsage}`,
-			`vault-git activation review <evidence-reference> [--json] ${diagnosticsUsage}`,
-			`vault-git activation defer <evidence-reference> [--json] ${diagnosticsUsage}`,
-			`vault-git activation revoke <evidence-reference> [--json] ${diagnosticsUsage}`,
+			`vault-git activation review <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
+			`vault-git activation defer <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
+			`vault-git activation revoke <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
 		],
 		json: true,
 		audience: "operator",

@@ -90,9 +90,9 @@ describe("vault-git command contract", () => {
 		expect(vaultGitContracts.activation.usage).toEqual([
 			"vault-git activation [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
 			"vault-git activation prepare [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
-			"vault-git activation review <evidence-reference> [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
-			"vault-git activation defer <evidence-reference> [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
-			"vault-git activation revoke <evidence-reference> [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation review <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation defer <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation revoke <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
 		]);
 		expect(renderVaultGitHelp()).toContain(
 			"vault-git activation review <evidence-reference>",
@@ -125,6 +125,12 @@ describe("vault-git command contract", () => {
 			json: true,
 		});
 		for (const action of ["review", "defer", "revoke"] as const) {
+			expect(() => parseVaultGitInvocation(["activation", action])).toThrow(
+				"<evidence-reference>",
+			);
+			expect(() =>
+				parseVaultGitInvocation(["activation", action, "--json"]),
+			).toThrow("<evidence-reference>");
 			const invocation = parseVaultGitInvocation([
 				"activation",
 				action,

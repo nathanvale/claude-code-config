@@ -272,6 +272,9 @@ export function createVaultGitTransactionEngine(
 						stoppedAction: restriction.stoppedAction,
 						cause: restriction.cause.id,
 						changedState,
+						...(restriction.missingConfiguration
+							? { missingConfiguration: restriction.missingConfiguration }
+							: {}),
 					});
 		const nextAction = activationNextAction(contextualRestriction);
 		return {

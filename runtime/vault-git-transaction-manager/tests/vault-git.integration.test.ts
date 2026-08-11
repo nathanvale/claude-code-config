@@ -48,6 +48,8 @@ const cliPath = join(packageRoot, "tests", "process-cli.ts");
 const productionCliPath = join(packageRoot, "src", "cli.ts");
 const roots: string[] = [];
 let sharedFixture: Promise<Fixture> | undefined;
+const PREPARED_EVIDENCE_REFERENCE =
+	`vault-git:prepared:v2:${"f".repeat(64)}`;
 
 type Station = (typeof vaultGitBranchStationCatalog)[number];
 type StationId = (typeof VAULT_GIT_STATION_IDS)[number];
@@ -75,7 +77,7 @@ const scenarios = {
 		fixture.run([
 			"activation",
 			"review",
-			`vault-git:prepared:v2:${"f".repeat(64)}`,
+			PREPARED_EVIDENCE_REFERENCE,
 			"--json",
 		]),
 	),
@@ -83,7 +85,7 @@ const scenarios = {
 		fixture.runWithHumanDecision("activate", [
 			"activation",
 			"review",
-			`vault-git:prepared:v2:${"f".repeat(64)}`,
+			PREPARED_EVIDENCE_REFERENCE,
 			"--json",
 		]),
 	),
@@ -91,7 +93,7 @@ const scenarios = {
 		fixture.runWithHumanDecision("defer", [
 			"activation",
 			"defer",
-			`vault-git:prepared:v2:${"f".repeat(64)}`,
+			PREPARED_EVIDENCE_REFERENCE,
 			"--json",
 		]),
 	),
@@ -99,7 +101,7 @@ const scenarios = {
 		fixture.runWithHumanDecision("revoke", [
 			"activation",
 			"revoke",
-			`vault-git:prepared:v2:${"f".repeat(64)}`,
+			PREPARED_EVIDENCE_REFERENCE,
 			"--json",
 		]),
 	),

@@ -506,6 +506,9 @@ async function validateRepairActivation(
 		stoppedAction: "vault_write",
 		cause:
 			validation.status === "revoked" ? "revoked" : validation.reason,
+		...(validation.status === "denied" && validation.missingConfiguration
+			? { missingConfiguration: validation.missingConfiguration }
+			: {}),
 	});
 }
 

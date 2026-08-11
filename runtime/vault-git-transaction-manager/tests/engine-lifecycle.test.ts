@@ -644,6 +644,52 @@ describe("transaction engine lifecycle", () => {
 		expect(fixture.remote.lease).toMatchObject({ state: "released" });
 	});
 
+	test("configuration loss during the atomic probe preserves fields and releases the lease", async () => {
+		let configured = true;
+		const probeStarted = deferred<void>();
+		const releaseProbe = deferred<void>();
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return configured
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: {
+								status: "denied" as const,
+								reason: "configuration_missing" as const,
+								missingConfiguration: ["ssh_identity_file"] as const,
+							};
+				},
+			},
+		});
+		fixture.remote.onProbe = async () => {
+			probeStarted.resolve();
+			await releaseProbe.promise;
+		};
+		const pending = fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		await probeStarted.promise;
+		configured = false;
+		releaseProbe.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			state: "closed",
+			phase: "closed",
+			changedState: "remote",
+			blocker: "activation_blocked",
+			activationRestriction: {
+				cause: { id: "configuration_missing" },
+				missingConfiguration: ["ssh_identity_file"],
+				changedState: "remote",
+			},
+		});
+		expect(fixture.remote.lease).toMatchObject({ state: "released" });
+	});
+
 	test("receipt-backed activation denial preserves transaction and lease posture on every read surface", async () => {
 		let admitted = true;
 		const fixture = await engineFixture(undefined, {

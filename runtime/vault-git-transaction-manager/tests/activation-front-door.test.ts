@@ -227,6 +227,7 @@ async function createReviewFixture(
 		store,
 		evidence,
 		frontDoor: createVaultGitActivationFrontDoor({
+			// Isolate front-door reads so corruption tests leave authority state valid.
 			store: selectStore(store),
 			preparer,
 			clock: () => "2026-08-12T00:01:00.000Z",

@@ -127,6 +127,39 @@ describe("takeover after local commit", () => {
 		]);
 		expect(fixture.atomicCloseCalls()).toBe(0);
 	});
+
+	test("repair preserves missing activation configuration after lease probes", async () => {
+		const fixture = await fixtureWithLedger(
+			() => heldLedger(),
+			{
+				async validate() {
+					return {
+						status: "denied",
+						reason: "configuration_missing",
+						missingConfiguration: ["ssh_known_hosts"],
+					};
+				},
+			},
+		);
+
+		const result = await fixture.repair.run({
+			action: "retry-push",
+			transactionId: TRANSACTION_ID,
+			remote: "origin",
+			capability: OWNER_CAPABILITY,
+		});
+
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "activation_blocked",
+			retrySafety: "same_input_safe",
+			activationRestriction: {
+				cause: { id: "configuration_missing" },
+				missingConfiguration: ["ssh_known_hosts"],
+			},
+		});
+		expect(fixture.atomicCloseCalls()).toBe(0);
+	});
 });
 
 async function fixtureWithLedger(

@@ -302,11 +302,23 @@ describe("vault-git CLI composition", () => {
 			"--json",
 		] as const;
 
-		const nonInteractive = await runVaultGitForTest(argv, { composition });
+		const nonInteractive = await runVaultGitForTest(argv, {
+			composition,
+			humanActivationReview: {
+				isInteractive: () => false,
+				async decide() {
+					throw new Error("non-interactive review must not request a decision");
+				},
+			},
+		});
 		expect(nonInteractive.exitCode).toBe(1);
 		expect(JSON.parse(nonInteractive.stdout)).toMatchObject({
 			status: "error",
-			error: { code: "human_capability_required", retryable: false },
+			error: {
+				code: "human_capability_required",
+				recoverability: "contact_support",
+				retryable: false,
+			},
 			data: {
 				contract_id: "vault-git.activation-result",
 				status: "restricted",
@@ -349,6 +361,33 @@ describe("vault-git CLI composition", () => {
 			changed_state: "local",
 		});
 		expect(decisions).toEqual(["activate"]);
+	});
+
+	test("marks missing activation configuration retryable after operator repair", async () => {
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			activationConfigurationMissing: ["ssh_identity_file"] as const,
+		};
+
+		const result = await runVaultGitForTest(
+			["activation", "prepare", "--no-input", "--json"],
+			{ composition },
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "error",
+			error: {
+				code: "configuration_missing",
+				recoverability: "retry",
+				retryable: true,
+			},
+			data: {
+				cause: { id: "configuration_missing" },
+				missing_configuration: ["ssh_identity_file"],
+				next_action: { id: "configure_activation_identity" },
+			},
+		});
 	});
 
 	test("routes explicit Defer and Revoke only after matching human confirmation", async () => {
