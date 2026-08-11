@@ -1,0 +1,15 @@
+{
+	"name": "bb-pr-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"bb-pr": "bun run src/cli.ts",
+		"generate-openapi-baseline": "bun run src/generate-openapi-baseline.ts",
+		"test": "bun test src/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -139,6 +139,13 @@
         "typescript": "catalog:",
       },
     },
+    "skills/bb-pr": {
+      "name": "bb-pr-scripts",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "skills/bft-booking": {
       "name": "bft-booking-skill",
       "version": "0.1.0",
@@ -343,6 +350,8 @@
     "ansi-regex": ["ansi-regex@5.0.1", "", {}, "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ=="],
 
     "ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
+
+    "bb-pr-scripts": ["bb-pr-scripts@workspace:skills/bb-pr"],
 
     "bft-booking-skill": ["bft-booking-skill@workspace:skills/bft-booking"],
 
