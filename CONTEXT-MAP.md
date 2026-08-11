@@ -16,6 +16,7 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 - [Skill Self-Audit Loop](./skills/skill-self-audit-loop/CONTEXT.md) — proof methods, trust conditions, contradiction shapes for self-auditing a SKILL.md.
 - [Skill Feedback](./skills/skill-feedback/CONTEXT.md) — skill-observability capture loop: Receipt, CaptureAdapter, Software Learning Report, the gitignored inbox.
 - [worktree](./skills/worktree/CONTEXT.md) — workflow entry point for worktree-aware VS Code workspace rendering and its boundary with shared git/worktree runtime ownership.
+- [Vault Git Transaction Manager](./runtime/vault-git-transaction-manager/CONTEXT.md) — activation configuration, semantic write restrictions, and Doctor recovery language.
 
 ## Relationships
 
@@ -28,3 +29,4 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 - **Skill Feedback → Root**: reuses the root's facade, redaction-owner, and storage-routing vocabulary; the inbox storage rule is owned by `skills/context-advisor/references/storage-routing.md`.
 - **Skill Self-Audit Loop ↔ Skill Feedback**: both treat record/loop-file text as untrusted evidence, never canonical instruction.
 - **worktree → Root**: reuses root CLI Front Door language but reserves Workflow Entry Point for the skill-level route.
+- **Vault Git Transaction Manager → Root**: reuses root CLI Front Door and Branch Station language while keeping activation and transaction recovery vocabulary local.

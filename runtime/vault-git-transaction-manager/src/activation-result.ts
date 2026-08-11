@@ -1,7 +1,7 @@
-import type { VaultGitPreparedEvidenceActivationResultV1 } from "./activation-contract.ts";
-import type { VaultGitActivationRestrictionJsonV1 } from "./activation-restriction.ts";
+import type { VaultGitPreparedEvidenceActivationResultV2 } from "./activation-contract.ts";
+import type { VaultGitActivationRestrictionJsonV2 } from "./activation-restriction.ts";
 
 /** Complete versioned public activation-result contract. */
-export type VaultGitActivationResultV1 =
-	| VaultGitPreparedEvidenceActivationResultV1
-	| VaultGitActivationRestrictionJsonV1;
+export type VaultGitActivationResultV2 =
+	| VaultGitPreparedEvidenceActivationResultV2
+	| VaultGitActivationRestrictionJsonV2;

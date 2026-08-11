@@ -6,7 +6,7 @@ import {
 	GIT_OBJECT_ID,
 	projectVaultGitPreparedActivationResult,
 	VAULT_GIT_ABSENT_LEDGER_GENERATION,
-	type VaultGitPreparedActivationResultV1,
+	type VaultGitPreparedActivationResultV2,
 	type VaultGitPreparedEvidenceV2,
 } from "./activation-contract.ts";
 import {
@@ -76,7 +76,7 @@ export type VaultGitActivationPreparationResult =
 	| {
 			readonly status: "prepared";
 			readonly evidence: VaultGitPreparedEvidenceV2;
-			readonly result: VaultGitPreparedActivationResultV1;
+			readonly result: VaultGitPreparedActivationResultV2;
 	  }
 	| {
 			readonly status: "refused";

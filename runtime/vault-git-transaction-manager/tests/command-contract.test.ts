@@ -258,7 +258,7 @@ describe("vault-git U1 read-only runtime", () => {
 				blockers: ["activation_blocked"],
 				activation_restriction: {
 					cause: { id: "revalidation_unavailable" },
-					next_action: { id: "run_doctor" },
+					next_action: { id: "inspect_configured_vault" },
 				},
 			},
 		});

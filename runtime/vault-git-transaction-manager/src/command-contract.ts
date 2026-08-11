@@ -97,6 +97,8 @@ function actionSummary(id: VaultGitNextActionId): string {
 	if (id === "review_prepared") return "Open human review for the current prepared evidence.";
 	if (id === "return_to_human_review") return "Return to the human review surface for the final choice.";
 	if (id === "prepare_fresh") return "Prepare fresh V2 evidence, then return to human review.";
+	if (id === "configure_activation_identity") return "Configure the required host activation identity paths, then rerun Doctor.";
+	if (id === "inspect_configured_vault") return "Inspect the configured vault and its live activation dependencies.";
 	if (id === "run_doctor") return "Run read-only Doctor, then retry explicit preparation.";
 	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
 	if (id === "change_input") return "Correct the command arguments and retry parsing.";

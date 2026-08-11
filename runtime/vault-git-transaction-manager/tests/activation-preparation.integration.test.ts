@@ -47,21 +47,58 @@ afterEach(tempDirectories.cleanup);
 
 describe("isolated activation preparation", () => {
 	test(
+		"production Doctor explains missing activation identity configuration without a self-loop",
+		async () => {
+			const fixture = await preparationFixture({ seedLedger: false });
+			const result = await runCliProcess({
+				label: "production activation configuration Doctor",
+				argv: [
+					"bun",
+					"run",
+					join(import.meta.dir, "../src/cli.ts"),
+					"doctor",
+					"--json",
+					"--run-id",
+					"activation-configuration-missing",
+				],
+				cwd: fixture.repositoryPath,
+				env: productionActivationEnvironment(fixture),
+				timeoutMs: 30_000,
+			});
+
+			expect(result.exitCode).toBe(0);
+			const envelope = parseCliProcessJson(result);
+			expect(envelope).toMatchObject({
+				status: "ok",
+				data: {
+					command: "doctor",
+					outcome: "read_only",
+					finding: "activation_configuration_missing",
+					changed_state: "none",
+					next_action: { id: "configure_activation_identity" },
+					activation_restriction: {
+						cause: { id: "configuration_missing" },
+						missing_configuration: [
+							"ssh_identity_file",
+							"ssh_public_key",
+							"ssh_known_hosts",
+						],
+						next_action: { id: "configure_activation_identity" },
+					},
+				},
+				continuation: { next_action_id: "configure_activation_identity" },
+			});
+			expect(JSON.stringify(envelope)).not.toContain("run_doctor");
+		},
+		120_000,
+	);
+
+	test(
 		"production CLI refuses, revalidates admitted V2 evidence, and opens the write gate",
 		async () => {
 			const fixture = await preparationFixture({ seedLedger: false });
 			const env: NodeJS.ProcessEnv = {
-				...Object.fromEntries(
-					Object.entries(process.env).filter(
-						([name]) => !name.startsWith("VAULT_GIT_"),
-					),
-				),
-				VAULT_GIT_REPOSITORY_PATH: fixture.repositoryPath,
-				VAULT_GIT_CHECK_REPOSITORY_PATH: fixture.repositoryPath,
-				VAULT_GIT_STATE_ROOT: fixture.stateRoot,
-				VAULT_GIT_ACTOR: "fixture-operator",
-				VAULT_GIT_HOST: "fixture-host",
-				VAULT_GIT_REMOTE: "origin",
+				...productionActivationEnvironment(fixture),
 				VAULT_GIT_GIT_BINARY_PATH: "/usr/bin/git",
 				VAULT_GIT_SSH_BINARY_PATH: "/usr/bin/ssh",
 				VAULT_GIT_SSH_IDENTITY_FILE_PATH: fixture.privateKeyPath,
@@ -546,6 +583,25 @@ describe("isolated activation preparation", () => {
 		expect(await fixture.store.readPreparedEvidence()).toBeNull();
 	});
 });
+
+function productionActivationEnvironment(input: {
+	readonly repositoryPath: string;
+	readonly stateRoot: string;
+}): NodeJS.ProcessEnv {
+	return {
+		...Object.fromEntries(
+			Object.entries(process.env).filter(
+				([name]) => !name.startsWith("VAULT_GIT_"),
+			),
+		),
+		VAULT_GIT_REPOSITORY_PATH: input.repositoryPath,
+		VAULT_GIT_CHECK_REPOSITORY_PATH: input.repositoryPath,
+		VAULT_GIT_STATE_ROOT: input.stateRoot,
+		VAULT_GIT_ACTOR: "fixture-operator",
+		VAULT_GIT_HOST: "fixture-host",
+		VAULT_GIT_REMOTE: "origin",
+	};
+}
 
 async function preparationFixture(overrides: {
 	readonly createChecker?: (repositoryPath: string) => VaultGitCheckerPort;

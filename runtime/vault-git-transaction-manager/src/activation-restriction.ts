@@ -4,7 +4,7 @@ import {
 } from "./activation-contract.ts";
 import type {
 	VaultGitActivationRestriction,
-	VaultGitActivationRestrictionJsonV1,
+	VaultGitActivationRestrictionJsonV2,
 } from "./model.ts";
 
 export {
@@ -16,14 +16,14 @@ export type {
 	VaultGitActivationRestriction,
 	VaultGitActivationRestrictionCause,
 	VaultGitActivationRestrictionInput,
-	VaultGitActivationRestrictionJsonV1,
+	VaultGitActivationRestrictionJsonV2,
 	VaultGitActivationStoppedAction,
 } from "./model.ts";
 
 /** Project shared restriction semantics into the versioned public JSON contract. */
 export function projectVaultGitActivationRestrictionJson(
 	restriction: VaultGitActivationRestriction,
-): VaultGitActivationRestrictionJsonV1 {
+): VaultGitActivationRestrictionJsonV2 {
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 		schema_version: VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
@@ -35,6 +35,9 @@ export function projectVaultGitActivationRestrictionJson(
 		observed_safe_state: restriction.observedSafeState,
 		write_permission: restriction.writePermission,
 		changed_state: restriction.changedState,
+		...(restriction.missingConfiguration
+			? { missing_configuration: restriction.missingConfiguration }
+			: {}),
 		manual_handoff: restriction.manualHandoff,
 		next_action: restriction.nextAction,
 	});
@@ -44,7 +47,7 @@ export function projectVaultGitActivationRestrictionJson(
 export function renderVaultGitActivationRestriction(
 	restriction:
 		| VaultGitActivationRestriction
-		| VaultGitActivationRestrictionJsonV1,
+		| VaultGitActivationRestrictionJsonV2,
 ): string {
 	const projected = "stopped_action" in restriction;
 	const stoppedAction = projected
@@ -65,6 +68,9 @@ export function renderVaultGitActivationRestriction(
 	const nextAction = projected
 		? restriction.next_action
 		: restriction.nextAction;
+	const missingConfiguration = projected
+		? restriction.missing_configuration
+		: restriction.missingConfiguration;
 	return [
 		"status: restricted",
 		`stopped_action: ${stoppedAction}`,
@@ -73,6 +79,9 @@ export function renderVaultGitActivationRestriction(
 		`observed_safe_state: ${observedSafeState}`,
 		`write_permission: ${writePermission}`,
 		`changed_state: ${changedState}`,
+		...(missingConfiguration
+			? [`missing_configuration: ${missingConfiguration.join(", ")}`]
+			: []),
 		`manual_handoff: ${manualHandoff.availability} | ${manualHandoff.summary}`,
 		`next: ${nextAction.id} | ${nextAction.summary}`,
 	].join("\n");

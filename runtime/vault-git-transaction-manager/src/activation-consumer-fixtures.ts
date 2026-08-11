@@ -1,50 +1,67 @@
 import {
 	createVaultGitPreparedEvidence,
 	projectVaultGitPreparedActivationResult,
-	type VaultGitPreparedActivationResultV1,
+	type VaultGitPreparedActivationResultV2,
 } from "./activation-contract.ts";
 import {
 	createVaultGitActivationRestriction,
 	projectVaultGitActivationRestrictionJson,
-	type VaultGitActivationRestrictionJsonV1,
+	type VaultGitActivationRestrictionJsonV2,
 } from "./activation-restriction.ts";
 
 /** Published sanitized fixture consumed by First-Use Experience. */
 export interface VaultGitFirstUseExperienceContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV1;
-	readonly restricted: VaultGitActivationRestrictionJsonV1;
+	readonly prepared: VaultGitPreparedActivationResultV2;
+	readonly restricted: VaultGitActivationRestrictionJsonV2;
 }
 
 /** Published sanitized fixture consumed by Background Preflight. */
 export interface VaultGitBackgroundPreflightContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV1;
+	readonly prepared: VaultGitPreparedActivationResultV2;
 }
 
 /** Published sanitized fixture reserved for planned Safe Manual Handoff work. */
 export interface VaultGitSafeManualHandoffContractFixture {
-	readonly restricted: VaultGitActivationRestrictionJsonV1;
+	readonly restricted: VaultGitActivationRestrictionJsonV2;
 }
 
 /** Published sanitized fixture reserved for planned model-advice work. */
 export interface VaultGitAttentionAndModelAdviceContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV1;
-	readonly restricted: VaultGitActivationRestrictionJsonV1;
+	readonly prepared: VaultGitPreparedActivationResultV2;
+	readonly restricted: VaultGitActivationRestrictionJsonV2;
 }
 
 const prepared = preparedFixture();
-const restricted = projectVaultGitActivationRestrictionJson(
+const activationMissing = projectVaultGitActivationRestrictionJson(
 	createVaultGitActivationRestriction({
 		stoppedAction: "vault_write",
 		cause: "admission_missing",
 	}),
 );
+const configurationMissing = projectVaultGitActivationRestrictionJson(
+	createVaultGitActivationRestriction({
+		stoppedAction: "vault_write",
+		cause: "configuration_missing",
+		missingConfiguration: [
+			"ssh_identity_file",
+			"ssh_public_key",
+			"ssh_known_hosts",
+		],
+	}),
+);
 
 /** Stable public fixtures for every planned activation consumer. */
 export const vaultGitActivationConsumerContractFixtures = Object.freeze({
-	firstUseExperience: Object.freeze({ prepared, restricted }),
+	firstUseExperience: Object.freeze({
+		prepared,
+		restricted: configurationMissing,
+	}),
 	backgroundPreflight: Object.freeze({ prepared }),
-	safeManualHandoff: Object.freeze({ restricted }),
-	attentionAndModelAdvice: Object.freeze({ prepared, restricted }),
+	safeManualHandoff: Object.freeze({ restricted: activationMissing }),
+	attentionAndModelAdvice: Object.freeze({
+		prepared,
+		restricted: activationMissing,
+	}),
 }) satisfies Readonly<{
 	firstUseExperience: VaultGitFirstUseExperienceContractFixture;
 	backgroundPreflight: VaultGitBackgroundPreflightContractFixture;
@@ -52,7 +69,7 @@ export const vaultGitActivationConsumerContractFixtures = Object.freeze({
 	attentionAndModelAdvice: VaultGitAttentionAndModelAdviceContractFixture;
 }>;
 
-function preparedFixture(): VaultGitPreparedActivationResultV1 {
+function preparedFixture(): VaultGitPreparedActivationResultV2 {
 	const opaqueIdentity = (owner: string, digit: string): string =>
 		`${owner}:v1:${digit.repeat(64)}`;
 	return projectVaultGitPreparedActivationResult(

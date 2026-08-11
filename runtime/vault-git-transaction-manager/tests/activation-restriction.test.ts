@@ -69,22 +69,46 @@ describe("shared activation restriction semantics", () => {
 	});
 
 	test("maps every closed cause to exactly one safe action", () => {
-		for (const [cause, nextAction] of [
+		for (const [cause, nextAction, missingConfiguration] of [
+			[
+				"configuration_missing",
+				"configure_activation_identity",
+				["ssh_identity_file"],
+			],
 			["admission_missing", "review_prepared"],
 			["human_capability_required", "return_to_human_review"],
 			["evidence_changed", "prepare_fresh"],
 			["binding_changed", "prepare_fresh"],
 			["invalidated", "prepare_fresh"],
 			["revoked", "prepare_fresh"],
-			["revalidation_unavailable", "run_doctor"],
+			["revalidation_unavailable", "inspect_configured_vault"],
 		] as const) {
 			const restriction = createVaultGitActivationRestriction({
 				stoppedAction: "activation_admission",
 				cause,
+				...(missingConfiguration ? { missingConfiguration } : {}),
 			});
 			expect(restriction.nextAction.id, cause).toBe(nextAction);
 			expect(Object.keys(restriction).filter((key) => key === "nextAction")).toHaveLength(1);
 		}
+	});
+
+	test("projects only stable absent configuration field names", () => {
+		const restriction = createVaultGitActivationRestriction({
+			stoppedAction: "vault_write",
+			cause: "configuration_missing",
+			missingConfiguration: ["ssh_identity_file", "ssh_known_hosts"],
+		});
+
+		expect(projectVaultGitActivationRestrictionJson(restriction)).toMatchObject({
+			schema_version: "2",
+			cause: { id: "configuration_missing" },
+			missing_configuration: ["ssh_identity_file", "ssh_known_hosts"],
+			next_action: { id: "configure_activation_identity" },
+		});
+		expect(renderVaultGitActivationRestriction(restriction)).toContain(
+			"missing_configuration: ssh_identity_file, ssh_known_hosts",
+		);
 	});
 
 	test("public projections cannot carry private diagnostics or authority", () => {

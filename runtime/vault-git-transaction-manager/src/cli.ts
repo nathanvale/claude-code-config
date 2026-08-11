@@ -51,9 +51,11 @@ import {
 } from "./git-adapter.ts";
 import {
 	VAULT_GIT_REPAIR_ACTIONS,
+	VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS,
 	createVaultGitActivationRestriction,
 	createVaultGitLifecycleResult,
 	type VaultGitLifecycleResultPayload,
+	type VaultGitActivationConfigurationField,
 	type VaultGitNextActionId,
 	type VaultGitRepairAction,
 	type VaultGitTransactionPhase,
@@ -197,6 +199,8 @@ export interface VaultGitCliCompositionInput {
 	readonly activationAuthority?: Pick<VaultGitActivationAuthority, "validate">;
 	/** Complete owner-controlled configuration for live activation revalidation. */
 	readonly activationIdentity?: VaultGitCliActivationIdentityInput;
+	/** Stable public field names absent from default host activation configuration. */
+	readonly activationConfigurationMissing?: readonly VaultGitActivationConfigurationField[];
 	/** Exact entrypoint inherited-descriptor children re-enter through. */
 	readonly privateEntrypointPath?: string;
 }
@@ -557,7 +561,23 @@ function createConfiguredActivationAuthority(input: {
 	readonly resolveRepositoryIdentity: () => Promise<string>;
 }): Pick<VaultGitActivationAuthority, "validate"> {
 	const identity = input.input.activationIdentity;
-	if (!identity) return failClosedActivationAuthority();
+	if (!identity) {
+		const missingConfiguration = input.input.activationConfigurationMissing;
+		return {
+			async validate() {
+				return missingConfiguration && missingConfiguration.length > 0
+					? {
+							status: "denied" as const,
+							reason: "configuration_missing" as const,
+							missingConfiguration,
+						}
+					: {
+							status: "denied" as const,
+							reason: "revalidation_unavailable" as const,
+						};
+			},
+		};
+	}
 	const remoteName = input.input.remote ?? DEFAULT_REMOTE;
 	const preparer = createVaultGitActivationPreparer({
 		repositoryPath: input.repositoryPath,
@@ -840,7 +860,12 @@ async function resolveDefaultComposition(
 		host: process.env.VAULT_GIT_HOST ?? hostname(),
 		remote: process.env.VAULT_GIT_REMOTE ?? DEFAULT_REMOTE,
 		...(allowedRemoteHosts ? { allowedRemoteHosts } : {}),
-		...(activationIdentity ? { activationIdentity } : {}),
+		...(activationIdentity.status === "configured"
+			? { activationIdentity: activationIdentity.value }
+			: {
+					activationConfigurationMissing:
+						activationIdentity.missingConfiguration,
+				}),
 	};
 	return ["status", "preview", "doctor"].includes(command)
 		? createVaultGitCliRecoveryComposition(input)
@@ -855,22 +880,43 @@ function resolveDefaultAllowedRemoteHosts(): readonly string[] | undefined {
 	return configured.split(",").map((host) => host.trim());
 }
 
-function resolveDefaultActivationIdentity(): VaultGitCliActivationIdentityInput | null {
-	const publicKey = process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
-	const identityFile = process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH;
-	const knownHosts = process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
-	if (!identityFile || !publicKey || !knownHosts) return null;
+function resolveDefaultActivationIdentity():
+	| {
+			readonly status: "configured";
+			readonly value: VaultGitCliActivationIdentityInput;
+	  }
+	| {
+			readonly status: "missing";
+			readonly missingConfiguration: readonly VaultGitActivationConfigurationField[];
+	  } {
+	const configured: Record<
+		VaultGitActivationConfigurationField,
+		string | undefined
+	> = {
+		ssh_identity_file: process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH,
+		ssh_public_key: process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH,
+		ssh_known_hosts: process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH,
+	};
+	const missingConfiguration = VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS.filter(
+		(field) => !configured[field],
+	);
+	if (missingConfiguration.length > 0) {
+		return { status: "missing", missingConfiguration };
+	}
 	return {
-		hostId: process.env.VAULT_GIT_HOST ?? hostname(),
-		runtimeBinaryPath: process.execPath,
-		runtimeVersion: Bun.version,
-		executablePath: CLI_PATH,
-		executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
-		gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
-		sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
-		sshIdentityFilePath: identityFile,
-		sshIdentityPublicKeyPath: publicKey,
-		sshKnownHostsPath: knownHosts,
+		status: "configured",
+		value: {
+			hostId: process.env.VAULT_GIT_HOST ?? hostname(),
+			runtimeBinaryPath: process.execPath,
+			runtimeVersion: Bun.version,
+			executablePath: CLI_PATH,
+			executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
+			gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
+			sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
+			sshIdentityFilePath: configured.ssh_identity_file!,
+			sshIdentityPublicKeyPath: configured.ssh_public_key!,
+			sshKnownHostsPath: configured.ssh_known_hosts!,
+		},
 	};
 }
 
@@ -982,17 +1028,6 @@ export function createVaultCheckerPort(
 				"--root",
 				repositoryPath,
 			]);
-		},
-	};
-}
-
-function failClosedActivationAuthority(): Pick<
-	VaultGitActivationAuthority,
-	"validate"
-> {
-	return {
-		async validate() {
-			return { status: "denied", reason: "revalidation_unavailable" };
 		},
 	};
 }

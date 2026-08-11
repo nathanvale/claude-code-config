@@ -103,7 +103,7 @@ describe("vault-git doctor", () => {
 			finding: "activation_missing",
 			blocker: "activation_blocked",
 			retrySafety: "same_input_safe",
-			nextAction: { id: "run_doctor" },
+			nextAction: { id: "inspect_configured_vault" },
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
 			},
@@ -150,7 +150,7 @@ describe("vault-git doctor", () => {
 				phase,
 				finding: "activation_missing",
 				blocker: "activation_blocked",
-				nextAction: { id: "run_doctor" },
+				nextAction: { id: "inspect_configured_vault" },
 			});
 		},
 	);

@@ -1,5 +1,6 @@
 import type {
 	VaultGitActivationBinding,
+	VaultGitActivationConfigurationField,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
@@ -361,6 +362,7 @@ export type VaultGitActivationValidationScope = "admission" | "continuation";
 
 /** Closed fail-closed cause returned by the engine's activation port. */
 export type VaultGitActivationDenialReason =
+	| "configuration_missing"
 	| "admission_missing"
 	| "human_capability_required"
 	| "evidence_changed"
@@ -377,6 +379,7 @@ export type VaultGitActivationValidationResult =
 			readonly status: "denied";
 			readonly reason: VaultGitActivationDenialReason;
 			readonly binding?: VaultGitActivationBinding;
+			readonly missingConfiguration?: readonly VaultGitActivationConfigurationField[];
 	  };
 
 /** Minimal activation gate owned by the engine port boundary. */

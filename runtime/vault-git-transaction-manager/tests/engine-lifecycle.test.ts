@@ -494,7 +494,7 @@ describe("transaction engine lifecycle", () => {
 		["binding_changed", "prepare_fresh", "same_input_unsafe"],
 		["invalidated", "prepare_fresh", "same_input_unsafe"],
 		["revoked", "prepare_fresh", "operator_required"],
-		["revalidation_unavailable", "run_doctor", "same_input_safe"],
+		["revalidation_unavailable", "inspect_configured_vault", "same_input_safe"],
 	] as const) {
 		test(`preserves ${reason} activation restriction semantics`, async () => {
 			const fixture = await engineFixture(undefined, {
@@ -545,10 +545,10 @@ describe("transaction engine lifecycle", () => {
 			status: "refused",
 			blocker: "activation_blocked",
 			retrySafety: "same_input_safe",
-			nextAction: { id: "run_doctor" },
+			nextAction: { id: "inspect_configured_vault" },
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
-				nextAction: { id: "run_doctor" },
+				nextAction: { id: "inspect_configured_vault" },
 			},
 		});
 	});
@@ -571,7 +571,7 @@ describe("transaction engine lifecycle", () => {
 			retrySafety: "same_input_safe",
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
-				nextAction: { id: "run_doctor" },
+				nextAction: { id: "inspect_configured_vault" },
 			},
 		});
 	});

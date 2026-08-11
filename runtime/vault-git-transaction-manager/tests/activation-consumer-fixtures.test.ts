@@ -11,6 +11,18 @@ describe("activation consumer contract fixtures", () => {
 			vaultGitActivationConsumerContractFixtures.firstUseExperience,
 		);
 		expect(view).toEqual({ status: "prepared", nextAction: "review_prepared" });
+		expect(
+			vaultGitActivationConsumerContractFixtures.firstUseExperience.restricted,
+		).toMatchObject({
+			schema_version: "2",
+			cause: { id: "configuration_missing" },
+			missing_configuration: [
+				"ssh_identity_file",
+				"ssh_public_key",
+				"ssh_known_hosts",
+			],
+			next_action: { id: "configure_activation_identity" },
+		});
 		assertNoAuthoritySurface(
 			vaultGitActivationConsumerContractFixtures.firstUseExperience,
 		);

@@ -110,8 +110,6 @@ const summaries = {
 	takeoverInterrupted:
 		"Run doctor again for a fresh stale-lease proof; the interrupted takeover never reached the remote.",
 	reconcile: "Reconcile preserved local evidence before clearing quarantine.",
-	retryActivation:
-		"Retry read-only Doctor after live repository identity revalidation is available.",
 	none: "No transaction action remains.",
 } as const;
 
@@ -201,21 +199,22 @@ export async function diagnoseVaultGitTransaction(
 				receipt.phase === "push_pending" || receipt.phase === "repairable"
 					? receipt.phase
 					: "active";
+			const activationRestriction = createVaultGitActivationRestriction({
+				stoppedAction: "vault_write",
+				cause: "revalidation_unavailable",
+			});
 			return report(
 				state,
 				receipt.phase,
 				"activation_missing",
 				"same_input_safe",
-				"run_doctor",
-				summaries.retryActivation,
+				activationRestriction.nextAction.id,
+				activationRestriction.nextAction.summary,
 				receipt.diagnosticsReference,
 				{
 					...common,
 					blocker: "activation_blocked",
-					activationRestriction: createVaultGitActivationRestriction({
-						stoppedAction: "vault_write",
-						cause: "revalidation_unavailable",
-					}),
+					activationRestriction,
 				},
 			);
 		}
