@@ -7,7 +7,7 @@
       "runners/*",
       "runtime/*",
       "skills/bft-booking",
-      "skills/bb-pr",
+      "skills/bitbucket",
       "skills/browser-use",
       "skills/classic-cinema",
       "skills/cli-execution-auditor",

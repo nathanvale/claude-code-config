@@ -10,7 +10,7 @@ import { analyzeOpenApiDrift, BITBUCKET_OPENAPI_URL, type OpenApiBaseline, type 
 
 const API_BASE_URL = "https://api.bitbucket.org/2.0";
 const DEFAULT_OPENAPI_BASELINE = fileURLToPath(new URL("../openapi-baseline.json", import.meta.url));
-const ENVELOPE_CONTRACT_ID = "bb-pr.result";
+const ENVELOPE_CONTRACT_ID = "bitbucket.result";
 const ENVELOPE_SCHEMA_VERSION = "1";
 const VALID_STATES = ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"] as const;
 const VALID_STRATEGIES = ["squash", "merge_commit", "fast_forward"] as const;
@@ -87,7 +87,7 @@ class CliError extends Error {
 	}
 }
 
-/** Run the public bb-pr CLI with injectable boundaries for focused proof. */
+/** Run the public bb CLI with injectable boundaries for focused proof. */
 export async function runCli(
 	argv: string[],
 	overrides: Partial<CliDependencies> = {},
@@ -167,7 +167,7 @@ function handleFrontDoor(argv: string[], io: CliIo): number | null {
 	}
 	if (argv[0] === "help") {
 		if (argv.length > 2) {
-			io.stderr("Usage: bb-pr help [command]");
+			io.stderr("Usage: bb help [command]");
 			return 2;
 		}
 		const command = argv[1];
@@ -180,11 +180,11 @@ function handleFrontDoor(argv: string[], io: CliIo): number | null {
 	}
 	if (argv[0] === "commands") {
 		if (argv.length !== 2 || argv[1] !== "--json") {
-			io.stderr("Usage: bb-pr commands --json");
+			io.stderr("Usage: bb commands --json");
 			return 2;
 		}
 		io.stdout(JSON.stringify({
-			contract_id: "bb-pr.commands",
+			contract_id: "bitbucket.commands",
 			schema_version: "1",
 			commands: COMMANDS,
 		}));
@@ -193,7 +193,7 @@ function handleFrontDoor(argv: string[], io: CliIo): number | null {
 	if (argv.includes("--help") || argv.includes("-h")) {
 		const command = argv[0];
 		if (argv.length !== 2) {
-			io.stderr(`Usage: bb-pr ${command} --help`);
+			io.stderr(`Usage: bb ${command} --help`);
 			return 2;
 		}
 		if (!findCommand(command)) {
@@ -208,7 +208,7 @@ function handleFrontDoor(argv: string[], io: CliIo): number | null {
 
 function parseInput(argv: string[]): ParsedInput {
 	const command = findCommand(argv[0]);
-	if (!command) throw new CliError("unknown_command", `Unknown command: ${argv[0]}`, "Run bb-pr --help or bb-pr commands --json.");
+	if (!command) throw new CliError("unknown_command", `Unknown command: ${argv[0]}`, "Run bb --help or bb commands --json.");
 	const positionals: string[] = [];
 	const flags = new Map<string, string | true>();
 	const valueFlags = new Set([
@@ -270,7 +270,7 @@ function resolveAuthHeader(environment: Record<string, string | undefined>): str
 		throw new CliError(
 			"auth_ambiguous",
 			"Multiple Bitbucket credential modes are present.",
-			"Invoke bb-pr with exactly one credential mode: API token, access token, or JWT.",
+			"Invoke bb with exactly one credential mode: API token, access token, or JWT.",
 		);
 	}
 	if (accessToken) return `Bearer ${accessToken}`;
@@ -279,7 +279,7 @@ function resolveAuthHeader(environment: Record<string, string | undefined>): str
 		throw new CliError(
 			"auth_missing",
 			"Bitbucket credentials are required.",
-			"Invoke bb-pr through the credential wrapper you already use. Run bb-pr --help for accepted variable names.",
+			"Invoke bb through the credential wrapper you already use. Run bb --help for accepted variable names.",
 		);
 	}
 	return `Basic ${btoa(`${email}:${token}`)}`;
@@ -332,7 +332,7 @@ function buildRequest(input: ParsedInput, repository: BitbucketRepository | unde
 	const limit = () => boundedInteger(stringFlag(input.flags, "--limit") ?? "50", "limit", 1, 100);
 	const builder = REQUEST_BUILDERS[input.command.name];
 	if (!builder) {
-		throw new CliError("unknown_command", `No runtime handler for ${input.command.name}.`, "Run bb-pr commands --json and report command drift.");
+		throw new CliError("unknown_command", `No runtime handler for ${input.command.name}.`, "Run bb commands --json and report command drift.");
 	}
 	return builder({ input, base, id, limit });
 }
@@ -537,7 +537,7 @@ async function discoverOperations(input: ParsedInput, dependencies: CliDependenc
 			operations: page,
 		},
 		next_safe_action: nextCursor === null
-			? "Choose an operation, substitute its path parameters, then run bb-pr api with the documented method and body."
+			? "Choose an operation, substitute its path parameters, then run bb api with the documented method and body."
 			: "Continue discovery with data.next_invocation.argv, which preserves the active query and page bounds.",
 		retry_safety: "same_input_safe",
 		effect: "read",
@@ -712,15 +712,15 @@ function requestBodyDigest(body: unknown): string {
 
 function classifyHttpError(status: number, effect: "read" | "write", headers: Headers): { code: string; nextSafeAction: string; retrySafety: RetrySafety; retryAfterSeconds?: number; maximumAttempts?: number } {
 	const retrySafety = effect === "write" ? "inspect_before_retry" : "same_input_safe";
-	if (status === 401) return { code: "auth_rejected", nextSafeAction: "Refresh the process-scoped Bitbucket credentials, then run bb-pr status.", retrySafety: "same_input_safe" };
+	if (status === 401) return { code: "auth_rejected", nextSafeAction: "Refresh the process-scoped Bitbucket credentials, then run bb status.", retrySafety: "same_input_safe" };
 	if (status === 403) return { code: "permission_denied", nextSafeAction: "Check API-token scopes and repository access. Do not retry unchanged credentials.", retrySafety: "same_input_safe" };
 	if ([404, 405, 415, 422].includes(status)) {
 		const code = status === 404 ? "not_found" : status === 405 ? "method_not_allowed" : status === 415 ? "unsupported_media_type" : "request_rejected";
 		return {
 			code,
 			nextSafeAction: effect === "write"
-				? "Inspect the affected Bitbucket resource first. Then run bb-pr doctor openapi; execute again only after confirming no change and correcting the request."
-				: "Run bb-pr doctor openapi. If it is healthy, correct the path, method, content type, or request body before retrying.",
+				? "Inspect the affected Bitbucket resource first. Then run bb doctor openapi; execute again only after confirming no change and correcting the request."
+				: "Run bb doctor openapi. If it is healthy, correct the path, method, content type, or request body before retrying.",
 			retrySafety,
 		};
 	}
@@ -826,16 +826,16 @@ function stringFlag(flags: Map<string, string | true>, name: string): string | u
 }
 
 function usage(message: string): CliError {
-	return new CliError("usage_error", message, "Run bb-pr help <command> and correct the invocation.");
+	return new CliError("usage_error", message, "Run bb help <command> and correct the invocation.");
 }
 
 function normalizeError(error: unknown): CliError {
 	if (error instanceof CliError) return error;
-	return new CliError("unexpected_failure", error instanceof Error ? error.message : String(error), "Run bb-pr status. If it passes, rerun the read or preview; inspect state before retrying a write.", "inspect_before_retry");
+	return new CliError("unexpected_failure", error instanceof Error ? error.message : String(error), "Run bb status. If it passes, rerun the read or preview; inspect state before retrying a write.", "inspect_before_retry");
 }
 
 function nextReadAction(command: string): string {
-	if (command === "list") return "Choose a pull-request identifier and run bb-pr view <id>.";
+	if (command === "list") return "Choose a pull-request identifier and run bb view <id>.";
 	if (command === "view") return "Inspect diffstat, checks, comments, or activity for this pull request.";
 	if (command === "diffstat") return "Request a bounded diff for files that need inspection.";
 	return "Use the returned evidence to choose the next safe read or an approved write preview.";

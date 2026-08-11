@@ -1,5 +1,5 @@
 {
-  "contract_id": "bb-pr.openapi-baseline",
+  "contract_id": "bitbucket.openapi-baseline",
   "schema_version": "1",
   "source_url": "https://api.bitbucket.org/swagger.json",
   "swagger": "2.0",

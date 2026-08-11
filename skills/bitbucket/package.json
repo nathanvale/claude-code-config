@@ -1,9 +1,17 @@
 {
-	"name": "bb-pr-scripts",
+	"name": "bitbucket-scripts",
 	"private": true,
 	"type": "module",
+	"bin": {
+		"bb": "./src/cli.ts"
+	},
+	"setup": {
+		"pathBin": {
+			"bb": "./src/cli.ts"
+		}
+	},
 	"scripts": {
-		"bb-pr": "bun run src/cli.ts",
+		"bb": "bun run src/cli.ts",
 		"generate-openapi-baseline": "bun run src/generate-openapi-baseline.ts",
 		"test": "bun test src/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"

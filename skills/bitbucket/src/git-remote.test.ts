@@ -9,7 +9,7 @@ import { resolveRepository } from "./git-remote";
 let temporaryDirectory: string;
 
 beforeEach(() => {
-	temporaryDirectory = mkdtempSync(join(tmpdir(), "bb-pr-"));
+	temporaryDirectory = mkdtempSync(join(tmpdir(), "bb-"));
 });
 
 afterEach(() => {

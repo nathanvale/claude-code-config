@@ -44,7 +44,7 @@ export async function generateOpenApiBaseline(fetcher: typeof fetch = fetch, out
 		output: outputPath,
 		operations: Object.keys(baseline.operations).length,
 		digest: createHash("sha256").update(content).digest("hex"),
-		next_safe_action: "Review the generated semantic baseline, then run bb-pr doctor openapi.",
+		next_safe_action: "Review the generated semantic baseline, then run bb doctor openapi.",
 	};
 }
 

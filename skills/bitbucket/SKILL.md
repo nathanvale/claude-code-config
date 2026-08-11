@@ -1,9 +1,9 @@
 ---
-name: bb-pr
-description: "Bitbucket Cloud pull-request inspection, checks, comments, approvals, creation, merge, or decline through the REST API."
+name: bitbucket
+description: "Bitbucket Cloud repositories, pull requests, pipelines, and other REST API operations."
 ---
 
-# Bitbucket PR
+# Bitbucket
 
 Use the package CLI as the contract owner. Keep command names, inputs, REST
 routes, output fields, and repair hints out of this skill.
@@ -11,7 +11,7 @@ routes, output fields, and repair hints out of this skill.
 ## Start
 
 - Set `SKILL_DIR` to this skill directory.
-- Run `bun run --silent "$SKILL_DIR/src/cli.ts" --help`.
+- Run `bun run --cwd "$SKILL_DIR" --silent bb --help`.
 - Use `help <command>` for human guidance or `commands --json` for discovery.
 - Use `operations` to discover current endpoints from Atlassian's canonical
   OpenAPI contract; use `api` when no convenience command owns the operation.
@@ -39,8 +39,8 @@ routes, output fields, and repair hints out of this skill.
 
 ## Verification
 
-- `bun --filter bb-pr-scripts test`
-- `bun --filter bb-pr-scripts typecheck`
+- `bun --filter bitbucket-scripts test`
+- `bun --filter bitbucket-scripts typecheck`
 
 Next safe action: run help, then choose one read command or preview one approved
 write.

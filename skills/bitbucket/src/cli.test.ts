@@ -34,7 +34,7 @@ const openApiFixture = {
 };
 
 function writeOpenApiBaseline(): string {
-	const directory = mkdtempSync(join(tmpdir(), "bb-pr-openapi-"));
+	const directory = mkdtempSync(join(tmpdir(), "bb-openapi-"));
 	const path = join(directory, "baseline.json");
 	writeFileSync(path, JSON.stringify(buildOpenApiBaseline(openApiFixture)));
 	return path;
@@ -81,14 +81,21 @@ function harness(fetcher?: FetchLike) {
 	};
 }
 
-describe("bb-pr command surface", () => {
+describe("bb command surface", () => {
 	test("renders prose help without auth or repository state", async () => {
 		const run = harness();
 		run.dependencies.environment = {};
 		expect(await runCli([], run.dependencies)).toBe(0);
-		expect(run.stdout.join("\n")).toContain("thin Bitbucket Cloud REST client");
-		expect(run.stdout.join("\n")).toContain("Start with `bb-pr status`");
+		expect(run.stdout.join("\n")).toContain("thin client for the Bitbucket Cloud REST API");
+		expect(run.stdout.join("\n")).toContain("Start with `bb status`");
 		expect(run.stderr).toEqual([]);
+	});
+
+	test("publishes bb as the package and setup command", () => {
+		const packageJson = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
+		expect(packageJson.bin).toEqual({ bb: "./src/cli.ts" });
+		expect(packageJson.setup?.pathBin).toEqual({ bb: "./src/cli.ts" });
+		expect(packageJson.scripts?.bb).toBe("bun run src/cli.ts");
 	});
 
 	test("renders command help in prose", async () => {
@@ -330,7 +337,7 @@ describe("bb-pr command surface", () => {
 	});
 
 	test("preserves the prior baseline when atomic replacement fails", async () => {
-		const directory = mkdtempSync(join(tmpdir(), "bb-pr-baseline-write-"));
+		const directory = mkdtempSync(join(tmpdir(), "bb-baseline-write-"));
 		const output = join(directory, "baseline.json");
 		const temporary = join(directory, "baseline.pending.json");
 		writeFileSync(output, "prior baseline");
@@ -419,7 +426,7 @@ describe("bb-pr command surface", () => {
 	});
 
 	test("binds file-body execution to the approved SHA-256 digest", async () => {
-		const directory = mkdtempSync(join(tmpdir(), "bb-pr-body-"));
+		const directory = mkdtempSync(join(tmpdir(), "bb-body-"));
 		const path = join(directory, "body.bin");
 		writeFileSync(path, "approved bytes");
 		const preview = harness();
@@ -588,7 +595,7 @@ describe("bb-pr command surface", () => {
 		expect(await runCli(["api", "/repositories/workspace/repo/unknown"], run.dependencies)).toBe(1);
 		const result = JSON.parse(run.stderr[0]);
 		expect(result.error.code).toBe("not_found");
-		expect(result.next_safe_action).toContain("bb-pr doctor openapi");
+		expect(result.next_safe_action).toContain("bb doctor openapi");
 	});
 
 	test("preserves HTTP classification for malformed JSON and write retry safety", async () => {
@@ -657,10 +664,10 @@ describe("bb-pr command surface", () => {
 		});
 		expect(await runCli(["list"], run.dependencies)).toBe(0);
 		const result = JSON.parse(run.stdout[0]);
-		expect(result).toEqual(expect.objectContaining({ contract_id: "bb-pr.result", schema_version: "1", exit_code: 0 }));
+		expect(result).toEqual(expect.objectContaining({ contract_id: "bitbucket.result", schema_version: "1", exit_code: 0 }));
 		expect(requests[0]).toContain("pagelen=25");
 		const error = harness();
 		expect(await runCli(["ship"], error.dependencies)).toBe(2);
-		expect(JSON.parse(error.stderr[0])).toEqual(expect.objectContaining({ contract_id: "bb-pr.result", schema_version: "1", exit_code: 2 }));
+		expect(JSON.parse(error.stderr[0])).toEqual(expect.objectContaining({ contract_id: "bitbucket.result", schema_version: "1", exit_code: 2 }));
 	});
 });

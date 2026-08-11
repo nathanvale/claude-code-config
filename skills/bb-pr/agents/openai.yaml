@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bitbucket PR"
-  short_description: "Inspect and manage Bitbucket Cloud PRs"
-  default_prompt: "Use $bb-pr to inspect this Bitbucket Cloud pull request and report the next safe action."
