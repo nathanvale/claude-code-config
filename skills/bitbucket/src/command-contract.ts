@@ -33,7 +33,8 @@ export const COMMANDS: readonly CommandDefinition[] = [
 		guidance: [
 			"Compares semantic API shape and ignores documentation-only changes.",
 			"Breaking drift returns an approval-gated issue draft; it never notifies the code owner itself.",
-			"Exit 0 means healthy, additive, or review drift. Exit 3 means confirmed breaking drift requires attention.",
+			"The result includes a model-neutral structured continuation when review or repair is needed.",
+			"Exit 0 means healthy or additive drift. Exit 3 means confirmed breaking drift. Exit 4 means indeterminate drift or baseline provenance needs review.",
 		],
 		examples: ["bb doctor openapi"],
 	},

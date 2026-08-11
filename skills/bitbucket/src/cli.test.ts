@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { COMMANDS } from "./command-contract";
-import { runCli } from "./cli";
+import { assessBaselineProvenance, runCli } from "./cli";
 import { writeBaselineAtomically } from "./generate-openapi-baseline";
 import { analyzeOpenApiDrift, buildOpenApiBaseline } from "./openapi-drift";
 
@@ -48,6 +49,19 @@ async function runOpenApiDoctor(fixture: unknown) {
 	return { exitCode, result: JSON.parse(run.stdout[0]) };
 }
 
+async function runTrustedOpenApiDoctor(fixture: unknown, expectedSha256?: string) {
+	const run = harness(async () => Response.json(fixture));
+	run.dependencies.environment = {};
+	const baselinePath = writeOpenApiBaseline();
+	const baselineContent = readFileSync(baselinePath, "utf8");
+	const exitCode = await runCli(["doctor", "openapi"], {
+		...run.dependencies,
+		openApiBaselinePath: baselinePath,
+		openApiBaselineSha256: expectedSha256 ?? createHash("sha256").update(baselineContent).digest("hex"),
+	});
+	return { exitCode, result: JSON.parse(run.stdout[0]) };
+}
+
 async function expectExecutedGenericWriteRetrySafety(fetcher: FetchLike): Promise<void> {
 	const run = harness(fetcher);
 	expect(await runCli(["api", "/x", "--method", "POST", "--execute"], run.dependencies)).toBe(1);
@@ -82,6 +96,18 @@ function harness(fetcher?: FetchLike) {
 }
 
 describe("bb command surface", () => {
+	test("binds bundled baseline trust to reviewed content", () => {
+		const input = {
+			baselinePath: "/bundle/openapi-baseline.json",
+			defaultBaselinePath: "/bundle/openapi-baseline.json",
+			baselineContent: "reviewed-baseline",
+			expectedSha256: "ad572c7bd680bee37902cf88563dac7e1aa4278dd1893a03ac81381388d1fc7d",
+		};
+		expect(assessBaselineProvenance(input)).toEqual({ trust: "bundled_verified", reason: "reviewed_digest_match" });
+		expect(assessBaselineProvenance({ ...input, baselineContent: "tampered" })).toEqual({ trust: "bundled_unverified", reason: "reviewed_digest_mismatch" });
+		expect(assessBaselineProvenance({ ...input, baselinePath: "/tmp/custom.json" })).toEqual({ trust: "custom_untrusted", reason: "custom_path" });
+	});
+
 	test("renders prose help without auth or repository state", async () => {
 		const run = harness();
 		run.dependencies.environment = {};
@@ -103,6 +129,13 @@ describe("bb command surface", () => {
 		expect(await runCli(["help", "merge"], run.dependencies)).toBe(0);
 		expect(run.stdout.join("\n")).toContain("External write");
 		expect(run.stdout.join("\n")).toContain("source branch stays open");
+	});
+
+	test("documents doctor exit and structured continuation semantics", async () => {
+		const run = harness();
+		expect(await runCli(["help", "doctor"], run.dependencies)).toBe(0);
+		expect(run.stdout[0]).toContain("Exit 4");
+		expect(run.stdout[0]).toContain("structured continuation");
 	});
 
 	test("emits machine-readable discovery from the same catalog", async () => {
@@ -214,6 +247,17 @@ describe("bb command surface", () => {
 		expect(result.data.owner_notification.status).toBe("not_required");
 	});
 
+	test("returns attention and exit 4 for indeterminate review drift", async () => {
+		const fixture = structuredClone(openApiFixture);
+		Object.assign(fixture.paths["/repositories/{workspace}/{repo_slug}/pullrequests"].get.responses["200"].schema, { pattern: "^[a-z]+$" });
+		const { exitCode, result } = await runOpenApiDoctor(fixture);
+		expect(exitCode).toBe(4);
+		expect(result.status).toBe("attention");
+		expect(result.data.health).toBe("review_drift");
+		expect(result.exit_code).toBe(4);
+		expect(result.remediation_class).toBe("maintenance_review");
+	});
+
 	test("keeps custom-baseline breaking drift local and untrusted", async () => {
 		const fixture = structuredClone(openApiFixture);
 		const pathItem: { post?: unknown } = fixture.paths["/repositories/{workspace}/{repo_slug}/pullrequests"];
@@ -244,6 +288,48 @@ describe("bb command surface", () => {
 		expect(first.issue_draft?.dedupe_key).toBe(second.issue_draft?.dedupe_key);
 	});
 
+	test("emits a structured model-neutral breaking-drift continuation", async () => {
+		const fixture = structuredClone(openApiFixture);
+		const pathItem: { post?: unknown } = fixture.paths["/repositories/{workspace}/{repo_slug}/pullrequests"];
+		delete pathItem.post;
+		const { exitCode, result } = await runTrustedOpenApiDoctor(fixture);
+		expect(exitCode).toBe(3);
+		expect(result.data.baseline_trust).toBe("bundled_verified");
+		expect(result.data.continuation).toEqual({
+			action: "review_and_prepare_owner_issue",
+			owner_repository: "nathanvale/claude-code-config",
+			dedupe_key: result.data.issue_draft.dedupe_key,
+			approval_required: true,
+			notification_status: "not_sent",
+			issue_url: null,
+			help_path: "references/openapi-drift.md",
+		});
+		expect(JSON.stringify(result)).not.toMatch(/terra/i);
+	});
+
+	test("suppresses escalation when default-path baseline bytes are unverified", async () => {
+		const fixture = structuredClone(openApiFixture);
+		const pathItem: { post?: unknown } = fixture.paths["/repositories/{workspace}/{repo_slug}/pullrequests"];
+		delete pathItem.post;
+		const { exitCode, result } = await runTrustedOpenApiDoctor(fixture, "0".repeat(64));
+		expect(exitCode).toBe(3);
+		expect(result.data.baseline_trust).toBe("bundled_unverified");
+		expect(result.data.baseline_trust_reason).toBe("reviewed_digest_mismatch");
+		expect(result.data.issue_draft).toBeNull();
+		expect(result.data.owner_notification).toEqual({ status: "not_sent", reason: "untrusted_baseline", issue_url: null });
+		expect(result.data.continuation.action).toBe("restore_reviewed_baseline");
+	});
+
+	test("returns attention when the healthy default-path baseline is unverified", async () => {
+		const { exitCode, result } = await runTrustedOpenApiDoctor(openApiFixture, "0".repeat(64));
+		expect(exitCode).toBe(4);
+		expect(result.status).toBe("attention");
+		expect(result.data.health).toBe("healthy");
+		expect(result.data.baseline_trust).toBe("bundled_unverified");
+		expect(result.data.continuation.action).toBe("restore_reviewed_baseline");
+		expect(result.remediation_class).toBe("untrusted_baseline");
+	});
+
 	test("distinguishes contract metadata changes in breaking drift dedupe keys", () => {
 		const baseline = buildOpenApiBaseline(openApiFixture);
 		const swaggerChange = analyzeOpenApiDrift({ ...openApiFixture, swagger: "3.0" }, baseline);
@@ -261,6 +347,9 @@ describe("bb command surface", () => {
 			parameters: [],
 			responses: { "200": { schema: { semantic_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } },
 		});
+		const schemaDigest = (baseline.operations["GET /x"] as { responses: { "200": { schema: { semantic_sha256: string } } } }).responses["200"].schema.semantic_sha256;
+		expect(baseline.schema_version).toBe("2");
+		expect(baseline.schemas[schemaDigest]).toEqual({ semantic_undefined: true });
 	});
 
 	test("neutralizes upstream backticks in issue-draft code spans", () => {
@@ -288,6 +377,24 @@ describe("bb command surface", () => {
 		const live = structuredClone(openApiFixture);
 		live.paths["/repositories/{workspace}/{repo_slug}/pullrequests"].get.parameters.push({ name: "q", in: "query", required: false, type: "string" });
 		const result = analyzeOpenApiDrift(live, baseline);
+		expect(result.health).toBe("additive_drift");
+		expect(result.drift.expanded_operations).toEqual(["GET /repositories/{workspace}/{repo_slug}/pullrequests"]);
+	});
+
+	test("classifies an optional request-parameter enum expansion as additive", () => {
+		const baselineDocument = structuredClone(openApiFixture);
+		const baselineParameters: Array<Record<string, unknown>> = baselineDocument.paths["/repositories/{workspace}/{repo_slug}/pullrequests"].get.parameters;
+		baselineParameters.push({
+			name: "state",
+			in: "query",
+			required: false,
+			type: "string",
+			enum: ["OPEN"],
+		});
+		const live = structuredClone(baselineDocument);
+		const liveParameters: Array<Record<string, unknown>> = live.paths["/repositories/{workspace}/{repo_slug}/pullrequests"].get.parameters;
+		(liveParameters[1].enum as string[]).push("MERGED");
+		const result = analyzeOpenApiDrift(live, buildOpenApiBaseline(baselineDocument));
 		expect(result.health).toBe("additive_drift");
 		expect(result.drift.expanded_operations).toEqual(["GET /repositories/{workspace}/{repo_slug}/pullrequests"]);
 	});
@@ -350,6 +457,53 @@ describe("bb command surface", () => {
 			paths: { "/x": { get: { responses: { "200": { schema: { type: "object", properties: { name: { type: "string" } } } } } } } },
 		};
 		expect(analyzeOpenApiDrift(inline, baseline).health).toBe("healthy");
+	});
+
+	test("classifies removed and newly required response properties as breaking", () => {
+		const baselineDocument = {
+			swagger: "2.0",
+			basePath: "/2.0",
+			paths: {
+				"/pets": {
+					get: {
+						responses: {
+							"200": {
+								schema: {
+									type: "object",
+									required: ["name"],
+									properties: { name: { type: "string" }, age: { type: "integer" } },
+								},
+							},
+						},
+					},
+				},
+			},
+		};
+		const baseline = buildOpenApiBaseline(baselineDocument);
+		const removedProperty = structuredClone(baselineDocument);
+		const removedProperties: { name: { type: string }; age?: { type: string } } = removedProperty.paths["/pets"].get.responses["200"].schema.properties;
+		delete removedProperties.age;
+		expect(analyzeOpenApiDrift(removedProperty, baseline).health).toBe("breaking_drift");
+
+		const newlyRequired = structuredClone(baselineDocument);
+		newlyRequired.paths["/pets"].get.responses["200"].schema.required.push("age");
+		expect(analyzeOpenApiDrift(newlyRequired, baseline).health).toBe("breaking_drift");
+	});
+
+	test("classifies optional response additions as additive and enum expansion as breaking", () => {
+		const baselineDocument = {
+			swagger: "2.0",
+			basePath: "/2.0",
+			paths: { "/state": { get: { responses: { "200": { schema: { type: "object", properties: { state: { type: "string", enum: ["OPEN"] } } } } } } } },
+		};
+		const baseline = buildOpenApiBaseline(baselineDocument);
+		const optionalAddition = structuredClone(baselineDocument);
+		Object.assign(optionalAddition.paths["/state"].get.responses["200"].schema.properties, { age: { type: "integer" } });
+		expect(analyzeOpenApiDrift(optionalAddition, baseline).health).toBe("additive_drift");
+
+		const expandedEnum = structuredClone(baselineDocument);
+		expandedEnum.paths["/state"].get.responses["200"].schema.properties.state.enum.push("MERGED");
+		expect(analyzeOpenApiDrift(expandedEnum, baseline).health).toBe("breaking_drift");
 	});
 
 	test("keeps breaking dedupe stable across unrelated accepted baseline additions", () => {

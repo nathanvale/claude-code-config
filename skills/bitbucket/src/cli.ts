@@ -2,6 +2,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { COMMANDS, findCommand, renderHelp, type CommandDefinition } from "./command-contract";
@@ -10,6 +11,7 @@ import { analyzeOpenApiDrift, BITBUCKET_OPENAPI_URL, type OpenApiBaseline, type 
 
 const API_BASE_URL = "https://api.bitbucket.org/2.0";
 const DEFAULT_OPENAPI_BASELINE = fileURLToPath(new URL("../openapi-baseline.json", import.meta.url));
+const BUNDLED_OPENAPI_BASELINE_SHA256 = "afe837be0a2af93e7d17f7def9ede36a39539f2052672454ab4e4c7f77e95b9d";
 const ENVELOPE_CONTRACT_ID = "bitbucket.result";
 const ENVELOPE_SCHEMA_VERSION = "1";
 const VALID_STATES = ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"] as const;
@@ -35,6 +37,8 @@ interface CliDependencies {
 	cwd: string;
 	io: CliIo;
 	runId: string;
+	openApiBaselinePath: string;
+	openApiBaselineSha256: string;
 }
 
 interface ParsedInput {
@@ -74,6 +78,38 @@ interface CommandResult {
 	remediationClass?: "none" | "maintenance_review" | "approval_required" | "untrusted_baseline";
 }
 
+/** Provenance state for a baseline used by the drift doctor. */
+export interface BaselineProvenance {
+	/** Whether the artifact is the reviewed bundle, a modified bundle, or a custom diagnostic input. */
+	trust: "bundled_verified" | "bundled_unverified" | "custom_untrusted";
+	/** Stable reason for automation and repair guidance. */
+	reason: "reviewed_digest_match" | "reviewed_digest_mismatch" | "custom_path";
+}
+
+/**
+ * Bind drift escalation authority to reviewed baseline bytes rather than a pathname alone.
+ *
+ * @param input - Candidate path, reviewed path, bytes, and reviewed digest
+ * @returns Provenance state used to allow or suppress owner escalation
+ *
+ * @example
+ * ```ts
+ * assessBaselineProvenance({ baselinePath, defaultBaselinePath, baselineContent, expectedSha256 })
+ * ```
+ */
+export function assessBaselineProvenance(input: {
+	baselinePath: string;
+	defaultBaselinePath: string;
+	baselineContent: string;
+	expectedSha256: string;
+}): BaselineProvenance {
+	if (resolve(input.baselinePath) !== resolve(input.defaultBaselinePath)) return { trust: "custom_untrusted", reason: "custom_path" };
+	const digest = createHash("sha256").update(input.baselineContent).digest("hex");
+	return digest === input.expectedSha256
+		? { trust: "bundled_verified", reason: "reviewed_digest_match" }
+		: { trust: "bundled_unverified", reason: "reviewed_digest_mismatch" };
+}
+
 class CliError extends Error {
 	constructor(
 		readonly code: string,
@@ -101,6 +137,8 @@ export async function runCli(
 			stderr: (text) => console.error(text),
 		},
 		runId: overrides.runId ?? randomUUID(),
+		openApiBaselinePath: overrides.openApiBaselinePath ?? DEFAULT_OPENAPI_BASELINE,
+		openApiBaselineSha256: overrides.openApiBaselineSha256 ?? BUNDLED_OPENAPI_BASELINE_SHA256,
 	};
 
 	try {
@@ -436,14 +474,16 @@ function resolveEffect(input: ParsedInput): "read" | "write" {
 
 async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies): Promise<CommandResult> {
 	if (input.positionals.length !== 1 || input.positionals[0] !== "openapi") throw usage("Doctor target must be: openapi.");
-	const baselinePath = stringFlag(input.flags, "--baseline-file") ?? DEFAULT_OPENAPI_BASELINE;
+	const baselinePath = stringFlag(input.flags, "--baseline-file") ?? dependencies.openApiBaselinePath;
 	if (!existsSync(baselinePath)) {
 		throw new CliError("openapi_baseline_missing", `OpenAPI baseline not found: ${baselinePath}`, "Restore the generated baseline from source control, then rerun the doctor.");
 	}
 
 	let baseline: OpenApiBaseline;
+	let baselineContent: string;
 	try {
-		baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as OpenApiBaseline;
+		baselineContent = readFileSync(baselinePath, "utf8");
+		baseline = JSON.parse(baselineContent) as OpenApiBaseline;
 	} catch (error: unknown) {
 		throw new CliError("openapi_baseline_invalid", error instanceof Error ? error.message : String(error), "Regenerate and review the OpenAPI baseline, then rerun the doctor.");
 	}
@@ -457,33 +497,82 @@ async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies
 		throw new CliError("openapi_contract_invalid", error instanceof Error ? error.message : String(error), "Inspect the baseline and live Swagger shape before accepting any contract update.");
 	}
 	const breaking = analysis.health === "breaking_drift";
-	const bundledBaseline = baselinePath === DEFAULT_OPENAPI_BASELINE;
-	const trustedIssueDraft = bundledBaseline ? analysis.issue_draft : null;
+	const review = analysis.health === "review_drift";
+	const baselineProvenance = assessBaselineProvenance({
+		baselinePath,
+		defaultBaselinePath: dependencies.openApiBaselinePath,
+		baselineContent,
+		expectedSha256: dependencies.openApiBaselineSha256,
+	});
+	const trustedBaseline = baselineProvenance.trust === "bundled_verified";
+	const provenanceAttention = baselineProvenance.trust === "bundled_unverified";
+	const attention = breaking || review || provenanceAttention;
+	const trustedIssueDraft = trustedBaseline ? analysis.issue_draft : null;
+	const continuation = provenanceAttention
+		? {
+			action: "restore_reviewed_baseline",
+			approval_required: false,
+			notification_status: "not_allowed",
+			help_path: "references/openapi-drift.md",
+		}
+		: breaking
+		? trustedBaseline && trustedIssueDraft
+			? {
+				action: "review_and_prepare_owner_issue",
+				owner_repository: "nathanvale/claude-code-config",
+				dedupe_key: trustedIssueDraft.dedupe_key,
+				approval_required: true,
+				notification_status: "not_sent",
+				issue_url: null,
+				help_path: "references/openapi-drift.md",
+			}
+			: {
+				action: "restore_reviewed_baseline",
+				approval_required: false,
+				notification_status: "not_allowed",
+				help_path: "references/openapi-drift.md",
+			}
+		: review
+			? {
+				action: "review_contract_drift",
+				approval_required: false,
+				notification_status: "not_required",
+				help_path: "references/openapi-drift.md",
+			}
+			: null;
 	return {
-		status: breaking ? "attention" : "ok",
-		exitCode: breaking ? 3 : 0,
+		status: attention ? "attention" : "ok",
+		exitCode: breaking ? 3 : review || provenanceAttention ? 4 : 0,
 		changed_state: "none",
 		data: {
 			...analysis,
 			issue_draft: trustedIssueDraft,
 			baseline_file: baselinePath,
-			baseline_trust: bundledBaseline ? "bundled" : "custom_untrusted",
+			baseline_trust: baselineProvenance.trust,
+			baseline_trust_reason: baselineProvenance.reason,
+			continuation,
 			owner_notification: breaking
-				? { status: "not_sent", reason: bundledBaseline ? "approval_required" : "untrusted_baseline", issue_url: null }
+				? { status: "not_sent", reason: trustedBaseline ? "approval_required" : "untrusted_baseline", issue_url: null }
 				: { status: "not_required", issue_url: null },
 		},
-		next_safe_action: breaking
-			? bundledBaseline
-				? "Delegate this bounded drift evidence to a Terra review agent, deduplicate the issue draft in nathanvale/claude-code-config, then obtain explicit approval before creating an issue."
-				: "Treat this custom-baseline result as local diagnostics only. Reproduce against the bundled baseline before any escalation."
+		next_safe_action: provenanceAttention
+			? "Follow data.continuation: restore the reviewed bundled baseline before relying on drift results."
+			: breaking
+			? trustedBaseline
+				? "Follow data.continuation: review the bounded evidence, deduplicate the owner issue, then obtain explicit approval before creation."
+				: "Follow data.continuation: restore the reviewed bundled baseline before any escalation."
 			: analysis.health === "additive_drift"
 				? "Review the additive operations during normal maintenance; no owner notification is required."
 				: analysis.health === "review_drift"
-					? "Review the indeterminate semantic drift during normal maintenance; no owner notification was created."
+					? "Follow data.continuation and resolve the indeterminate compatibility change before treating the contract as healthy."
 					: "No OpenAPI repair action is required.",
 		retry_safety: "same_input_safe",
 		effect: "read",
-		remediationClass: breaking ? (bundledBaseline ? "approval_required" : "untrusted_baseline") : analysis.health === "healthy" ? "none" : "maintenance_review",
+		remediationClass: breaking
+			? (trustedBaseline ? "approval_required" : "untrusted_baseline")
+			: provenanceAttention
+				? "untrusted_baseline"
+				: analysis.health === "healthy" ? "none" : "maintenance_review",
 	};
 }
 

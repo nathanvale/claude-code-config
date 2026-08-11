@@ -8,7 +8,7 @@ export interface OpenApiBaseline {
 	/** Stable baseline contract identifier. */
 	contract_id: "bitbucket.openapi-baseline";
 	/** Baseline schema version owned by this package. */
-	schema_version: "1";
+	schema_version: "2";
 	/** Upstream contract URL. */
 	source_url: string;
 	/** Swagger version declared upstream. */
@@ -17,6 +17,8 @@ export interface OpenApiBaseline {
 	base_path: string;
 	/** Method and path keyed semantic operations. */
 	operations: Record<string, unknown>;
+	/** Content-addressed semantic schema shapes referenced by operations. */
+	schemas: Record<string, unknown>;
 	/** Shared schemas and security definitions that affect operations. */
 	components: Record<string, unknown>;
 }
@@ -94,6 +96,7 @@ export function buildOpenApiBaseline(document: unknown): OpenApiBaseline {
 	if (!root.paths || typeof root.paths !== "object" || Array.isArray(root.paths)) throw new Error("OpenAPI document has no paths object.");
 
 	const operations: Record<string, unknown> = {};
+	const schemas: Record<string, unknown> = {};
 	for (const [path, rawPathItem] of Object.entries(root.paths as Record<string, unknown>)) {
 		if (!rawPathItem || typeof rawPathItem !== "object" || Array.isArray(rawPathItem)) continue;
 		const pathItem = rawPathItem as Record<string, unknown>;
@@ -114,7 +117,7 @@ export function buildOpenApiBaseline(document: unknown): OpenApiBaseline {
 			for (const key of SEMANTIC_VENDOR_KEYS) {
 				if (operation[key] !== undefined) semanticOperation[key] = cleanSemantic(operation[key]);
 			}
-			operations[`${method.toUpperCase()} ${path}`] = cleanSemantic(compactSchemas(resolveLocalReferences(semanticOperation, root)));
+			operations[`${method.toUpperCase()} ${path}`] = cleanSemantic(compactSchemas(resolveLocalReferences(semanticOperation, root), schemas));
 		}
 	}
 
@@ -126,11 +129,12 @@ export function buildOpenApiBaseline(document: unknown): OpenApiBaseline {
 
 	return {
 		contract_id: "bitbucket.openapi-baseline",
-		schema_version: "1",
+		schema_version: "2",
 		source_url: BITBUCKET_OPENAPI_URL,
 		swagger: typeof root.swagger === "string" ? root.swagger : "unknown",
 		base_path: typeof root.basePath === "string" ? root.basePath : "unknown",
 		operations: sortRecord(operations),
+		schemas: sortRecord(schemas),
 		components: sortRecord(components),
 	};
 }
@@ -155,15 +159,34 @@ function resolveLocalReferences(value: unknown, root: Record<string, unknown>, s
 	return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, resolveLocalReferences(item, root, stack)]));
 }
 
-function compactSchemas(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(compactSchemas);
+function compactSchemas(value: unknown, schemas: Record<string, unknown>): unknown {
+	if (Array.isArray(value)) return value.map((item) => compactSchemas(item, schemas));
 	if (!value || typeof value !== "object") return value;
 	return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => {
 		if (key === "schema") {
-			return [key, { semantic_sha256: createHash("sha256").update(stableStringify(cleanSemantic(item))).digest("hex") }];
+			const semanticShape = cleanSemantic(item);
+			const digest = createHash("sha256").update(stableStringify(semanticShape)).digest("hex");
+			if (!(digest in schemas)) schemas[digest] = compactSchemaValue(semanticShape, schemas);
+			return [key, { semantic_sha256: digest }];
 		}
-		return [key, compactSchemas(item)];
+		return [key, compactSchemas(item, schemas)];
 	}));
+}
+
+function compactSchemaValue(value: unknown, schemas: Record<string, unknown>): unknown {
+	if (value === undefined) return { semantic_undefined: true };
+	if (Array.isArray(value)) return value.map((item) => compactSchemaChild(item, schemas));
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, compactSchemaChild(item, schemas)]));
+}
+
+function compactSchemaChild(value: unknown, schemas: Record<string, unknown>): unknown {
+	if (Array.isArray(value)) return value.map((item) => compactSchemaChild(item, schemas));
+	if (!value || typeof value !== "object") return value;
+	const semanticShape = cleanSemantic(value);
+	const digest = createHash("sha256").update(stableStringify(semanticShape)).digest("hex");
+	if (!(digest in schemas)) schemas[digest] = compactSchemaValue(semanticShape, schemas);
+	return { semantic_sha256: digest };
 }
 
 /**
@@ -182,7 +205,7 @@ function compactSchemas(value: unknown): unknown {
 export function analyzeOpenApiDrift(liveDocument: unknown, baseline: OpenApiBaseline): OpenApiDriftAnalysis {
 	validateBaseline(baseline);
 	const live = buildOpenApiBaseline(liveDocument);
-	const operationDiff = compareOperations(baseline.operations, live.operations);
+	const operationDiff = compareOperations(baseline.operations, live.operations, baseline.schemas, live.schemas);
 	const componentDiff = compareRecords(flattenComponents(baseline), flattenComponents(live));
 	if (baseline.swagger !== live.swagger || baseline.base_path !== live.base_path) componentDiff.changed.push("contract_metadata");
 
@@ -345,13 +368,18 @@ function compareRecords(baseline: Record<string, unknown>, live: Record<string, 
 	};
 }
 
-function compareOperations(baseline: Record<string, unknown>, live: Record<string, unknown>): { added: string[]; removed: string[]; additive: string[]; breaking: string[]; review: string[] } {
+function compareOperations(
+	baseline: Record<string, unknown>,
+	live: Record<string, unknown>,
+	baselineSchemas: Record<string, unknown>,
+	liveSchemas: Record<string, unknown>,
+): { added: string[]; removed: string[]; additive: string[]; breaking: string[]; review: string[] } {
 	const records = compareRecords(baseline, live);
 	const additive: string[] = [];
 	const breaking: string[] = [];
 	const review: string[] = [];
 	for (const key of records.changed) {
-		const compatibility = classifyOperationChange(baseline[key], live[key]);
+		const compatibility = classifyOperationChange(baseline[key], live[key], baselineSchemas, liveSchemas);
 		if (compatibility === "additive") additive.push(key);
 		else if (compatibility === "breaking") breaking.push(key);
 		else review.push(key);
@@ -359,37 +387,89 @@ function compareOperations(baseline: Record<string, unknown>, live: Record<strin
 	return { added: records.added, removed: records.removed, additive, breaking, review };
 }
 
-function classifyOperationChange(before: unknown, after: unknown): "additive" | "breaking" | "review" {
+function classifyOperationChange(
+	before: unknown,
+	after: unknown,
+	beforeSchemas: Record<string, unknown>,
+	afterSchemas: Record<string, unknown>,
+): "additive" | "breaking" | "review" {
 	if (!isRecord(before) || !isRecord(after)) return "review";
 	const beforeParameters = parameterMap(before.parameters);
 	const afterParameters = parameterMap(after.parameters);
-	let additive = false;
+	let compatibility: Compatibility = "same";
 	for (const [key, parameter] of beforeParameters) {
 		if (!afterParameters.has(key)) return "breaking";
-		if (stableStringify(parameter) !== stableStringify(afterParameters.get(key))) return "breaking";
+		compatibility = mergeCompatibility(compatibility, classifyRequestParameter(parameter, afterParameters.get(key)));
+		if (compatibility === "breaking") return "breaking";
 	}
 	for (const [key, parameter] of afterParameters) {
 		if (beforeParameters.has(key)) continue;
 		if (isRecord(parameter) && parameter.required === true) return "breaking";
-		additive = true;
+		compatibility = mergeCompatibility(compatibility, "additive");
 	}
 	const beforeRest = { ...before };
 	const afterRest = { ...after };
 	delete beforeRest.parameters;
 	delete afterRest.parameters;
-	if (stableStringify(beforeRest) === stableStringify(afterRest)) return additive ? "additive" : "review";
+	if (stableStringify(beforeRest) === stableStringify(afterRest)) return compatibility === "same" ? "review" : compatibility;
 	for (const key of ["security", "x-atlassian-auth-types", "x-atlassian-oauth2-scopes"]) {
 		if (stableStringify(beforeRest[key]) !== stableStringify(afterRest[key])) return "breaking";
 	}
-	const responseCompatibility = classifyKeySet(beforeRest.responses, afterRest.responses);
+	const responseCompatibility = classifyResponseMap(beforeRest.responses, afterRest.responses, beforeSchemas, afterSchemas);
 	if (responseCompatibility === "breaking") return "breaking";
-	if (responseCompatibility === "additive" && onlyChangedKey(beforeRest, afterRest, "responses")) return "additive";
+	compatibility = mergeCompatibility(compatibility, responseCompatibility);
 	for (const key of ["consumes", "produces", "schemes"]) {
 		const classification = classifyArrayExpansion(beforeRest[key], afterRest[key]);
 		if (classification === "breaking") return "breaking";
-		if (classification === "additive" && onlyChangedKey(beforeRest, afterRest, key)) return "additive";
+		compatibility = mergeCompatibility(compatibility, classification);
 	}
-	return "review";
+	const classifiedKeys = new Set(["responses", "security", "x-atlassian-auth-types", "x-atlassian-oauth2-scopes", "consumes", "produces", "schemes"]);
+	if (hasUnknownSemanticChange(beforeRest, afterRest, classifiedKeys)) compatibility = mergeCompatibility(compatibility, "review");
+	return compatibility === "same" ? "review" : compatibility;
+}
+
+function classifyRequestParameter(before: unknown, after: unknown): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (!isRecord(before) || !isRecord(after)) return "review";
+	for (const key of ["name", "in", "type", "format", "collectionFormat"]) {
+		if (stableStringify(before[key]) !== stableStringify(after[key])) return "breaking";
+	}
+	let result: Compatibility = "same";
+	if (before.required !== true && after.required === true) return "breaking";
+	if (before.required === true && after.required !== true) result = "additive";
+	result = mergeCompatibility(result, classifyRequestEnum(before.enum, after.enum));
+	if (result === "breaking") return result;
+	result = mergeCompatibility(result, classifyRequestBound(before.minimum, after.minimum, "minimum"));
+	result = mergeCompatibility(result, classifyRequestBound(before.maximum, after.maximum, "maximum"));
+	result = mergeCompatibility(result, classifyRequestBound(before.minLength, after.minLength, "minimum"));
+	result = mergeCompatibility(result, classifyRequestBound(before.maxLength, after.maxLength, "maximum"));
+	result = mergeCompatibility(result, classifyRequestBound(before.minItems, after.minItems, "minimum"));
+	result = mergeCompatibility(result, classifyRequestBound(before.maxItems, after.maxItems, "maximum"));
+	if (result === "breaking") return result;
+	if (before.allowEmptyValue !== true && after.allowEmptyValue === true) result = mergeCompatibility(result, "additive");
+	if (before.allowEmptyValue === true && after.allowEmptyValue !== true) return "breaking";
+	const knownKeys = new Set([
+		"name", "in", "required", "type", "format", "collectionFormat", "enum", "minimum", "maximum",
+		"minLength", "maxLength", "minItems", "maxItems", "allowEmptyValue",
+	]);
+	if (hasUnknownSemanticChange(before, after, knownKeys)) return "review";
+	return result;
+}
+
+function classifyRequestEnum(before: unknown, after: unknown): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (!Array.isArray(before) || !Array.isArray(after)) return "review";
+	const beforeValues = new Set(before.map(stableStringify));
+	const afterValues = new Set(after.map(stableStringify));
+	if ([...beforeValues].some((value) => !afterValues.has(value))) return "breaking";
+	return [...afterValues].some((value) => !beforeValues.has(value)) ? "additive" : "same";
+}
+
+function classifyRequestBound(before: unknown, after: unknown, kind: "minimum" | "maximum"): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (typeof before !== "number" || typeof after !== "number") return "review";
+	const expands = kind === "minimum" ? after < before : after > before;
+	return expands ? "additive" : "breaking";
 }
 
 function parameterMap(value: unknown): Map<string, unknown> {
@@ -405,13 +485,120 @@ function parameterMap(value: unknown): Map<string, unknown> {
 	return result;
 }
 
-function classifyKeySet(before: unknown, after: unknown): "same" | "additive" | "breaking" | "review" {
+type Compatibility = "same" | "additive" | "breaking" | "review";
+
+function classifyResponseMap(
+	before: unknown,
+	after: unknown,
+	beforeSchemas: Record<string, unknown>,
+	afterSchemas: Record<string, unknown>,
+): Compatibility {
 	if (!isRecord(before) || !isRecord(after)) return stableStringify(before) === stableStringify(after) ? "same" : "review";
-	for (const key of Object.keys(before)) {
-		if (!(key in after)) return "breaking";
-		if (stableStringify(before[key]) !== stableStringify(after[key])) return "review";
+	let result: Compatibility = "same";
+	for (const [status, response] of Object.entries(before)) {
+		if (!(status in after)) return "breaking";
+		result = mergeCompatibility(result, classifyResponse(response, after[status], beforeSchemas, afterSchemas));
+		if (result === "breaking") return result;
 	}
-	return Object.keys(after).some((key) => !(key in before)) ? "additive" : "same";
+	if (Object.keys(after).some((status) => !(status in before))) result = mergeCompatibility(result, "additive");
+	return result;
+}
+
+function classifyResponse(
+	before: unknown,
+	after: unknown,
+	beforeSchemas: Record<string, unknown>,
+	afterSchemas: Record<string, unknown>,
+): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (!isRecord(before) || !isRecord(after)) return "review";
+	const schemaCompatibility = classifyResponseSchema(
+		semanticSchemaShape(before.schema, beforeSchemas),
+		semanticSchemaShape(after.schema, afterSchemas),
+	);
+	if (schemaCompatibility === "breaking") return "breaking";
+	const beforeRest = { ...before };
+	const afterRest = { ...after };
+	delete beforeRest.schema;
+	delete afterRest.schema;
+	if (stableStringify(beforeRest) !== stableStringify(afterRest)) return "review";
+	return schemaCompatibility;
+}
+
+function semanticSchemaShape(value: unknown, schemas: Record<string, unknown>): unknown {
+	if (!isRecord(value) || typeof value.semantic_sha256 !== "string") return value;
+	return expandSchemaValue(schemas[value.semantic_sha256], schemas, new Set([value.semantic_sha256]));
+}
+
+function expandSchemaValue(value: unknown, schemas: Record<string, unknown>, stack: Set<string>): unknown {
+	if (Array.isArray(value)) return value.map((item) => expandSchemaValue(item, schemas, stack));
+	if (!isRecord(value)) return value;
+	if (value.semantic_undefined === true && Object.keys(value).length === 1) return undefined;
+	if (typeof value.semantic_sha256 === "string" && Object.keys(value).length === 1) {
+		if (stack.has(value.semantic_sha256)) return { semantic_recursive_sha256: value.semantic_sha256 };
+		const nextStack = new Set(stack);
+		nextStack.add(value.semantic_sha256);
+		return expandSchemaValue(schemas[value.semantic_sha256], schemas, nextStack);
+	}
+	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expandSchemaValue(item, schemas, stack)]));
+}
+
+function classifyResponseSchema(before: unknown, after: unknown): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (!isRecord(before) || !isRecord(after)) return "review";
+	if (before.type !== after.type) return "breaking";
+
+	let result: Compatibility = "same";
+	const beforeRequired = stringSet(before.required);
+	const afterRequired = stringSet(after.required);
+	if ([...afterRequired].some((name) => !beforeRequired.has(name))) return "breaking";
+	if ([...beforeRequired].some((name) => !afterRequired.has(name))) result = "additive";
+
+	const beforeProperties = isRecord(before.properties) ? before.properties : {};
+	const afterProperties = isRecord(after.properties) ? after.properties : {};
+	for (const [name, property] of Object.entries(beforeProperties)) {
+		if (!(name in afterProperties)) return "breaking";
+		result = mergeCompatibility(result, classifyResponseSchema(property, afterProperties[name]));
+		if (result === "breaking") return result;
+	}
+	if (Object.keys(afterProperties).some((name) => !(name in beforeProperties))) result = mergeCompatibility(result, "additive");
+
+	result = mergeCompatibility(result, classifyResponseEnum(before.enum, after.enum));
+	if (result === "breaking") return result;
+	result = mergeCompatibility(result, classifyResponseSchema(before.items, after.items));
+	if (result === "breaking") return result;
+
+	const beforeNullable = before["x-nullable"] === true;
+	const afterNullable = after["x-nullable"] === true;
+	if (!beforeNullable && afterNullable) return "breaking";
+	if (beforeNullable && !afterNullable) result = mergeCompatibility(result, "additive");
+
+	const knownKeys = new Set(["type", "required", "properties", "enum", "items", "x-nullable"]);
+	if (hasUnknownSemanticChange(before, after, knownKeys)) return "review";
+	return result;
+}
+
+function classifyResponseEnum(before: unknown, after: unknown): Compatibility {
+	if (stableStringify(before) === stableStringify(after)) return "same";
+	if (!Array.isArray(before) || !Array.isArray(after)) return "review";
+	const beforeValues = new Set(before.map(stableStringify));
+	const afterValues = new Set(after.map(stableStringify));
+	if ([...afterValues].some((value) => !beforeValues.has(value))) return "breaking";
+	return [...beforeValues].some((value) => !afterValues.has(value)) ? "additive" : "same";
+}
+
+function stringSet(value: unknown): Set<string> {
+	return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+}
+
+function hasUnknownSemanticChange(before: Record<string, unknown>, after: Record<string, unknown>, knownKeys: Set<string>): boolean {
+	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+	return [...keys].some((key) => !knownKeys.has(key) && stableStringify(before[key]) !== stableStringify(after[key]));
+}
+
+function mergeCompatibility(left: Compatibility, right: Compatibility): Compatibility {
+	const rank: Record<Compatibility, number> = { same: 0, additive: 1, review: 2, breaking: 3 };
+	return rank[left] >= rank[right] ? left : right;
 }
 
 function classifyArrayExpansion(before: unknown, after: unknown): "same" | "additive" | "breaking" | "review" {
@@ -420,11 +607,6 @@ function classifyArrayExpansion(before: unknown, after: unknown): "same" | "addi
 	const afterSet = new Set(after.map(stableStringify));
 	if ([...beforeSet].some((value) => !afterSet.has(value))) return "breaking";
 	return [...afterSet].some((value) => !beforeSet.has(value)) ? "additive" : "same";
-}
-
-function onlyChangedKey(before: Record<string, unknown>, after: Record<string, unknown>, allowed: string): boolean {
-	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-	return [...keys].every((key) => key === allowed || stableStringify(before[key]) === stableStringify(after[key]));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -443,12 +625,12 @@ function boundDrift(full: Omit<OpenApiDrift, "totals" | "truncated">): OpenApiDr
 }
 
 function validateBaseline(value: OpenApiBaseline): void {
-	if (value.contract_id !== "bitbucket.openapi-baseline" || value.schema_version !== "1") throw new Error("OpenAPI baseline contract is unsupported.");
-	if (!value.operations || typeof value.operations !== "object" || !value.components || typeof value.components !== "object") throw new Error("OpenAPI baseline is incomplete.");
+	if (value.contract_id !== "bitbucket.openapi-baseline" || value.schema_version !== "2") throw new Error("OpenAPI baseline contract is unsupported.");
+	if (!value.operations || typeof value.operations !== "object" || !value.schemas || typeof value.schemas !== "object" || !value.components || typeof value.components !== "object") throw new Error("OpenAPI baseline is incomplete.");
 }
 
 function digestBaseline(value: OpenApiBaseline): string {
-	return createHash("sha256").update(stableStringify({ swagger: value.swagger, base_path: value.base_path, operations: value.operations, components: value.components })).digest("hex");
+	return createHash("sha256").update(stableStringify({ swagger: value.swagger, base_path: value.base_path, operations: value.operations, schemas: value.schemas, components: value.components })).digest("hex");
 }
 
 function stableStringify(value: unknown): string {
