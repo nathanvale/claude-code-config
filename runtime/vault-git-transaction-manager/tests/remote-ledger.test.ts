@@ -409,6 +409,52 @@ describe("remote lease ledger", () => {
 		}
 	});
 
+	test("maps unsafe remote configuration to an operator-only ledger refusal", async () => {
+		const git: VaultGitRemotePort = {
+			async inspectMain() {
+				return {
+					status: "refused",
+					reason: "unsafe_remote_configuration",
+				};
+			},
+			async readLedger() {
+				return {
+					status: "refused",
+					reason: "unsafe_remote_configuration",
+				};
+			},
+			async appendLedgerCommit() {
+				throw new Error("must not append");
+			},
+		};
+		const engine = {
+			git,
+			clock: { now: () => new Date("2026-08-09T00:00:00.000Z") },
+		};
+
+		expect(await observeRemoteLedger(engine, { remote: "origin" })).toMatchObject({
+			status: "refused",
+			blocker: "host_contract_breach",
+			retrySafety: "operator_required",
+			nextAction: { id: "request_operator_review" },
+		});
+		expect(
+			await acquireRemoteLease(engine, {
+				remote: "origin",
+				expectedGeneration: null,
+				actor: "agent-a",
+				host: "laptop",
+				event: "note_created",
+				ownedPaths: ["notes/a.md"],
+				leaseDurationMs: 60_000,
+			}),
+		).toMatchObject({
+			status: "refused",
+			blocker: "host_contract_breach",
+			nextAction: { id: "request_operator_review" },
+		});
+	});
+
 	test("rejects merge-parent ledger commits and configured push refspecs", async () => {
 		const fixture = await createFixture();
 		const engine = createEngine(fixture.cloneA, "2026-08-09T00:00:00.000Z");

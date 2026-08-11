@@ -7,20 +7,26 @@ import {
 	VAULT_GIT_LEDGER_REF,
 	type VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
-import type {
-	VaultGitLedgerAppendRequest,
-	VaultGitLedgerAppendResult,
-	VaultGitLedgerReadResult,
-	VaultGitAtomicCloseReconciliation,
-	VaultGitCheckPort,
-	VaultGitMainInspection,
-	VaultGitOwnedPathInspection,
-	VaultGitProcessPort,
-	VaultGitProcessRequest,
-	VaultGitProcessResult,
-	VaultGitRepositoryPort,
-	VaultGitRemotePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitLedgerAppendRequest,
+	type VaultGitLedgerAppendResult,
+	type VaultGitLedgerReadResult,
+	type VaultGitAtomicCloseReconciliation,
+	type VaultGitCheckPort,
+	type VaultGitMainInspection,
+	type VaultGitOwnedPathInspection,
+	type VaultGitProcessPort,
+	type VaultGitProcessRequest,
+	type VaultGitProcessResult,
+	type VaultGitRepositoryPort,
+	type VaultGitRemotePort,
 } from "./ports.ts";
+import {
+	assertVaultGitSafeRemoteTarget,
+	normalizeVaultGitAllowedRemoteHosts,
+	VaultGitRemoteSafetyError,
+} from "./remote-safety.ts";
 
 /** Options for the injected real-process vault-owned check. */
 export interface VaultGitCheckAdapterOptions {
@@ -130,11 +136,11 @@ export function createGitAdapter(
 	options: VaultGitAdapterOptions,
 ): VaultGitRemotePort {
 	const gitBinary = options.gitBinary ?? "git";
-	const allowedRemoteHosts = normalizeAllowedRemoteHosts(
-		options.allowedRemoteHosts ?? [],
-	);
 	const admittedGitEnvironment = normalizeAdmittedGitEnvironment(
 		options.admittedGitEnvironment ?? {},
+	);
+	const allowedRemoteHosts = normalizeVaultGitAllowedRemoteHosts(
+		options.allowedRemoteHosts ?? [],
 	);
 	const runGit = async (
 		args: readonly string[],
@@ -155,7 +161,6 @@ export function createGitAdapter(
 			},
 			timeoutMs,
 		});
-
 	const fetchExactRef = async (
 		remote: string,
 		sourceRef: string,
@@ -195,19 +200,29 @@ export function createGitAdapter(
 		}
 		return { status: "ok", commit: resolved.stdout.trim() };
 	};
+	const inspectRemoteSafety = async (remote: string) => {
+		try {
+			await assertVaultGitSafeRemoteTarget({
+				runGit,
+				remote,
+				timeoutMs: options.timeouts.localMs,
+				allowedRemoteHosts,
+			});
+			return null;
+		} catch (error) {
+			const classified = classifyRemoteSafetyError(error);
+			if (classified) return classified;
+			throw error;
+		}
+	};
 
 	const readLedger = async (
 		remote: string,
 		ledgerRef: string,
 	): Promise<VaultGitLedgerReadResult> => {
-		assertSafeRemote(remote);
 		assertLedgerRef(ledgerRef);
-		await assertSafeRemoteTarget(
-			runGit,
-			remote,
-			options.timeouts.localMs,
-			allowedRemoteHosts,
-		);
+		const safety = await inspectRemoteSafety(remote);
+		if (safety) return safety;
 		const advertised = await runGit(
 			["ls-remote", "--refs", "--exit-code", remote, ledgerRef],
 			options.timeouts.fetchMs,
@@ -269,13 +284,12 @@ export function createGitAdapter(
 	return {
 		async probeAtomicPush(remote) {
 			try {
-				assertSafeRemote(remote);
-				await assertSafeRemoteTarget(
+				await assertVaultGitSafeRemoteTarget({
 					runGit,
 					remote,
-					options.timeouts.localMs,
+					timeoutMs: options.timeouts.localMs,
 					allowedRemoteHosts,
-				);
+				});
 				await assertNoConfiguredPushRefspec(
 					runGit,
 					remote,
@@ -321,13 +335,8 @@ export function createGitAdapter(
 		},
 
 		async inspectMain(remote): Promise<VaultGitMainInspection> {
-			assertSafeRemote(remote);
-			await assertSafeRemoteTarget(
-				runGit,
-				remote,
-				options.timeouts.localMs,
-				allowedRemoteHosts,
-			);
+			const safety = await inspectRemoteSafety(remote);
+			if (safety) return safety;
 			const advertised = await runGit(
 				["ls-remote", "--refs", "--exit-code", remote, "refs/heads/main"],
 				options.timeouts.fetchMs,
@@ -392,17 +401,16 @@ export function createGitAdapter(
 		async appendLedgerCommit(
 			request: VaultGitLedgerAppendRequest,
 		): Promise<VaultGitLedgerAppendResult> {
-			assertSafeRemote(request.remote);
 			assertLedgerRef(request.ledgerRef);
 			assertObjectId(request.expectedGeneration);
 			assertSafeCommitField("author", request.author);
 			assertSafeCommitField("message", request.message);
-			await assertSafeRemoteTarget(
+			await assertVaultGitSafeRemoteTarget({
 				runGit,
-				request.remote,
-				options.timeouts.localMs,
+				remote: request.remote,
+				timeoutMs: options.timeouts.localMs,
 				allowedRemoteHosts,
-			);
+			});
 			await assertNoConfiguredPushRefspec(
 				runGit,
 				request.remote,
@@ -516,7 +524,6 @@ export function createGitAdapter(
 		},
 
 		async atomicClose(request) {
-			assertSafeRemote(request.remote);
 			assertLedgerRef(request.ledgerRef);
 			assertObjectId(request.expectedMainHead);
 			assertObjectId(request.mainCommit);
@@ -526,12 +533,12 @@ export function createGitAdapter(
 			// The remote URL is repository configuration and can change between
 			// begin and complete; re-prove the host before the only operation
 			// that force-updates remote main.
-			await assertSafeRemoteTarget(
+			await assertVaultGitSafeRemoteTarget({
 				runGit,
-				request.remote,
-				options.timeouts.localMs,
+				remote: request.remote,
+				timeoutMs: options.timeouts.localMs,
 				allowedRemoteHosts,
-			);
+			});
 			await assertNoConfiguredPushRefspec(
 				runGit,
 				request.remote,
@@ -649,7 +656,12 @@ export function createGitAdapter(
 		},
 
 		async reconcileAtomicClose(request) {
-			assertSafeRemote(request.remote);
+			await assertVaultGitSafeRemoteTarget({
+				runGit,
+				remote: request.remote,
+				timeoutMs: options.timeouts.localMs,
+				allowedRemoteHosts,
+			});
 			if (!/^txn_[0-9a-f]{32}$/.test(request.transactionId)) {
 				throw new Error("transaction id must be one opaque public id");
 			}
@@ -722,6 +734,13 @@ export function createGitAdapter(
 export interface VaultGitRepositoryAdapterOptions extends VaultGitAdapterOptions {
 	/** Stable non-secret configured-vault identity. */
 	readonly repositoryIdentity: string;
+	/** Optional production revalidation proof for the configured vault root. */
+	readonly resolveRepositoryIdentity?: () => Promise<
+		{
+			readonly identity: string;
+			readonly repositoryRoot: string;
+		}
+	>;
 }
 
 /**
@@ -748,6 +767,9 @@ export function createGitRepositoryAdapter(
 		throw new Error("repository identity must not be empty");
 	}
 	const gitBinary = options.gitBinary ?? "git";
+	const admittedGitEnvironment = normalizeAdmittedGitEnvironment(
+		options.admittedGitEnvironment ?? {},
+	);
 	const runGit = async (
 		args: readonly string[],
 		input?: string,
@@ -758,9 +780,17 @@ export function createGitRepositoryAdapter(
 			args,
 			cwd: options.repositoryPath,
 			stdin: input,
-			env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+			env: {
+				...CONTROLLED_GIT_ENVIRONMENT,
+				...admittedGitEnvironment,
+				...env,
+			},
 			timeoutMs: options.timeouts.localMs,
 		});
+	// Inspect the repository's own configuration without the execution-time
+	// hooksPath override masking what the operator actually configured.
+	const inspectLocalConfig = (args: readonly string[]) =>
+		runGit(args, undefined, { GIT_CONFIG_COUNT: "0" });
 
 	const captureUnrelatedState = async (
 		ownedPaths: readonly string[],
@@ -821,16 +851,23 @@ export function createGitRepositoryAdapter(
 
 	return {
 		async inspectSafety() {
-			const hooksPath = await runGit(["config", "--local", "--get", "core.hooksPath"]);
+			const hooksPath = await inspectLocalConfig([
+				"config",
+				"--local",
+				"--includes",
+				"--get",
+				"core.hooksPath",
+			]);
 			if (hooksPath.timedOut || (hooksPath.exitCode !== 0 && hooksPath.exitCode !== 1)) {
 				return { status: "refused", reason: "configured_hooks_path" } as const;
 			}
 			if (hooksPath.exitCode === 0 && hooksPath.stdout.trim().length > 0) {
 				return { status: "refused", reason: "configured_hooks_path" } as const;
 			}
-			const credentialHelpers = await runGit([
+			const credentialHelpers = await inspectLocalConfig([
 				"config",
 				"--local",
+				"--includes",
 				"--get-all",
 				"credential.helper",
 			]);
@@ -838,6 +875,20 @@ export function createGitRepositoryAdapter(
 				credentialHelpers.timedOut ||
 				(credentialHelpers.exitCode !== 0 && credentialHelpers.exitCode !== 1) ||
 				(credentialHelpers.exitCode === 0 && credentialHelpers.stdout.trim().length > 0)
+			) {
+				return { status: "refused", reason: "credential_helper" } as const;
+			}
+			const authHeaders = await inspectLocalConfig([
+				"config",
+				"--local",
+				"--includes",
+				"--get-regexp",
+				"^http(\\..+)?\\.extraheader$",
+			]);
+			if (
+				authHeaders.timedOut ||
+				(authHeaders.exitCode !== 0 && authHeaders.exitCode !== 1) ||
+				(authHeaders.exitCode === 0 && authHeaders.stdout.trim().length > 0)
 			) {
 				return { status: "refused", reason: "credential_helper" } as const;
 			}
@@ -850,9 +901,10 @@ export function createGitRepositoryAdapter(
 				"^core\\.fsmonitor$",
 				"^protocol\\.ext\\.allow$",
 			]) {
-				const configured = await runGit([
+				const configured = await inspectLocalConfig([
 					"config",
 					"--local",
+					"--includes",
 					"--get-regexp",
 					pattern,
 				]);
@@ -864,7 +916,11 @@ export function createGitRepositoryAdapter(
 					return { status: "refused", reason: "transport_command" } as const;
 				}
 			}
-			const hooksDirectory = await runGit(["rev-parse", "--git-path", "hooks"]);
+			const hooksDirectory = await inspectLocalConfig([
+				"rev-parse",
+				"--git-path",
+				"hooks",
+			]);
 			if (hooksDirectory.timedOut || hooksDirectory.exitCode !== 0) {
 				return { status: "refused", reason: "repository_hook" } as const;
 			}
@@ -888,14 +944,32 @@ export function createGitRepositoryAdapter(
 		},
 
 		async resolveCanonicalIdentity() {
+			if (options.resolveRepositoryIdentity) {
+				const [identityProof, configuredRoot, main] = await Promise.all([
+					options.resolveRepositoryIdentity(),
+					realpath(options.repositoryPath),
+					runGit(["rev-parse", "--verify", "refs/heads/main^{commit}"]),
+				]);
+				if (main.timedOut || main.exitCode === null) {
+					throw new VaultRepositoryIdentityUnavailableError();
+				}
+				if ((await realpath(identityProof.repositoryRoot)) !== configuredRoot || main.exitCode !== 0) {
+					throw new Error("configured repository root is not canonical");
+				}
+				return {
+					identity: identityProof.identity,
+					localMainHead: requireObjectId(main.stdout, "local main"),
+				};
+			}
 			const [configuredRoot, discoveredRoot, main] = await Promise.all([
 				realpath(options.repositoryPath),
 				runGit(["rev-parse", "--show-toplevel"]),
 				runGit(["rev-parse", "--verify", "refs/heads/main^{commit}"]),
 			]);
+			if (discoveredRoot.timedOut || main.timedOut) {
+				throw new VaultRepositoryIdentityUnavailableError();
+			}
 			if (
-				discoveredRoot.timedOut ||
-				main.timedOut ||
 				discoveredRoot.exitCode !== 0 ||
 				main.exitCode !== 0 ||
 				(await realpath(discoveredRoot.stdout.trim())) !== configuredRoot
@@ -1421,14 +1495,18 @@ function isMatchingReleasePayload(
  * ```
  */
 export function createNodeProcessPort(): VaultGitProcessPort {
-	return {
-		run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult> {
-			return new Promise((resolve) => {
-				const child = spawn(request.command, [...request.args], {
-					cwd: request.cwd,
-					env: { ...scrubbedAmbientEnvironment(), ...request.env },
-					stdio: ["pipe", "pipe", "pipe"],
-					shell: false,
+		return {
+			run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult> {
+				return new Promise((resolve) => {
+					const environment =
+						request.environmentMode === "isolated"
+							? { ...request.env }
+							: { ...scrubbedAmbientEnvironment(), ...request.env };
+					const child = spawn(request.command, [...request.args], {
+						cwd: request.cwd,
+						env: environment,
+						stdio: ["pipe", "pipe", "pipe"],
+						shell: false,
 				});
 				const stdout: Buffer[] = [];
 				const stderr: Buffer[] = [];
@@ -1506,6 +1584,16 @@ const CONTROLLED_GIT_ENVIRONMENT = {
 	GIT_TERMINAL_PROMPT: "0",
 	LC_ALL: "C",
 } as const;
+
+function classifyRemoteSafetyError(error: unknown):
+	| { readonly status: "refused"; readonly reason: "unsafe_remote_configuration" }
+	| { readonly status: "failed"; readonly reason: "remote_unavailable" }
+	| null {
+	if (!(error instanceof VaultGitRemoteSafetyError)) return null;
+	return error.kind === "unsafe"
+		? { status: "refused", reason: "unsafe_remote_configuration" }
+		: { status: "failed", reason: "remote_unavailable" };
+}
 
 /**
  * Ambient Git redirection variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*,
@@ -1608,92 +1696,6 @@ async function assertNoConfiguredPushRefspec(
 	);
 }
 
-async function assertSafeRemoteTarget(
-	runGit: (
-		args: readonly string[],
-		timeoutMs: number,
-	) => Promise<VaultGitProcessResult>,
-	remote: string,
-	timeoutMs: number,
-	allowedRemoteHosts: ReadonlySet<string>,
-): Promise<void> {
-	await refuseConfiguredValue(
-		runGit,
-		["config", "--get-regexp", "^url\\..*\\.insteadof$"],
-		"configured insteadOf rewrites are not accepted",
-		timeoutMs,
-	);
-	await assertNoExecutableLocalGitConfig(runGit, timeoutMs);
-
-	let configuredTarget = remote;
-	if (isRemoteName(remote)) {
-		const configured = await runGit(
-			["config", "--get-all", `remote.${remote}.url`],
-			timeoutMs,
-		);
-		if (configured.timedOut) {
-			throw new Error("timed out while resolving the configured remote URL");
-		}
-		const targets = configured.stdout.trim().split("\n").filter(Boolean);
-		if (configured.exitCode !== 0 || targets.length !== 1) {
-			throw new Error("configured remote must have one exact URL");
-		}
-		configuredTarget = targets[0] ?? "";
-	}
-
-	const effective = await runGit(["ls-remote", "--get-url", remote], timeoutMs);
-	if (effective.timedOut) {
-		throw new Error("timed out while resolving the effective remote URL");
-	}
-	const effectiveTargets = effective.stdout.trim().split("\n").filter(Boolean);
-	if (effective.exitCode !== 0 || effectiveTargets.length !== 1) {
-		throw new Error("effective remote must resolve to one exact URL");
-	}
-	const effectiveTarget = effectiveTargets[0] ?? "";
-	if (effectiveTarget !== configuredTarget) {
-		throw new Error("effective remote URL differs from the configured target");
-	}
-	assertSafeRemoteEndpoint(configuredTarget, allowedRemoteHosts);
-}
-
-async function assertNoExecutableLocalGitConfig(
-	runGit: (
-		args: readonly string[],
-		timeoutMs: number,
-	) => Promise<VaultGitProcessResult>,
-	timeoutMs: number,
-): Promise<void> {
-	const configured = await runGit(
-		["config", "--local", "--name-only", "--list"],
-		timeoutMs,
-	);
-	if (configured.timedOut) {
-		throw new Error("timed out while checking repository Git configuration");
-	}
-	if (configured.exitCode !== 0 && configured.exitCode !== 1) {
-		throw new Error("could not validate repository Git configuration");
-	}
-	const executableKeys = new Set([
-		"core.askpass",
-		"core.fsmonitor",
-		"core.gitproxy",
-		"core.sshcommand",
-		"credential.helper",
-		"protocol.ext.allow",
-	]);
-	for (const rawKey of configured.stdout.split("\n")) {
-		const key = rawKey.trim().toLowerCase();
-		if (
-			executableKeys.has(key) ||
-			/^remote\..*\.(proxy|receivepack|uploadpack|vcs)$/.test(key)
-		) {
-			throw new Error(
-				"repository Git configuration contains an executable transport helper",
-			);
-		}
-	}
-}
-
 async function refuseConfiguredValue(
 	runGit: (
 		args: readonly string[],
@@ -1716,100 +1718,6 @@ async function refuseConfiguredValue(
 
 function isMissingLedgerPath(stderr: string): boolean {
 	return /does not exist in|exists on disk, but not in/.test(stderr);
-}
-
-function assertSafeRemote(remote: string): void {
-	const safeRemoteName = isRemoteName(remote);
-	const isApprovedUrl = /^(?:https?|ssh|git|file):\/\/[^\s]+$/.test(remote);
-	const isAbsolutePath = /^\/[^\r\n\0]*$/.test(remote);
-	const isScpLike = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^:\s][^\s]*$/.test(
-		remote,
-	);
-	if (
-		remote.trim().length === 0 ||
-		remote.startsWith("-") ||
-		/[\r\n\0]/.test(remote) ||
-		!(safeRemoteName || isApprovedUrl || isAbsolutePath || isScpLike)
-	) {
-		throw new Error("remote must be one safe Git remote name or URL");
-	}
-}
-
-function isRemoteName(remote: string): boolean {
-	return (
-		/^[A-Za-z0-9._-]+$/.test(remote) && remote !== "." && remote !== ".."
-	);
-}
-
-function assertSafeRemoteEndpoint(
-	target: string,
-	allowedRemoteHosts: ReadonlySet<string>,
-): void {
-	if (/^\/[^\r\n\0]*$/.test(target)) return;
-	if (
-		!target.includes("://") &&
-		/^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^:\s][^\s]*$/.test(target)
-	) {
-		const authority = target.slice(0, target.indexOf(":"));
-		assertAllowedRemoteHost(authority.split("@").at(-1) ?? "", allowedRemoteHosts);
-		return;
-	}
-	let parsed: URL;
-	try {
-		parsed = new URL(target);
-	} catch {
-		throw new Error("remote URL uses an unsafe transport or path");
-	}
-	if (parsed.protocol === "file:") {
-		if (
-			parsed.username.length > 0 ||
-			parsed.password.length > 0 ||
-			(parsed.hostname.length > 0 && parsed.hostname !== "localhost")
-		) {
-			throw new Error("remote URL uses an unsafe transport or embedded credentials");
-		}
-		return;
-	}
-	if (!["https:", "ssh:"].includes(parsed.protocol)) {
-		throw new Error("remote URL uses an unsafe transport or path");
-	}
-	if (
-		parsed.password.length > 0 ||
-		(parsed.protocol !== "ssh:" && parsed.username.length > 0)
-	) {
-		throw new Error("remote URL uses an unsafe transport or embedded credentials");
-	}
-	assertAllowedRemoteHost(parsed.hostname, allowedRemoteHosts);
-}
-
-function assertAllowedRemoteHost(
-	host: string,
-	allowedRemoteHosts: ReadonlySet<string>,
-): void {
-	if (!allowedRemoteHosts.has(host.toLowerCase())) {
-		throw new Error("remote host is not admitted by adapter construction");
-	}
-}
-
-function normalizeAllowedRemoteHosts(
-	hosts: readonly string[],
-): ReadonlySet<string> {
-	const normalized = new Set<string>();
-	for (const host of hosts) {
-		const value = host.trim().toLowerCase();
-		const labels = value.split(".");
-		if (
-			value.length > 253 ||
-			labels.some(
-				(label) =>
-					!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
-			)
-		) {
-			throw new Error("allowed remote hosts must be exact DNS names");
-		}
-		normalized.add(value);
-	}
-	return normalized;
 }
 
 function normalizeAdmittedGitEnvironment(

@@ -1,3 +1,166 @@
+/** Actions that deterministic activation trust can stop. */
+export const VAULT_GIT_ACTIVATION_STOPPED_ACTIONS = [
+	"activation_preparation",
+	"activation_admission",
+	"vault_write",
+	"activation_revocation",
+] as const;
+
+/** Closed public causes produced by deterministic activation trust. */
+export const VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES = [
+	"admission_missing",
+	"human_capability_required",
+	"evidence_changed",
+	"binding_changed",
+	"invalidated",
+	"revoked",
+	"revalidation_unavailable",
+] as const;
+
+/** One stopped activation action. */
+export type VaultGitActivationStoppedAction =
+	(typeof VAULT_GIT_ACTIVATION_STOPPED_ACTIONS)[number];
+
+/** One deterministic public restriction cause. */
+export type VaultGitActivationRestrictionCause =
+	(typeof VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES)[number];
+
+/** Input selected only from deterministic closed vocabulary. */
+export interface VaultGitActivationRestrictionInput {
+	readonly stoppedAction: VaultGitActivationStoppedAction;
+	readonly cause: VaultGitActivationRestrictionCause;
+	/** Command-local change already preserved before activation stopped the next write. */
+	readonly changedState?: VaultGitChangedState;
+}
+
+/** Privacy-classified semantic source shared by every renderer. */
+export interface VaultGitActivationRestriction {
+	readonly privacy: "public";
+	readonly stoppedAction: VaultGitActivationStoppedAction;
+	readonly cause: {
+		readonly id: VaultGitActivationRestrictionCause;
+		readonly summary: string;
+	};
+	readonly protection: string;
+	readonly observedSafeState: string;
+	readonly writePermission: "denied";
+	readonly changedState: VaultGitChangedState;
+	readonly manualHandoff: {
+		readonly availability: "unavailable";
+		readonly summary: string;
+	};
+	readonly nextAction: {
+		readonly id:
+			| "review_prepared"
+			| "return_to_human_review"
+			| "prepare_fresh"
+			| "run_doctor";
+		readonly summary: string;
+	};
+}
+
+/** Public JSON restriction result with no private diagnostics. */
+export interface VaultGitActivationRestrictionJsonV1 {
+	readonly contract_id: "vault-git.activation-result";
+	readonly schema_version: "1";
+	readonly status: "restricted";
+	readonly privacy: "public";
+	readonly stopped_action: VaultGitActivationStoppedAction;
+	readonly cause: VaultGitActivationRestriction["cause"];
+	readonly protection: string;
+	readonly observed_safe_state: string;
+	readonly write_permission: "denied";
+	readonly changed_state: VaultGitChangedState;
+	readonly manual_handoff: VaultGitActivationRestriction["manualHandoff"];
+	readonly next_action: VaultGitActivationRestriction["nextAction"];
+}
+
+const ACTIVATION_CAUSE_SUMMARY: Record<
+	VaultGitActivationRestrictionCause,
+	string
+> = {
+	admission_missing: "Human activation admission is missing.",
+	human_capability_required: "The final choice belongs to the human review surface.",
+	evidence_changed: "The reviewed prepared evidence is no longer current.",
+	binding_changed: "A prepared activation binding changed before admission.",
+	invalidated: "Deterministic activation trust invalidated the prepared evidence.",
+	revoked: "A human revoked this activation evidence.",
+	revalidation_unavailable: "Live authoritative revalidation could not finish safely.",
+};
+
+const ACTIVATION_NEXT_ACTION: Record<
+	VaultGitActivationRestrictionCause,
+	VaultGitActivationRestriction["nextAction"]
+> = {
+	admission_missing: {
+		id: "review_prepared",
+		summary: "Open human review for the current prepared evidence.",
+	},
+	human_capability_required: {
+		id: "return_to_human_review",
+		summary: "Return to the human review surface for the final choice.",
+	},
+	evidence_changed: {
+		id: "prepare_fresh",
+		summary: "Prepare fresh V2 evidence, then return to human review.",
+	},
+	binding_changed: {
+		id: "prepare_fresh",
+		summary: "Prepare fresh V2 evidence, then return to human review.",
+	},
+	invalidated: {
+		id: "prepare_fresh",
+		summary: "Prepare fresh V2 evidence, then return to human review.",
+	},
+	revoked: {
+		id: "prepare_fresh",
+		summary: "Prepare fresh V2 evidence, then return to human review.",
+	},
+	revalidation_unavailable: {
+		id: "run_doctor",
+		summary: "Run read-only Doctor, then retry explicit preparation.",
+	},
+};
+
+const ACTIVATION_OBSERVED_SAFE_STATE: Record<VaultGitChangedState, string> = {
+	none: "Nothing changed.",
+	local: "Local transaction state is preserved; no canonical commit or publication started.",
+	remote: "Remote lease state is preserved; no canonical vault commit or publication started.",
+	committed: "A local commit is preserved; remote publication did not start.",
+	partial: "Remote completion is unknown; preserved evidence requires Doctor.",
+};
+
+/** Build the one semantic restriction object consumed by all projections. */
+export function createVaultGitActivationRestriction(
+	input: VaultGitActivationRestrictionInput,
+): VaultGitActivationRestriction {
+	const valid = [
+		VAULT_GIT_ACTIVATION_STOPPED_ACTIONS.includes(input.stoppedAction),
+		VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES.includes(input.cause),
+		input.changedState === undefined ||
+			VAULT_GIT_CHANGED_STATES.includes(input.changedState),
+	].every(Boolean);
+	if (!valid) throw new Error("activation restriction invalid");
+	const changedState = input.changedState ?? "none";
+	return Object.freeze({
+		privacy: "public",
+		stoppedAction: input.stoppedAction,
+		cause: Object.freeze({
+			id: input.cause,
+			summary: ACTIVATION_CAUSE_SUMMARY[input.cause],
+		}),
+		protection: "Vault Git kept canonical write permission denied.",
+		observedSafeState: ACTIVATION_OBSERVED_SAFE_STATE[changedState],
+		writePermission: "denied",
+		changedState,
+		manualHandoff: Object.freeze({
+			availability: "unavailable",
+			summary: "Manual handoff is not available from activation trust.",
+		}),
+		nextAction: Object.freeze({ ...ACTIVATION_NEXT_ACTION[input.cause] }),
+	});
+}
+
 /** Event classes that may own one meaningful vault transaction. */
 export const VAULT_GIT_EVENT_TYPES = [
 	"project_created",
@@ -293,10 +456,8 @@ export type VaultGitBlockerId = (typeof VAULT_GIT_BLOCKER_IDS)[number];
 /** Deterministic repair actions the runtime may classify. */
 export const VAULT_GIT_REPAIR_ACTIONS = [
 	"resume",
-	"restore",
 	"retry-push",
 	"close-verified",
-	"replay",
 	"stale-lease-takeover",
 	"reconcile-quarantine",
 ] as const;
@@ -360,8 +521,10 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	"inspect_configured_vault",
 	"inspect_private_receipt",
 	"inspect_remote_lease",
+	"prepare_fresh",
 	"reload_capability",
-	"request_operator_admission",
+	"return_to_human_review",
+	"review_prepared",
 	"use_join_capability",
 	"use_owner_capability",
 ] as const;
@@ -402,11 +565,49 @@ export type VaultGitHygieneVaultPosture = "normal" | "read_only";
  */
 export interface VaultGitActivationRecord {
 	/** Activation record schema. */
-	readonly schemaVersion: 1;
+	readonly schemaVersion: 2;
+	/** Exact V2 prepared evidence reviewed for this admission. */
+	readonly evidenceId: string;
 	/** Operator-controlled admission timestamp. */
 	readonly admittedAt: string;
 	/** Non-secret single-line admission context. */
 	readonly note: string;
+}
+
+/** Exact prepared binding names that can invalidate activation. */
+export const VAULT_GIT_ACTIVATION_BINDINGS = [
+	"repositoryIdentity",
+	"remoteIdentity",
+	"hostIdentity",
+	"runtimeIdentity",
+	"executableIdentity",
+	"privateStateIdentity",
+	"localMainHead",
+	"remoteMainHead",
+	"ledgerGeneration",
+	"gitIdentity",
+	"sshIdentity",
+	"checkerClosure",
+] as const;
+
+/** One exact prepared binding checked against live authoritative state. */
+export type VaultGitActivationBinding =
+	(typeof VAULT_GIT_ACTIVATION_BINDINGS)[number];
+
+/** Durable human-only revocation marker for one exact evidence snapshot. */
+export interface VaultGitActivationRevocationRecord {
+	readonly schemaVersion: 1;
+	readonly evidenceId: string;
+	readonly revokedAt: string;
+	readonly note: string;
+}
+
+/** Durable changed-binding invalidation marker for one exact evidence snapshot. */
+export interface VaultGitActivationInvalidationRecord {
+	readonly schemaVersion: 1;
+	readonly evidenceId: string;
+	readonly binding: VaultGitActivationBinding;
+	readonly invalidatedAt: string;
 }
 
 /** Private operator admission for one exact checker implementation bundle. */
@@ -483,6 +684,8 @@ export interface VaultGitLifecycleResultPayload {
 	readonly finding?: VaultGitDoctorFinding;
 	/** Exactly one next safe action. */
 	readonly next_action: VaultGitNextAction;
+	/** Cause-specific public activation refusal, when activation stopped a write. */
+	readonly activation_restriction?: VaultGitActivationRestrictionJsonV1;
 }
 
 /** Domain snapshot returned by read-side ports. */

@@ -569,6 +569,12 @@ async function repairFixture(
 		ledger: { git: remote, clock: runtime },
 		runtime,
 		repositoryIdentity: "canonical-vault",
+		activationAuthority: {
+			validate: async () => ({
+				status: "admitted" as const,
+				evidenceId: "fixture",
+			}),
+		},
 	};
 	return {
 		root,

@@ -1,5 +1,14 @@
 /** Package-owned lifecycle and result vocabulary. */
 export * from "./model.ts";
+/** Stable configured-vault identity derivation. */
+export * from "./repository-identity.ts";
+export * from "./activation-contract.ts";
+export * from "./activation-identity.ts";
+export * from "./activation-preparation.ts";
+export * from "./activation-authority.ts";
+export * from "./activation-restriction.ts";
+export * from "./activation-result.ts";
+export * from "./activation-consumer-fixtures.ts";
 /** Future engine port contracts. */
 export * from "./ports.ts";
 /** Evidence-backed recovery classification. */

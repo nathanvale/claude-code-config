@@ -1,4 +1,5 @@
 import type {
+	VaultGitActivationBinding,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
@@ -103,6 +104,8 @@ export interface VaultGitProcessRequest {
 	readonly stdin?: string;
 	/** Environment additions; ambient values remain process-adapter owned. */
 	readonly env?: Readonly<Record<string, string>>;
+	/** Use only the supplied environment for credential-free isolated work. */
+	readonly environmentMode?: "scrubbed" | "isolated";
 	/** Hard operation deadline. */
 	readonly timeoutMs: number;
 }
@@ -123,6 +126,15 @@ export interface VaultGitProcessResult {
 export interface VaultGitProcessPort {
 	/** Run one bounded process without a shell. */
 	run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult>;
+}
+
+/** Live repository identity could not be proved before the bounded deadline. */
+export class VaultRepositoryIdentityUnavailableError extends Error {
+	/** Construct the stable availability failure used by composition policy. */
+	constructor() {
+		super("configured repository identity revalidation is unavailable");
+		this.name = "VaultRepositoryIdentityUnavailableError";
+	}
 }
 
 /** Main-branch relationship after fetching the exact upstream ref. */
@@ -156,7 +168,11 @@ export interface VaultGitMainInspectionFailure {
 /** Complete exact-main inspection result. */
 export type VaultGitMainInspection =
 	| VaultGitMainInspectionSuccess
-	| VaultGitMainInspectionFailure;
+	| VaultGitMainInspectionFailure
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
+	  };
 
 /** Read-only atomic-push admission result before transaction state exists. */
 export type VaultGitAtomicPushCapability =
@@ -186,6 +202,10 @@ export type VaultGitLedgerReadResult =
 	| {
 			readonly status: "failed";
 			readonly reason: "remote_unavailable" | "timed_out";
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
 	  };
 
 /** Input for one compare-and-swap ledger append. */
@@ -334,6 +354,36 @@ export interface VaultGitRemotePort {
 export interface VaultGitClockPort {
 	/** Read current wall-clock time. */
 	now(): Date;
+}
+
+/** Live activation validation depth for admission or fenced continuation. */
+export type VaultGitActivationValidationScope = "admission" | "continuation";
+
+/** Closed fail-closed cause returned by the engine's activation port. */
+export type VaultGitActivationDenialReason =
+	| "admission_missing"
+	| "human_capability_required"
+	| "evidence_changed"
+	| "binding_changed"
+	| "invalidated"
+	| "revoked"
+	| "revalidation_unavailable";
+
+/** Complete validation result retained across the engine port boundary. */
+export type VaultGitActivationValidationResult =
+	| { readonly status: "admitted"; readonly evidenceId?: string }
+	| { readonly status: "revoked"; readonly evidenceId?: string }
+	| {
+			readonly status: "denied";
+			readonly reason: VaultGitActivationDenialReason;
+			readonly binding?: VaultGitActivationBinding;
+	  };
+
+/** Minimal activation gate owned by the engine port boundary. */
+export interface VaultGitActivationValidationPort {
+	validate(
+		scope?: VaultGitActivationValidationScope,
+	): Promise<VaultGitActivationValidationResult>;
 }
 
 /** Canonical configured-vault identity resolved at one write-capable phase. */

@@ -97,6 +97,7 @@ export type RemoteHostDisposition = "authoritative" | "quarantined";
 export type RemoteLedgerNextActionId =
 	| "retry_remote"
 	| "request_operator_takeover"
+	| "request_operator_review"
 	| "preserve_local_edits"
 	| "inspect_status";
 
@@ -259,6 +260,7 @@ export async function observeRemoteLedger(
 		VAULT_GIT_LEDGER_REF,
 	);
 	if (read.status === "failed") return remoteFailure(read.reason);
+	if (read.status === "refused") return unsafeRemoteConfiguration();
 	if (!read.head) {
 		return {
 			status: "observed",
@@ -612,6 +614,7 @@ async function requireAlignedMain(
 > {
 	const inspected = await engine.git.inspectMain(remote);
 	if (inspected.status === "failed") return remoteFailure(inspected.reason);
+	if (inspected.status === "refused") return unsafeRemoteConfiguration();
 	if (
 		inspected.alignment === "aligned" &&
 		inspected.localHead !== null &&
@@ -722,6 +725,15 @@ function remoteFailure(
 		reason === "timed_out"
 			? "Retry the remote operation after checking connectivity."
 			: "Check remote availability, then retry the operation.",
+	);
+}
+
+function unsafeRemoteConfiguration(): RemoteLedgerRefusal {
+	return refusal(
+		"host_contract_breach",
+		"operator_required",
+		"request_operator_review",
+		"Ask an operator to remove unsafe remote configuration before continuing.",
 	);
 }
 
