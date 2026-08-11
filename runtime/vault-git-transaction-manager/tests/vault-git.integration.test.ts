@@ -48,6 +48,8 @@ const cliPath = join(packageRoot, "tests", "process-cli.ts");
 const productionCliPath = join(packageRoot, "src", "cli.ts");
 const roots: string[] = [];
 let sharedFixture: Promise<Fixture> | undefined;
+const PREPARED_EVIDENCE_REFERENCE =
+	`vault-git:prepared:v2:${"f".repeat(64)}`;
 
 type Station = (typeof vaultGitBranchStationCatalog)[number];
 type StationId = (typeof VAULT_GIT_STATION_IDS)[number];
@@ -64,6 +66,47 @@ const scenarios = {
 	),
 	"status.invalid_usage": scenario(async (fixture) =>
 		fixture.run(["unknown-command", "--json"]),
+	),
+	"activation.inspect": scenario(async (fixture) =>
+		fixture.run(["activation", "--json"]),
+	),
+	"activation.prepare": scenario(async (fixture) =>
+		fixture.run(["activation", "prepare", "--no-input", "--json"]),
+	),
+	"activation.review_noninteractive": scenario(async (fixture) =>
+		fixture.run([
+			"activation",
+			"review",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.review_activate": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("activate", [
+			"activation",
+			"review",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.defer": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("defer", [
+			"activation",
+			"defer",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.revoke": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("revoke", [
+			"activation",
+			"revoke",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.invalid_usage": scenario(async (fixture) =>
+		fixture.run(["activation", "admit", "--json"]),
 	),
 	"preview.read_only": scenario(async (fixture) =>
 		fixture.run(["preview", "--json"]),
@@ -828,6 +871,10 @@ interface Fixture {
 	readonly repositoryIdentity: string;
 	readonly env: NodeJS.ProcessEnv;
 	run(args: readonly string[]): Promise<CliProcessResult>;
+	runWithHumanDecision(
+		decision: "activate" | "defer" | "revoke",
+		args: readonly string[],
+	): Promise<CliProcessResult>;
 	begin(path: string): Promise<CliProcessResult>;
 	beginTransaction(path: string): Promise<string>;
 	launchWithRole(
@@ -951,6 +998,17 @@ async function createFixture(
 			env,
 			timeoutMs: 30_000,
 		});
+	const runWithHumanDecision = (
+		decision: "activate" | "defer" | "revoke",
+		args: readonly string[],
+	) =>
+		runCliProcess({
+			label: `vault-git human ${decision} ${args.join(" ")}`,
+			argv: ["bun", "run", cliPath, ...args],
+			cwd: packageRoot,
+			env: { ...env, VAULT_GIT_TEST_HUMAN_DECISION: decision },
+			timeoutMs: 30_000,
+		});
 	const begin = (path: string) =>
 		run([
 			"begin",
@@ -1060,6 +1118,7 @@ async function createFixture(
 		repositoryIdentity,
 		env,
 		run,
+		runWithHumanDecision,
 		begin,
 		beginTransaction,
 		launchWithRole,

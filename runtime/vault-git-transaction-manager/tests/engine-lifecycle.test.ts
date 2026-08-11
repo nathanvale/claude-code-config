@@ -6,7 +6,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
 	createVaultGitActivationAuthority,
-	type VaultGitLiveActivationBindings,
 } from "../src/activation-authority.ts";
 import {
 	createVaultGitTransactionEngine,
@@ -15,6 +14,7 @@ import {
 import {
 	admitActivationForTest,
 	admittedActivationAuthorityForTest,
+	liveActivationBindingsForTest,
 	persistedActivationAuthorityForTest,
 	preparedEvidenceForTest,
 } from "./activation-fixture.ts";
@@ -494,7 +494,7 @@ describe("transaction engine lifecycle", () => {
 		["binding_changed", "prepare_fresh", "same_input_unsafe"],
 		["invalidated", "prepare_fresh", "same_input_unsafe"],
 		["revoked", "prepare_fresh", "operator_required"],
-		["revalidation_unavailable", "run_doctor", "same_input_safe"],
+		["revalidation_unavailable", "inspect_configured_vault", "same_input_safe"],
 	] as const) {
 		test(`preserves ${reason} activation restriction semantics`, async () => {
 			const fixture = await engineFixture(undefined, {
@@ -545,10 +545,10 @@ describe("transaction engine lifecycle", () => {
 			status: "refused",
 			blocker: "activation_blocked",
 			retrySafety: "same_input_safe",
-			nextAction: { id: "run_doctor" },
+			nextAction: { id: "inspect_configured_vault" },
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
-				nextAction: { id: "run_doctor" },
+				nextAction: { id: "inspect_configured_vault" },
 			},
 		});
 	});
@@ -571,7 +571,7 @@ describe("transaction engine lifecycle", () => {
 			retrySafety: "same_input_safe",
 			activationRestriction: {
 				cause: { id: "revalidation_unavailable" },
-				nextAction: { id: "run_doctor" },
+				nextAction: { id: "inspect_configured_vault" },
 			},
 		});
 	});
@@ -640,6 +640,52 @@ describe("transaction engine lifecycle", () => {
 		expect(await fixture.store.load()).toMatchObject({
 			status: "loaded",
 			receipt: { phase: "closed" },
+		});
+		expect(fixture.remote.lease).toMatchObject({ state: "released" });
+	});
+
+	test("configuration loss during the atomic probe preserves fields and releases the lease", async () => {
+		let configured = true;
+		const probeStarted = deferred<void>();
+		const releaseProbe = deferred<void>();
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return configured
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: {
+								status: "denied" as const,
+								reason: "configuration_missing" as const,
+								missingConfiguration: ["ssh_identity_file"] as const,
+							};
+				},
+			},
+		});
+		fixture.remote.onProbe = async () => {
+			probeStarted.resolve();
+			await releaseProbe.promise;
+		};
+		const pending = fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		await probeStarted.promise;
+		configured = false;
+		releaseProbe.resolve();
+
+		expect(await pending).toMatchObject({
+			status: "refused",
+			state: "closed",
+			phase: "closed",
+			changedState: "remote",
+			blocker: "activation_blocked",
+			activationRestriction: {
+				cause: { id: "configuration_missing" },
+				missingConfiguration: ["ssh_identity_file"],
+				changedState: "remote",
+			},
 		});
 		expect(fixture.remote.lease).toMatchObject({ state: "released" });
 	});
@@ -1186,7 +1232,7 @@ describe("transaction engine lifecycle", () => {
 			repositoryIdentity: "canonical-vault",
 		});
 		await store.publishPreparedEvidence(evidence);
-		let live: VaultGitLiveActivationBindings = activationBindings(evidence);
+		let live = liveActivationBindingsForTest(evidence);
 		const humanCapability = new Uint8Array([9, 1]);
 		const authority = createVaultGitActivationAuthority({
 			store,
@@ -1263,25 +1309,6 @@ describe("transaction engine lifecycle", () => {
 		expect(scopes).toEqual(Array(8).fill("continuation"));
 	});
 });
-
-function activationBindings(
-	evidence: ReturnType<typeof preparedEvidenceForTest>,
-): VaultGitLiveActivationBindings {
-	return {
-		repositoryIdentity: evidence.repositoryIdentity,
-		remoteIdentity: evidence.remoteIdentity,
-		hostIdentity: evidence.hostIdentity,
-		runtimeIdentity: evidence.runtimeIdentity,
-		executableIdentity: evidence.executableIdentity,
-		privateStateIdentity: evidence.privateStateIdentity,
-		localMainHead: evidence.localMainHead,
-		remoteMainHead: evidence.remoteMainHead,
-		ledgerGeneration: evidence.ledgerGeneration,
-		gitIdentity: evidence.gitIdentity,
-		sshIdentity: evidence.sshIdentity,
-		checkerClosure: evidence.checkerClosure,
-	};
-}
 
 async function engineFixture(interruptAt?: string, options: {
 	admitActivation?: boolean;

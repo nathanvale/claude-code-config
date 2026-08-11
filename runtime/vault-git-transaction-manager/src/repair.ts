@@ -113,6 +113,7 @@ const activationRetrySafety: Record<
 	VaultGitActivationRestrictionCause,
 	VaultGitRetrySafety
 > = {
+	configuration_missing: "same_input_safe",
 	admission_missing: "same_input_safe",
 	human_capability_required: "operator_required",
 	evidence_changed: "same_input_unsafe",
@@ -505,6 +506,9 @@ async function validateRepairActivation(
 		stoppedAction: "vault_write",
 		cause:
 			validation.status === "revoked" ? "revoked" : validation.reason,
+		...(validation.status === "denied" && validation.missingConfiguration
+			? { missingConfiguration: validation.missingConfiguration }
+			: {}),
 	});
 }
 

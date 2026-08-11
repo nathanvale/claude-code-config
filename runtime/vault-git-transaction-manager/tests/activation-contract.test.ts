@@ -7,7 +7,7 @@ import {
 	parseVaultGitPreparedEvidence,
 	projectVaultGitActivationRestrictionJson,
 	projectVaultGitPreparedActivationResult,
-	type VaultGitActivationResultV1,
+	type VaultGitActivationResultV2,
 	VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 	VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
 	VAULT_GIT_PREPARED_EVIDENCE_CONTRACT_ID,
@@ -99,6 +99,10 @@ describe("V2 prepared activation evidence", () => {
 });
 
 describe("activation result contract", () => {
+	test("publishes the closed activation result vocabulary as schema v2", () => {
+		expect(VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION).toBe("2");
+	});
+
 	test("returns one fresh-preparation action for legacy or tampered evidence", () => {
 		const legacy = {
 			schemaVersion: 1,
@@ -195,7 +199,7 @@ describe("activation result contract", () => {
 
 	test("one public result union accepts prepared, invalidated, and restricted variants", () => {
 		const evidence = createVaultGitPreparedEvidence(preparedInput());
-		const results: readonly VaultGitActivationResultV1[] = [
+		const results: readonly VaultGitActivationResultV2[] = [
 			projectVaultGitPreparedActivationResult(
 				evidence,
 				"2026-08-11T00:00:01.000Z",

@@ -9,7 +9,7 @@ export const VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID =
 	"vault-git.activation-result" as const;
 
 /** Public activation-result schema version. */
-export const VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION = "1" as const;
+export const VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION = "2" as const;
 
 /** Display-only freshness window for prepared evidence. */
 export const VAULT_GIT_PREPARED_DISPLAY_FRESHNESS_MS = 10 * 60 * 1_000;
@@ -79,7 +79,7 @@ export interface VaultGitPreparedEvidenceV2
 }
 
 /** Sanitized prepared or stale projection for activation consumers. */
-export interface VaultGitPreparedActivationResultV1 {
+export interface VaultGitPreparedActivationResultV2 {
 	/** Stable public result contract. */
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	/** Public result schema. */
@@ -106,7 +106,7 @@ export interface VaultGitPreparedActivationResultV1 {
 }
 
 /** Sanitized fail-closed projection for legacy, unknown, or tampered evidence. */
-export interface VaultGitInvalidPreparedActivationResultV1 {
+export interface VaultGitInvalidPreparedActivationResultV2 {
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	readonly schema_version: typeof VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION;
 	readonly status: "invalidated";
@@ -123,9 +123,9 @@ export interface VaultGitInvalidPreparedActivationResultV1 {
 }
 
 /** Public prepared-evidence activation-result variants. */
-export type VaultGitPreparedEvidenceActivationResultV1 =
-	| VaultGitPreparedActivationResultV1
-	| VaultGitInvalidPreparedActivationResultV1;
+export type VaultGitPreparedEvidenceActivationResultV2 =
+	| VaultGitPreparedActivationResultV2
+	| VaultGitInvalidPreparedActivationResultV2;
 
 /**
  * Create immutable V2 prepared evidence from exact captured bindings.
@@ -177,7 +177,7 @@ export function parseVaultGitPreparedEvidence(
 export function evaluateVaultGitPreparedEvidence(
 	value: unknown,
 	now: string,
-): VaultGitPreparedEvidenceActivationResultV1 {
+): VaultGitPreparedEvidenceActivationResultV2 {
 	isoTime(now);
 	try {
 		return projectVaultGitPreparedActivationResult(
@@ -209,7 +209,7 @@ export function evaluateVaultGitPreparedEvidence(
 export function projectVaultGitPreparedActivationResult(
 	evidence: VaultGitPreparedEvidenceV2,
 	now: string,
-): VaultGitPreparedActivationResultV1 {
+): VaultGitPreparedActivationResultV2 {
 	const parsed = parseVaultGitPreparedEvidence(evidence);
 	const observedAt = isoTime(now);
 	const capturedAt = isoTime(parsed.capturedAt);
@@ -269,7 +269,7 @@ function derivePreparedEvidenceId(input: VaultGitPreparedEvidenceInput): string 
 	return `vault-git:prepared:v2:${digest}`;
 }
 
-function invalidPreparedEvidenceResult(): VaultGitInvalidPreparedActivationResultV1 {
+function invalidPreparedEvidenceResult(): VaultGitInvalidPreparedActivationResultV2 {
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 		schema_version: VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,

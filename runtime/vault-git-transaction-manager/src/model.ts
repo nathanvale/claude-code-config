@@ -6,8 +6,16 @@ export const VAULT_GIT_ACTIVATION_STOPPED_ACTIONS = [
 	"activation_revocation",
 ] as const;
 
+/** Non-secret host configuration fields required for live activation identity. */
+export const VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS = [
+	"ssh_identity_file",
+	"ssh_public_key",
+	"ssh_known_hosts",
+] as const;
+
 /** Closed public causes produced by deterministic activation trust. */
 export const VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES = [
+	"configuration_missing",
 	"admission_missing",
 	"human_capability_required",
 	"evidence_changed",
@@ -25,10 +33,16 @@ export type VaultGitActivationStoppedAction =
 export type VaultGitActivationRestrictionCause =
 	(typeof VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES)[number];
 
+/** Stable public name for one absent activation configuration field. */
+export type VaultGitActivationConfigurationField =
+	(typeof VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS)[number];
+
 /** Input selected only from deterministic closed vocabulary. */
 export interface VaultGitActivationRestrictionInput {
 	readonly stoppedAction: VaultGitActivationStoppedAction;
 	readonly cause: VaultGitActivationRestrictionCause;
+	/** Absent public configuration field names for configuration_missing only. */
+	readonly missingConfiguration?: readonly VaultGitActivationConfigurationField[];
 	/** Command-local change already preserved before activation stopped the next write. */
 	readonly changedState?: VaultGitChangedState;
 }
@@ -45,24 +59,26 @@ export interface VaultGitActivationRestriction {
 	readonly observedSafeState: string;
 	readonly writePermission: "denied";
 	readonly changedState: VaultGitChangedState;
+	readonly missingConfiguration?: readonly VaultGitActivationConfigurationField[];
 	readonly manualHandoff: {
 		readonly availability: "unavailable";
 		readonly summary: string;
 	};
 	readonly nextAction: {
 		readonly id:
+			| "configure_activation_identity"
 			| "review_prepared"
 			| "return_to_human_review"
 			| "prepare_fresh"
-			| "run_doctor";
+			| "inspect_configured_vault";
 		readonly summary: string;
 	};
 }
 
 /** Public JSON restriction result with no private diagnostics. */
-export interface VaultGitActivationRestrictionJsonV1 {
+export interface VaultGitActivationRestrictionJsonV2 {
 	readonly contract_id: "vault-git.activation-result";
-	readonly schema_version: "1";
+	readonly schema_version: "2";
 	readonly status: "restricted";
 	readonly privacy: "public";
 	readonly stopped_action: VaultGitActivationStoppedAction;
@@ -71,6 +87,7 @@ export interface VaultGitActivationRestrictionJsonV1 {
 	readonly observed_safe_state: string;
 	readonly write_permission: "denied";
 	readonly changed_state: VaultGitChangedState;
+	readonly missing_configuration?: readonly VaultGitActivationConfigurationField[];
 	readonly manual_handoff: VaultGitActivationRestriction["manualHandoff"];
 	readonly next_action: VaultGitActivationRestriction["nextAction"];
 }
@@ -79,6 +96,7 @@ const ACTIVATION_CAUSE_SUMMARY: Record<
 	VaultGitActivationRestrictionCause,
 	string
 > = {
+	configuration_missing: "Required activation identity configuration is missing.",
 	admission_missing: "Human activation admission is missing.",
 	human_capability_required: "The final choice belongs to the human review surface.",
 	evidence_changed: "The reviewed prepared evidence is no longer current.",
@@ -92,6 +110,11 @@ const ACTIVATION_NEXT_ACTION: Record<
 	VaultGitActivationRestrictionCause,
 	VaultGitActivationRestriction["nextAction"]
 > = {
+	configuration_missing: {
+		id: "configure_activation_identity",
+		summary:
+			"Configure VAULT_GIT_SSH_IDENTITY_FILE_PATH, VAULT_GIT_SSH_PUBLIC_KEY_PATH, and VAULT_GIT_SSH_KNOWN_HOSTS_PATH for this host using its dedicated repository-scoped SSH identity and reviewed owner-only known_hosts, then rerun vault-git doctor --json.",
+	},
 	admission_missing: {
 		id: "review_prepared",
 		summary: "Open human review for the current prepared evidence.",
@@ -117,8 +140,9 @@ const ACTIVATION_NEXT_ACTION: Record<
 		summary: "Prepare fresh V2 evidence, then return to human review.",
 	},
 	revalidation_unavailable: {
-		id: "run_doctor",
-		summary: "Run read-only Doctor, then retry explicit preparation.",
+		id: "inspect_configured_vault",
+		summary:
+			"Inspect the configured vault and restore the unavailable live activation dependency before rerunning Doctor.",
 	},
 };
 
@@ -134,11 +158,20 @@ const ACTIVATION_OBSERVED_SAFE_STATE: Record<VaultGitChangedState, string> = {
 export function createVaultGitActivationRestriction(
 	input: VaultGitActivationRestrictionInput,
 ): VaultGitActivationRestriction {
+	const suppliedMissingConfiguration = input.missingConfiguration ?? [];
+	const missingConfiguration = VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS.filter(
+		(field) => suppliedMissingConfiguration.includes(field),
+	);
 	const valid = [
 		VAULT_GIT_ACTIVATION_STOPPED_ACTIONS.includes(input.stoppedAction),
 		VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES.includes(input.cause),
 		input.changedState === undefined ||
 			VAULT_GIT_CHANGED_STATES.includes(input.changedState),
+		missingConfiguration.length === suppliedMissingConfiguration.length,
+		new Set(suppliedMissingConfiguration).size === suppliedMissingConfiguration.length,
+		input.cause === "configuration_missing"
+			? missingConfiguration.length > 0
+			: missingConfiguration.length === 0,
 	].every(Boolean);
 	if (!valid) throw new Error("activation restriction invalid");
 	const changedState = input.changedState ?? "none";
@@ -153,6 +186,9 @@ export function createVaultGitActivationRestriction(
 		observedSafeState: ACTIVATION_OBSERVED_SAFE_STATE[changedState],
 		writePermission: "denied",
 		changedState,
+		...(missingConfiguration.length > 0
+			? { missingConfiguration: Object.freeze([...missingConfiguration]) }
+			: {}),
 		manualHandoff: Object.freeze({
 			availability: "unavailable",
 			summary: "Manual handoff is not available from activation trust.",
@@ -467,6 +503,7 @@ export type VaultGitRepairAction = (typeof VAULT_GIT_REPAIR_ACTIONS)[number];
 
 /** Closed doctor findings safe for command output and automation. */
 export const VAULT_GIT_DOCTOR_FINDINGS = [
+	"activation_configuration_missing",
 	"activation_missing",
 	"no_receipt",
 	"receipt_corrupt",
@@ -517,6 +554,7 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	"capture_private_draft",
 	"change_commit_summary",
 	"change_owned_paths",
+	"configure_activation_identity",
 	"continue_transaction",
 	"inspect_configured_vault",
 	"inspect_private_receipt",
@@ -685,7 +723,7 @@ export interface VaultGitLifecycleResultPayload {
 	/** Exactly one next safe action. */
 	readonly next_action: VaultGitNextAction;
 	/** Cause-specific public activation refusal, when activation stopped a write. */
-	readonly activation_restriction?: VaultGitActivationRestrictionJsonV1;
+	readonly activation_restriction?: VaultGitActivationRestrictionJsonV2;
 }
 
 /** Domain snapshot returned by read-side ports. */

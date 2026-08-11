@@ -253,6 +253,9 @@ export function createVaultGitTransactionEngine(
 			stoppedAction: "vault_write",
 			cause:
 				validation.status === "revoked" ? "revoked" : validation.reason,
+			...(validation.status === "denied" && validation.missingConfiguration
+				? { missingConfiguration: validation.missingConfiguration }
+				: {}),
 		});
 	}
 
@@ -269,6 +272,9 @@ export function createVaultGitTransactionEngine(
 						stoppedAction: restriction.stoppedAction,
 						cause: restriction.cause.id,
 						changedState,
+						...(restriction.missingConfiguration
+							? { missingConfiguration: restriction.missingConfiguration }
+							: {}),
 					});
 		const nextAction = activationNextAction(contextualRestriction);
 		return {
@@ -298,20 +304,24 @@ export function createVaultGitTransactionEngine(
 		diagnosed?: VaultGitDoctorResult,
 	): VaultGitDoctorResult {
 		const nextAction = activationNextAction(restriction);
+		const activationFinding =
+			restriction.cause.id === "configuration_missing"
+				? "activation_configuration_missing"
+				: "activation_missing";
 		return {
 			...(diagnosed ?? {
 				status: "diagnosed" as const,
 				state: "absent" as const,
 				phase: "blocked" as const,
-				finding: "activation_missing" as const,
+				finding: activationFinding,
 				changedState: "none" as const,
 				diagnosticsReference: `doctor:${options.store.repositoryId}`,
 			}),
 			changedState: diagnosed?.changedState ?? "none",
 			finding:
 				diagnosed?.finding === "no_receipt"
-					? "activation_missing"
-					: (diagnosed?.finding ?? "activation_missing"),
+					? activationFinding
+					: (diagnosed?.finding ?? activationFinding),
 			retrySafety: activationRetrySafety(restriction),
 			nextAction,
 			blocker: "activation_blocked",
@@ -1337,6 +1347,7 @@ function activationRetrySafety(
 	restriction: VaultGitActivationRestriction,
 ): VaultGitRetrySafety {
 	switch (restriction.cause.id) {
+		case "configuration_missing":
 		case "admission_missing":
 		case "revalidation_unavailable":
 			return "same_input_safe";

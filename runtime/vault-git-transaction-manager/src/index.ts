@@ -3,6 +3,7 @@ export * from "./model.ts";
 /** Stable configured-vault identity derivation. */
 export * from "./repository-identity.ts";
 export * from "./activation-contract.ts";
+export * from "./activation-front-door.ts";
 export * from "./activation-identity.ts";
 export * from "./activation-preparation.ts";
 export * from "./activation-authority.ts";

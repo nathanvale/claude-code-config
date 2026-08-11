@@ -115,7 +115,7 @@ describe("private-state composition upgrade", () => {
 			transaction_state: "active",
 			finding: "activation_missing",
 			blockers: ["activation_blocked"],
-			next_action: { id: "run_doctor" },
+			next_action: { id: "inspect_configured_vault" },
 			activation_restriction: {
 				cause: { id: "revalidation_unavailable" },
 			},

@@ -85,6 +85,67 @@ describe("vault-git command contract", () => {
 		expect(help).toContain("vault-git tidy now");
 	});
 
+	test("publishes one guarded activation journey without a public admit route", () => {
+		expect(VAULT_GIT_COMMANDS).toContain("activation");
+		expect(vaultGitContracts.activation.usage).toEqual([
+			"vault-git activation [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation prepare [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation review <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation defer <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation revoke <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+		]);
+		expect(renderVaultGitHelp()).toContain(
+			"vault-git activation review <evidence-reference>",
+		);
+		expect(JSON.stringify(projectVaultGitCommandDiscoveryTree())).not.toContain(
+			"activation admit",
+		);
+		expect(() => parseVaultGitInvocation(["activation", "admit"])).toThrow(
+			"activation action",
+		);
+	});
+
+	test("parses activation inspect, prepare, and human-review actions from one contract", () => {
+		expect(parseVaultGitInvocation(["activation", "--json"])).toMatchObject({
+			command: "activation",
+			activationAction: "inspect",
+			json: true,
+		});
+		expect(
+			parseVaultGitInvocation([
+				"activation",
+				"prepare",
+				"--no-input",
+				"--json",
+			]),
+		).toMatchObject({
+			command: "activation",
+			activationAction: "prepare",
+			noInput: true,
+			json: true,
+		});
+		for (const action of ["review", "defer", "revoke"] as const) {
+			expect(() => parseVaultGitInvocation(["activation", action])).toThrow(
+				"<evidence-reference>",
+			);
+			expect(() =>
+				parseVaultGitInvocation(["activation", action, "--json"]),
+			).toThrow("<evidence-reference>");
+			const invocation = parseVaultGitInvocation([
+				"activation",
+				action,
+				"vault-git:prepared:v2:deadbeef",
+				"--json",
+			]);
+			expect(invocation).toMatchObject({
+				command: "activation",
+				activationAction: action,
+				evidenceReference: "vault-git:prepared:v2:deadbeef",
+				json: true,
+			});
+		}
+	});
+
 	test("accepts facade diagnostics for every command without caller-specific policy", () => {
 		const discovery = projectVaultGitCommandDiscoveryTree();
 		for (const command of VAULT_GIT_COMMANDS) {
@@ -258,7 +319,7 @@ describe("vault-git U1 read-only runtime", () => {
 				blockers: ["activation_blocked"],
 				activation_restriction: {
 					cause: { id: "revalidation_unavailable" },
-					next_action: { id: "run_doctor" },
+					next_action: { id: "inspect_configured_vault" },
 				},
 			},
 		});
