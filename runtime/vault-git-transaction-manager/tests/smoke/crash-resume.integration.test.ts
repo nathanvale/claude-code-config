@@ -7,6 +7,7 @@ import { parseCliProcessJson } from "@side-quest/cli-command-facade/testing";
 
 import {
 	assertLedgerState,
+	assertWorktreeUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
 } from "./fixture.ts";
@@ -28,8 +29,8 @@ afterEach(cleanupSmokeFixtures);
  * correctly diagnosed by separate processes against a real remote.
  * Each CLI invocation is its own subprocess, so nothing carries over except
  * what reached the durable receipt store and the remote ledger — exactly the
- * state a crashed process would leave behind. This row verifies the advertised
- * `resume` action; it does not invoke that repair or prove AE5 end to end.
+ * state a crashed process would leave behind. This row invokes the advertised
+ * `resume` action and proves it preserves unrelated worktree state.
  *
  * Note this is the one row where plain Git commands cannot supply the
  * precondition. The phase lives in the manager's private receipt store, not in
@@ -38,6 +39,7 @@ afterEach(cleanupSmokeFixtures);
 describe("row 3: a stranded transaction is diagnosed in a new process", () => {
 	test("a transaction left writing is diagnosed as writes_in_progress", async () => {
 		const fixture = await mkSmokeFixture();
+		const before = fixture.snapshot();
 		const transactionId = await fixture.begin("notes/event.md");
 
 		// A separate process reads only the durable receipt and the remote.
@@ -56,11 +58,24 @@ describe("row 3: a stranded transaction is diagnosed in a new process", () => {
 				repair_action: "resume",
 			},
 		});
+		const resumed = await fixture.run([
+			"repair",
+			"resume",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		]);
+		expect(parseCliProcessJson(resumed)).toMatchObject({
+			status: "ok",
+			data: { outcome: "repaired", phase: "writing" },
+			continuation: { next_action_id: "complete_transaction" },
+		});
 
 		// A stranded transaction must keep holding its lease: a crash may never
 		// silently release an unresolved transaction.
 		assertLedgerState(fixture, "held");
-		});
+		assertWorktreeUnchanged(before, fixture.snapshot());
+	});
 
 	test("a stranded transaction leaves no commit on either side", async () => {
 		const fixture = await mkSmokeFixture();

@@ -8,11 +8,13 @@ import {
 	type AdapterPackagePolicy,
 	type AdapterProbeResult,
 	type AdapterProvenanceResult,
+	type AdapterReleaseResult,
 	type AdapterRuntime,
 	errorMessage,
 	extractVersion,
 	isMissingAdapterCommandResult,
 	PROBE_TIMEOUT_MS,
+	RELEASE_TIMEOUT_MS,
 	VERSION_READ_TIMEOUT_MS,
 } from "./registry.ts";
 
@@ -75,6 +77,11 @@ function buildAttachArgv(
 	sessionName: string,
 ): readonly string[] {
 	return ["attach", `--cdp=${endpoint.http}`, `--session=${sessionName}`];
+}
+
+/** Build the named-session detach argv shared by probe cleanup and release. */
+function buildDetachArgv(sessionName: string): readonly string[] {
+	return [`--session=${sessionName}`, "detach"];
 }
 
 /**
@@ -187,7 +194,7 @@ async function detachProbeSession(
 	return runProbeCommand(
 		runtime,
 		executablePath,
-		[`--session=${sessionName}`, "detach"],
+		buildDetachArgv(sessionName),
 		"named detach",
 	);
 }
@@ -383,5 +390,49 @@ export const playwrightCdpDefinition = {
 			evidence:
 				"playwright-cli attached to the verified CDP endpoint, snapshotted read-only, and detached without closing the browser.",
 		};
+	},
+
+	async releaseSession(
+		runtime: AdapterRuntime,
+		input: Readonly<{ sessionName: string }>,
+	): Promise<AdapterReleaseResult> {
+		const resolution = await runtime.resolveExecutable(PLAYWRIGHT_CDP_EXECUTABLE);
+		if (!resolution.resolved) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${PLAYWRIGHT_CDP_EXECUTABLE} could not be resolved for session release.`,
+			};
+		}
+		let result: AdapterCommandResult;
+		try {
+			result = await runtime.runCommand({
+				command: resolution.path,
+				args: buildDetachArgv(input.sessionName),
+				env: { MCPORTER_NO_KEEPALIVE: "*" },
+				timeoutMs: RELEASE_TIMEOUT_MS,
+			});
+		} catch (error) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${PLAYWRIGHT_CDP_EXECUTABLE} named detach did not start: ${errorMessage(error)}.`,
+			};
+		}
+		if (result.timedOut) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${PLAYWRIGHT_CDP_EXECUTABLE} named detach timed out.`,
+			};
+		}
+		if (result.exitCode !== 0) {
+			return {
+				released: false,
+				cause: "command-failed",
+				detail: `${PLAYWRIGHT_CDP_EXECUTABLE} named detach exited ${result.exitCode}.`,
+			};
+		}
+		return { released: true };
 	},
 } as const satisfies AdapterDefinition;

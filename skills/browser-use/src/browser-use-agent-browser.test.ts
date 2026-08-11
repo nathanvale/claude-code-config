@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
+	type AgentBrowserExecutionFailureCode,
 	type AgentBrowserExecutionRuntime,
 	type AgentBrowserPostcondition,
+	type AgentBrowserTaskStep,
 	executeAgentBrowserTask,
 	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
@@ -110,21 +112,51 @@ function runtimeFor(
 		stderr?: string;
 		timedOut?: boolean;
 	}[],
-	options: Readonly<{ selectedUrlProof?: string }> = {},
+	options: Readonly<{
+		selectedUrlProof?: string;
+		releaseResponse?: {
+			exitCode?: number;
+			stdout?: string;
+			stderr?: string;
+			timedOut?: boolean;
+		};
+	}> = {},
 ): AgentBrowserExecutionRuntime & {
 	calls: Array<readonly string[]>;
 	commandInputs: McporterCommandInput[];
+	releaseCalls: McporterCommandInput[];
 } {
 	const calls: Array<readonly string[]> = [];
 	const commandInputs: McporterCommandInput[] = [];
+	const releaseCalls: McporterCommandInput[] = [];
 	let responseIndex = 0;
 	let listedUrls = new Map<string, string>();
 	let selectedUrlProof: string | undefined;
 	return {
 		calls,
 		commandInputs,
+		releaseCalls,
 		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
+			if (input.args.includes("close")) {
+				releaseCalls.push(input);
+				return {
+					exitCode: options.releaseResponse?.exitCode ?? 0,
+					stdout: options.releaseResponse?.stdout ?? json({}),
+					stderr: options.releaseResponse?.stderr ?? "",
+					...(options.releaseResponse?.timedOut === undefined
+						? {}
+						: { timedOut: options.releaseResponse.timedOut }),
+				};
+			}
+			if (input.args[0] === "session" && input.args[1] === "list") {
+				releaseCalls.push(input);
+				return {
+					exitCode: 0,
+					stdout: json({ sessions: [] }),
+					stderr: "",
+				};
+			}
 			commandInputs.push(input);
 			calls.push([input.command, ...input.args]);
 			const semanticArgs = input.args.slice(4);
@@ -199,6 +231,356 @@ function argvAndDecodedArguments(calls: readonly (readonly string[])[]): string 
 }
 
 describe("Agent Browser native task lane", () => {
+	test("releases the adapter session after a terminal task", async () => {
+		const activeSessions = new Set<string>();
+		const releaseInputs: McporterCommandInput[] = [];
+		const runtime: AgentBrowserExecutionRuntime = {
+			runCommand: async (input) => {
+				if (input.args[0] === "session" && input.args[1] === "list") {
+					releaseInputs.push(input);
+					return {
+						exitCode: 0,
+						stdout: json({ sessions: [...activeSessions] }),
+						stderr: "",
+					};
+				}
+				const sessionFlagIndex = input.args.indexOf("--session");
+				const sessionName = input.args[sessionFlagIndex + 1];
+				if (sessionName === undefined) throw new Error("missing session");
+				if (input.args.includes("close")) {
+					releaseInputs.push(input);
+					activeSessions.delete(sessionName);
+					return {
+						exitCode: 0,
+						stdout: json({}),
+						stderr: "",
+					};
+				}
+				activeSessions.add(sessionName);
+				if (input.args.includes("list")) {
+					return {
+						exitCode: 0,
+						stdout: json({
+							tabs: [
+								{
+									tabId: "t1",
+									active: true,
+									type: "page",
+									url: "https://example.test/",
+								},
+							],
+						}),
+						stderr: "",
+					};
+				}
+				if (input.args.includes("url")) {
+					return {
+						exitCode: 0,
+						stdout: json({ url: "https://example.test/" }),
+						stderr: "",
+					};
+				}
+				return {
+					exitCode: 0,
+					stdout: json({ snapshot: "page", refs: {} }),
+					stderr: "",
+				};
+			},
+		};
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-terminal-release",
+			target_tab_id: "t1",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(activeSessions).toEqual(new Set());
+		expect(releaseInputs).toHaveLength(2);
+		expect(releaseInputs[0]?.args).toEqual([
+			"--session",
+			"browser-use-run-terminal-release",
+			"close",
+			"--json",
+		]);
+		expect(releaseInputs[1]?.args).toEqual(["session", "list", "--json"]);
+		expect(releaseInputs.every((input) => !input.args.includes("--cdp"))).toBe(true);
+	});
+
+	test("keeps successful task truth when session release fails", async () => {
+		const runtime = runtimeFor(
+			[
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ snapshot: "page", refs: {} }) },
+			],
+			{
+				releaseResponse: {
+					exitCode: 1,
+					stdout: "",
+					stderr: "close failed",
+				},
+			},
+		);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-release-debt",
+			target_tab_id: "t1",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			outcome: "confirmed",
+			release: {
+				released: false,
+				cause: "command-failed",
+			},
+		});
+		expect(runtime.releaseCalls).toHaveLength(1);
+		expect(runtime.releaseCalls[0]?.args).toEqual([
+			"--session",
+			"browser-use-run-release-debt",
+			"close",
+			"--json",
+		]);
+		expect(runtime.releaseCalls[0]?.args).not.toContain("--cdp");
+	});
+
+	test("releases once without replacing typed terminal failures", async () => {
+		const selectedResponses = () => [
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+		];
+		const markerRuntime = runtimeFor(selectedResponses());
+		markerRuntime.beforeMutationDispatch = async () => ({ ok: false });
+		const cases: Array<{
+			name: string;
+			runtime: ReturnType<typeof runtimeFor>;
+			steps: readonly AgentBrowserTaskStep[];
+			code: AgentBrowserExecutionFailureCode;
+			expectedFinalization?: {
+				mutation_dispatched: true;
+				executed_steps: 1;
+			};
+		}> = [
+			{
+				name: "target selection",
+				runtime: runtimeFor([{ stdout: semanticFailure() }]),
+				steps: [{ kind: "snapshot", interactive: true }],
+				code: "agent_browser_target_unavailable",
+			},
+			{
+				name: "snapshot command",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: semanticFailure() },
+				]),
+				steps: [{ kind: "snapshot", interactive: true }],
+				code: "agent_browser_command_failed",
+			},
+			{
+				name: "missing current snapshot",
+				runtime: runtimeFor(selectedResponses()),
+				steps: [
+					{
+						kind: "click",
+						ref: "@e1",
+						postcondition: { kind: "element-visible", selector: "main" },
+					},
+				],
+				code: "agent_browser_current_snapshot_required",
+			},
+			{
+				name: "navigation origin",
+				runtime: runtimeFor(selectedResponses()),
+				steps: [
+					{
+						kind: "open",
+						url: "https://outside.test/",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://outside.test/",
+						},
+					},
+				],
+				code: "agent_browser_target_origin_refused",
+			},
+			{
+				name: "mutation marker",
+				runtime: markerRuntime,
+				steps: [
+					{
+						kind: "open",
+						url: "https://example.test/next",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://example.test/next",
+						},
+					},
+				],
+				code: "agent_browser_mutation_marker_unavailable",
+			},
+			{
+				name: "invalid ref",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ snapshot: "page", refs: {} }) },
+				]),
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "click",
+						ref: "@e1",
+						postcondition: { kind: "element-visible", selector: "main" },
+					},
+				],
+				code: "agent_browser_ref_invalid",
+			},
+			{
+				name: "action integrity",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ snapshot: "page", refs: {} }) },
+				]),
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "evaluate",
+						action_id: "invalid-action",
+						script: "() => true",
+						script_sha256: "invalid",
+						review_status: "approved",
+						allowed_origin: "https://example.test",
+						effect: "read",
+						inputs: {},
+					},
+				],
+				code: "agent_browser_action_integrity_refused",
+			},
+			{
+				name: "confidential input",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ snapshot: "@e1 textbox", refs: { e1: {} } }) },
+				]),
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "fill",
+						ref: "@e1",
+						value: "",
+						sensitivity: "confidential",
+						postcondition: { kind: "element-visible", selector: "main" },
+					},
+				],
+				code: "agent_browser_confidential_input_requires_auth_transaction",
+			},
+			{
+				name: "mutation effect unknown",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ opened: true }) },
+					{ exitCode: 1, stdout: semanticFailure() },
+				]),
+				steps: [
+					{
+						kind: "open",
+						url: "https://example.test/next",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://example.test/next",
+						},
+					},
+				],
+				code: "agent_browser_mutation_effect_unknown",
+				expectedFinalization: {
+					mutation_dispatched: true,
+					executed_steps: 1,
+				},
+			},
+			{
+				name: "postcondition not achieved",
+				runtime: runtimeFor([
+					...selectedResponses(),
+					{ stdout: json({ opened: true }) },
+					{ stdout: json({ url: "https://example.test/unexpected" }) },
+				]),
+				steps: [
+					{
+						kind: "open",
+						url: "https://example.test/next",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://example.test/next",
+						},
+					},
+				],
+				code: "agent_browser_postcondition_not_achieved",
+				expectedFinalization: {
+					mutation_dispatched: true,
+					executed_steps: 1,
+				},
+			},
+		];
+
+		for (const scenario of cases) {
+			const runId = `run-release-${scenario.name.replaceAll(" ", "-")}`;
+			const result = await executeAgentBrowserTask(scenario.runtime, {
+				handoff: HANDOFF,
+				run_id: runId,
+				target_tab_id: "t1",
+				allowed_origins: ["https://example.test"],
+				steps: scenario.steps,
+			});
+
+			expect(result).toMatchObject({
+				ok: false,
+				code: scenario.code,
+				...scenario.expectedFinalization,
+			});
+			const closeCalls = scenario.runtime.releaseCalls.filter((input) =>
+				input.args.includes("close"),
+			);
+			expect(closeCalls).toHaveLength(1);
+			expect(closeCalls[0]?.args).toEqual([
+				"--session",
+				`browser-use-${runId}`,
+				"close",
+				"--json",
+			]);
+			expect(
+				scenario.runtime.releaseCalls.every((input) => !input.args.includes("--cdp")),
+			).toBe(true);
+		}
+	});
+
 	test("selects one proven tab, observes, mutates, and freshly verifies structure", async () => {
 		const runtime = runtimeFor([
 			{

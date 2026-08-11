@@ -466,8 +466,14 @@ export type BrowserUseRunIssue = {
 	message: string;
 };
 
-function isBlockedState(state: BrowserUseRunState): boolean {
+export function isBlockedState(state: BrowserUseRunState): boolean {
 	return (BROWSER_USE_BLOCKED_RUN_STATES as readonly BrowserUseRunState[]).includes(
+		state,
+	);
+}
+
+export function isTerminalState(state: BrowserUseRunState): boolean {
+	return (BROWSER_USE_TERMINAL_RUN_STATES as readonly BrowserUseRunState[]).includes(
 		state,
 	);
 }
@@ -1166,11 +1172,7 @@ export function applyAuthCommit(
 			},
 		};
 	}
-	if (
-		(BROWSER_USE_TERMINAL_RUN_STATES as readonly BrowserUseRunState[]).includes(
-			run.state,
-		)
-	) {
+	if (isTerminalState(run.state)) {
 		return {
 			ok: false,
 			rejection: {
