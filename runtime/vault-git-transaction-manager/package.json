@@ -16,7 +16,9 @@
   "scripts": {
     "vault-git": "bun run src/cli.ts",
     "test": "bun test tests",
-    "typecheck": "tsc --ignoreConfig --noEmit --strict --target ESNext --lib ESNext --module Preserve --moduleDetection force --moduleResolution bundler --allowImportingTsExtensions --verbatimModuleSyntax --skipLibCheck --noFallthroughCasesInSwitch --noImplicitOverride --resolveJsonModule --types bun,node src/*.ts tests/*.ts"
+    "test:smoke": "bun test tests/smoke",
+    "test:smoke:pr": "bun test tests/smoke/main-ahead.integration.test.ts tests/smoke/stale-writer.integration.test.ts && bun test tests/smoke/durable-phase-matrix.integration.test.ts -t 'intent_durable|checking|push_pending|human_required|closed'",
+    "typecheck": "tsc --ignoreConfig --noEmit --strict --target ESNext --lib ESNext --module Preserve --moduleDetection force --moduleResolution bundler --allowImportingTsExtensions --verbatimModuleSyntax --skipLibCheck --noFallthroughCasesInSwitch --noImplicitOverride --resolveJsonModule --types bun,node src/*.ts tests/*.ts tests/smoke/*.ts"
   },
   "dependencies": {
     "@side-quest/cli-command-facade": "workspace:*"

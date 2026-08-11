@@ -2,13 +2,21 @@
 
 import { Database } from "bun:sqlite"
 import { randomUUID } from "node:crypto"
-import { existsSync } from "node:fs"
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
-import { resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 
-interface ArchivedThreadRow {
+interface SessionRow {
 	id: string
 	updated_at_ms: number
+	archived_value: number
 	thread_source: string | null
 	cwd: string
 	title: string
@@ -16,18 +24,42 @@ interface ArchivedThreadRow {
 	pinned_value: number
 }
 
-const HELP = `session-picker archived sessions
+interface SessionMetadata {
+	id: string
+	updated_at_ms: number
+	archived: boolean
+	source: "codex"
+	thread_source: string | null
+	cwd: string
+	title: string
+	summary: string
+	pinned: boolean
+}
+
+interface SessionSnapshot {
+	schema_version: 1
+	generated_at: string
+	sessions: SessionMetadata[]
+}
+
+const HELP = `session-picker local session index
 
 Usage:
   archived-sessions.ts archived --json [--limit <count>] [--database <path>]
+  archived-sessions.ts snapshot --json [--limit <count>] [--database <path>] [--state <path>]
+  archived-sessions.ts search --query <text> --json [--limit <count>] [--state <path>]
 
 Options:
-  --limit <count>    Maximum archived sessions to return. Default: 30.
+  --query <text>    Case-insensitive snapshot search. Empty means newest rows.
+  --limit <count>   Maximum results. Default: 30; maximum: 200.
   --database <path> Explicit Codex state database. Normal runs discover it.
-  --json             Emit structured JSON for the skill driver.
-  -h, --help         Show this help.
+  --state <path>    Explicit private snapshot file. Normal runs use XDG state.
+  --json            Emit structured JSON for the skill driver.
+  -h, --help        Show this help.
 
-Read-only. Never changes Codex sessions or local state.
+Side effects:
+  archived, search  Read-only.
+  snapshot          Writes sanitized metadata to a private local state file.
 `
 
 function valueAfter(arguments_: string[], flag: string): string | undefined {
@@ -44,6 +76,12 @@ function defaultDatabasePath(): string | undefined {
 	return candidates.find((candidate) => candidate && existsSync(candidate))
 }
 
+function defaultStatePath(): string {
+	const stateRoot =
+		process.env.XDG_STATE_HOME ?? resolve(homedir(), ".local", "state")
+	return resolve(stateRoot, "session-picker", "session-index.json")
+}
+
 function displayText(value: string, maximumLength: number): string {
 	const normalized = value.replace(/\s+/g, " ").trim()
 	if (normalized.length <= maximumLength) return normalized
@@ -51,7 +89,11 @@ function displayText(value: string, maximumLength: number): string {
 }
 
 function argumentsAreValid(arguments_: string[]): boolean {
-	if (arguments_[0] !== "archived") return false
+	const command = arguments_[0]
+	if (!command || !["archived", "snapshot", "search"].includes(command)) {
+		return false
+	}
+	const allowedValues = new Set(["--limit", "--database", "--state", "--query"])
 	const seen = new Set<string>()
 	for (let index = 1; index < arguments_.length; index += 1) {
 		const argument = arguments_[index]
@@ -60,16 +102,140 @@ function argumentsAreValid(arguments_: string[]): boolean {
 			seen.add(argument)
 			continue
 		}
-		if (argument === "--limit" || argument === "--database") {
+		if (allowedValues.has(argument)) {
 			const value = arguments_[index + 1]
-			if (!value || value.startsWith("--")) return false
+			if (
+				value === undefined ||
+				value.startsWith("--") ||
+				(argument !== "--query" && value.length === 0)
+			) {
+				return false
+			}
 			seen.add(argument)
 			index += 1
 			continue
 		}
 		return false
 	}
-	return seen.has("--json")
+	if (!seen.has("--json")) return false
+	if (command === "archived" && (seen.has("--state") || seen.has("--query"))) {
+		return false
+	}
+	if (command === "snapshot" && seen.has("--query")) return false
+	if (command === "search" && (!seen.has("--query") || seen.has("--database"))) {
+		return false
+	}
+	return true
+}
+
+function envelopeError(
+	action: string,
+	category: string,
+	nextAction: string,
+	exitCode: number,
+	retrySafe: boolean,
+): void {
+	process.stdout.write(
+		`${JSON.stringify({
+			status: "error",
+			run_id: randomUUID(),
+			action,
+			side_effects: "none",
+			error: {
+				category,
+				changed_state: "none",
+				retry_safe: retrySafe,
+				next_action: nextAction,
+			},
+		})}\n`,
+	)
+	process.exitCode = exitCode
+}
+
+function openDatabase(databasePath: string | undefined): Database | undefined {
+	try {
+		if (!databasePath) throw new Error("Codex state database unavailable")
+		return new Database(databasePath, { readonly: true })
+	} catch {
+		return undefined
+	}
+}
+
+function readSessions(
+	database: Database,
+	limit: number,
+	archivedOnly: boolean,
+): SessionMetadata[] {
+	const columns = new Set(
+		database
+			.query<{ name: string }, []>("PRAGMA table_info(threads)")
+			.all()
+			.map((column) => column.name),
+	)
+	const updatedExpression = columns.has("recency_at_ms")
+		? "recency_at_ms"
+		: columns.has("updated_at_ms")
+			? "updated_at_ms"
+			: "updated_at * 1000"
+	const pinnedExpression = columns.has("is_pinned") ? "is_pinned" : "0"
+	const archivePredicate = archivedOnly ? "AND archived = 1" : ""
+	const rows = database
+		.query<SessionRow, [number]>(`
+		SELECT
+			id,
+			${updatedExpression} AS updated_at_ms,
+			archived AS archived_value,
+			thread_source,
+			cwd,
+			title,
+			preview,
+			${pinnedExpression} AS pinned_value
+		FROM threads
+		WHERE source IN ('vscode', 'cli')
+			AND preview <> ''
+			${archivePredicate}
+		ORDER BY updated_at_ms DESC, id DESC
+		LIMIT ?
+	`)
+		.all(limit)
+	return rows.map((row) => ({
+		id: row.id,
+		updated_at_ms: row.updated_at_ms,
+		archived: row.archived_value === 1,
+		source: "codex",
+		thread_source: row.thread_source,
+		cwd: row.cwd,
+		title: displayText(row.title, 120),
+		summary: displayText(row.preview, 500),
+		pinned: row.pinned_value === 1,
+	}))
+}
+
+function readSnapshot(statePath: string): SessionSnapshot | undefined {
+	try {
+		const snapshot = JSON.parse(readFileSync(statePath, "utf8"))
+		if (
+			snapshot.schema_version !== 1 ||
+			typeof snapshot.generated_at !== "string" ||
+			!Number.isFinite(new Date(snapshot.generated_at).getTime()) ||
+			!Array.isArray(snapshot.sessions)
+		) {
+			return undefined
+		}
+		return snapshot as SessionSnapshot
+	} catch {
+		return undefined
+	}
+}
+
+function writeSnapshot(statePath: string, snapshot: SessionSnapshot): void {
+	const stateDirectory = dirname(statePath)
+	mkdirSync(stateDirectory, { recursive: true, mode: 0o700 })
+	chmodSync(stateDirectory, 0o700)
+	const temporaryPath = `${statePath}.${process.pid}.tmp`
+	writeFileSync(temporaryPath, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 })
+	renameSync(temporaryPath, statePath)
+	chmodSync(statePath, 0o600)
 }
 
 function main(arguments_: string[]): void {
@@ -82,9 +248,7 @@ function main(arguments_: string[]): void {
 		return
 	}
 
-	const command = arguments_[0]
-	const databasePath =
-		valueAfter(arguments_, "--database") ?? defaultDatabasePath()
+	const command = arguments_[0] ?? "unknown"
 	const limit = Number(valueAfter(arguments_, "--limit") ?? "30")
 	if (
 		!argumentsAreValid(arguments_) ||
@@ -92,122 +256,145 @@ function main(arguments_: string[]): void {
 		limit < 1 ||
 		limit > 200
 	) {
-		process.stdout.write(
-			`${JSON.stringify({
-				status: "error",
-				run_id: randomUUID(),
-				action: command ?? "unknown",
-				side_effects: "none",
-				error: {
-					category: "invalid_usage",
-					changed_state: "none",
-					retry_safe: true,
-					next_action:
-						"Run archived --json with an integer --limit between 1 and 200.",
-				},
-			})}\n`,
+		envelopeError(
+			command,
+			"invalid_usage",
+			command === "archived"
+				? "Run archived --json with an integer --limit between 1 and 200."
+				: "Run --help, then use the documented command with --json and a limit between 1 and 200.",
+			2,
+			true,
 		)
-		process.exitCode = 2
 		return
 	}
 
-	let database: Database
-	try {
-		if (!databasePath) throw new Error("Codex state database unavailable")
-		database = new Database(databasePath, { readonly: true })
-	} catch {
+	const statePath = valueAfter(arguments_, "--state") ?? defaultStatePath()
+	if (command === "search") {
+		const snapshot = readSnapshot(statePath)
+		if (!snapshot) {
+			envelopeError(
+				command,
+				"snapshot_unavailable",
+				"Run snapshot --json to create a private local index, then retry the search.",
+				3,
+				true,
+			)
+			return
+		}
+		const query = valueAfter(arguments_, "--query") ?? ""
+		const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+		const sessions = snapshot.sessions
+			.filter((session) => {
+				const haystack = [
+					session.id,
+					session.title,
+					session.summary,
+					session.cwd,
+					session.thread_source ?? "",
+				]
+					.join(" ")
+					.toLocaleLowerCase()
+				return terms.every((term) => haystack.includes(term))
+			})
+			.slice(0, limit)
+			.map((session) => ({
+				...session,
+				summary: displayText(session.summary, 140),
+			}))
+		const snapshotAgeMs = Math.max(
+			0,
+			Date.now() - new Date(snapshot.generated_at).getTime(),
+		)
 		process.stdout.write(
 			`${JSON.stringify({
-				status: "error",
+				status: "ok",
 				run_id: randomUUID(),
-				action: "archived",
+				action: command,
 				side_effects: "none",
-				error: {
-					category: "source_unavailable",
-					changed_state: "none",
-					retry_safe: true,
-					next_action:
-						"Start Codex Desktop once so its local session index exists, then retry.",
+				data: {
+					query,
+					snapshot_generated_at: snapshot.generated_at,
+					snapshot_age_ms: snapshotAgeMs,
+					stale: snapshotAgeMs > 24 * 60 * 60 * 1000,
+					sessions,
 				},
 			})}\n`,
 		)
-		process.exitCode = 3
 		return
 	}
-	let rows: ArchivedThreadRow[]
-	try {
-		const columns = new Set(
-			database
-				.query<{ name: string }, []>("PRAGMA table_info(threads)")
-				.all()
-				.map((column) => column.name),
+
+	const databasePath = valueAfter(arguments_, "--database") ?? defaultDatabasePath()
+	const database = openDatabase(databasePath)
+	if (!database) {
+		envelopeError(
+			command,
+			"source_unavailable",
+			"Start Codex Desktop once so its local session index exists, then retry.",
+			3,
+			true,
 		)
-		const updatedExpression = columns.has("recency_at_ms")
-			? "recency_at_ms"
-			: columns.has("updated_at_ms")
-				? "updated_at_ms"
-				: "updated_at * 1000"
-		const pinnedExpression = columns.has("is_pinned") ? "is_pinned" : "0"
-		rows = database
-			.query<ArchivedThreadRow, [number]>(`
-			SELECT
-				id,
-				${updatedExpression} AS updated_at_ms,
-				thread_source,
-				cwd,
-				title,
-				preview,
-				${pinnedExpression} AS pinned_value
-			FROM threads
-			WHERE archived = 1
-				AND source IN ('vscode', 'cli')
-				AND preview <> ''
-			ORDER BY updated_at_ms DESC, id DESC
-			LIMIT ?
-		`)
-			.all(limit)
+		return
+	}
+
+	let sessions: SessionMetadata[]
+	try {
+		sessions = readSessions(database, limit, command === "archived")
 	} catch {
 		database.close()
-		process.stdout.write(
-			`${JSON.stringify({
-				status: "error",
-				run_id: randomUUID(),
-				action: "archived",
-				side_effects: "none",
-				error: {
-					category: "source_incompatible",
-					changed_state: "none",
-					retry_safe: false,
-					next_action:
-						"Update Codex Desktop or the session-picker archived adapter, then retry.",
-				},
-			})}\n`,
+		envelopeError(
+			command,
+			"source_incompatible",
+			"Update Codex Desktop or the session-picker adapter, then retry.",
+			4,
+			false,
 		)
-		process.exitCode = 4
 		return
 	}
 	database.close()
+
+	if (command === "snapshot") {
+		const existed = existsSync(statePath)
+		const snapshot: SessionSnapshot = {
+			schema_version: 1,
+			generated_at: new Date().toISOString(),
+			sessions,
+		}
+		try {
+			writeSnapshot(statePath, snapshot)
+		} catch {
+			envelopeError(
+				command,
+				"snapshot_write_failed",
+				"Check that the private state directory is writable, then retry.",
+				5,
+				true,
+			)
+			return
+		}
+		process.stdout.write(
+			`${JSON.stringify({
+				status: "ok",
+				run_id: randomUUID(),
+				action: command,
+				side_effects: "local_private_state",
+				data: {
+					changed_state: existed ? "updated" : "created",
+					state_path: statePath,
+					generated_at: snapshot.generated_at,
+					session_count: sessions.length,
+				},
+			})}\n`,
+		)
+		return
+	}
 
 	process.stdout.write(
 		`${JSON.stringify({
 			status: "ok",
 			run_id: randomUUID(),
-			action: "archived",
+			action: command,
 			side_effects: "none",
-			data: {
-				source_availability: "ready",
-				sessions: rows.map((row) => ({
-					id: row.id,
-					updated_at_ms: row.updated_at_ms,
-					archived: true,
-					source: "codex",
-					thread_source: row.thread_source,
-					cwd: row.cwd,
-					title: displayText(row.title, 120),
-					summary: displayText(row.preview, 500),
-					pinned: row.pinned_value === 1,
-				})),
-			},
+			data: { source_availability: "ready", sessions },
 		})}\n`,
 	)
 }

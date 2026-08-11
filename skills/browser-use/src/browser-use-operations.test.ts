@@ -86,6 +86,7 @@ function operationRuntime(input: {
 	env?: Record<string, string | undefined>;
 	operationResult?: McporterCommandResult;
 	nativeResults?: McporterCommandResult[];
+	releaseResults?: McporterCommandResult[];
 	now?: () => number;
 } = {}): {
 	runtime: BrowserUseRuntime;
@@ -95,6 +96,7 @@ function operationRuntime(input: {
 	const calls: McporterCommandInput[] = [];
 	const ensuredDirectories: string[] = [];
 	const nativeResults = [...(input.nativeResults ?? [])];
+	const releaseResults = [...(input.releaseResults ?? [])];
 	const files: Record<string, string> = {
 		"/h.json":
 			input.adapter === "agent-browser"
@@ -120,6 +122,17 @@ function operationRuntime(input: {
 		runCommand: async (call) => {
 			calls.push(call);
 			const vector = commandVector(call);
+			if (call.args.includes("close")) {
+				return (
+					releaseResults.shift() ??
+					okCommand(JSON.stringify({ success: true }))
+				);
+			}
+			if (call.args[0] === "session") {
+				return okCommand(
+					JSON.stringify({ success: true, data: { sessions: [] } }),
+				);
+			}
 			if (vector.includes("tab") && vector.includes("list")) {
 				return okCommand(
 					JSON.stringify({
@@ -484,6 +497,91 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
+	test("agent-browser releases its owned session after a successful operation", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
+		});
+
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		const closeCalls = calls.filter((call) => call.args.includes("close"));
+
+		expect(result.exitCode).toBe(0);
+		// Discovery owns the first release; the operation lane owns the second.
+		expect(closeCalls).toHaveLength(2);
+		const operationCloseCall = closeCalls[1];
+		if (!operationCloseCall) throw new Error("missing operation release call");
+		expect(commandVector(operationCloseCall)).toEqual([
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+			"--session",
+			`browser-use-${FIXTURE_RUN_ID}`,
+			"close",
+			"--json",
+		]);
+		expect(commandVector(operationCloseCall)).not.toContain("--cdp");
+	});
+
+	test("agent-browser releases its owned session after a typed operation failure", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			nativeResults: [
+				okCommand(
+					JSON.stringify({ success: false, error: "tab t1 unavailable" }),
+				),
+			],
+		});
+
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		const closeCalls = calls.filter((call) => call.args.includes("close"));
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_transport_failed",
+		});
+		// Discovery owns the first release; the failed operation owns the second.
+		expect(closeCalls).toHaveLength(2);
+		const operationCloseCall = closeCalls[1];
+		if (!operationCloseCall) throw new Error("missing operation release call");
+		expect(commandVector(operationCloseCall)).not.toContain("--cdp");
+	});
+
+	test("keeps successful operation truth when terminal release fails", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
+			releaseResults: [
+				okCommand(JSON.stringify({ success: true })),
+				{ exitCode: 7, stdout: "", stderr: "close failed", timedOut: false },
+			],
+		});
+
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			snapshot: { text: "Root\nButton" },
+			release: { released: false, cause: "command-failed" },
+		});
+	});
+
 	test("a discovered agent-browser t1 tab survives target resolution and executes", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
@@ -523,7 +621,13 @@ describe("U7 operation success and transport", () => {
 			// --bring-to-front.
 			side_effects: { focus: true },
 		});
-		expect(calls.slice(1).map(commandVector)).toEqual([
+		const operationCalls = calls.filter(
+			(call) =>
+				call.args.includes("--cdp") &&
+				!call.args.includes("list") &&
+				!call.args.includes("close"),
+		);
+		expect(operationCalls.map(commandVector)).toEqual([
 			[
 				FIXTURE_ENVELOPE.data.attachment.probe_executable,
 				"--cdp",
@@ -544,8 +648,8 @@ describe("U7 operation success and transport", () => {
 				"--json",
 			],
 		]);
-		expect(calls[1].timeoutMs).toBe(30_000);
-		expect(calls[2].timeoutMs).toBe(30_000);
+		expect(operationCalls[0]?.timeoutMs).toBe(30_000);
+		expect(operationCalls[1]?.timeoutMs).toBe(30_000);
 		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 	});
@@ -583,7 +687,9 @@ describe("U7 operation success and transport", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "browser_operation_transport_failed",
 		});
-		expect(calls).toHaveLength(1);
+		// Discovery lists, closes, and verifies; the unsafe ref prevents any
+		// operation spawn after that terminal discovery seam.
+		expect(calls).toHaveLength(3);
 		expect(result.stdout).not.toContain("bad tab");
 		expect(result.stderr).not.toContain("bad tab");
 	});
@@ -608,7 +714,9 @@ describe("U7 operation success and transport", () => {
 					? "browser_operation_transport_timeout"
 					: "browser_operation_transport_failed",
 			});
-			expect(calls).toHaveLength(2);
+			// Discovery list + release verification, failed activation, then the
+			// operation lane's terminal release verification.
+			expect(calls).toHaveLength(6);
 			expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 			expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 		}
@@ -659,8 +767,8 @@ describe("U7 operation success and transport", () => {
 				code: "browser_operation_transport_failed",
 				...(message ? { message } : {}),
 			});
-			// Discovery + activation + snapshot: the snapshot spawn happened.
-			expect(calls).toHaveLength(3);
+			// Discovery list + release, activation + snapshot, then operation release.
+			expect(calls).toHaveLength(7);
 			// Activation succeeded, so the failure envelope truthfully reports the
 			// window-focus side effect.
 			expect(json.data).toMatchObject({ side_effects: { focus: true } });
@@ -710,8 +818,9 @@ describe("U7 operation success and transport", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "browser_operation_dependency_missing",
 		});
-		// Discovery plus the one activation spawn that threw.
-		expect(calls).toHaveLength(2);
+		// Both terminal seams attempt release even when the fake throws: discovery
+		// list + release, then activation + operation release.
+		expect(calls).toHaveLength(4);
 		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 	});
 

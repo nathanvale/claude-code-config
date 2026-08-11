@@ -8,6 +8,7 @@
 // the dormant model re-imports the aliases from here (one-way dormant->live).
 // ---------------------------------------------------------------------------
 
+import type { AdapterSessionReleaseDebt } from "@side-quest/browser-connect/adapters";
 import { BROWSER_USE_ADAPTER_LANE_IDS } from "./browser-use-adapter-model";
 import type { BrowserAdapterRouterCapability } from "./command-contract";
 
@@ -98,4 +99,5 @@ export type TargetDiscoveryEnvelope = {
 	binding: TargetDiscoveryBinding;
 	candidate_count: number;
 	candidates: readonly BrowserTargetCandidate[];
+	release?: AdapterSessionReleaseDebt;
 };

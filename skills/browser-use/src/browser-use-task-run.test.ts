@@ -484,11 +484,26 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"@e1",
 			"--json",
 		]);
-		expect(calls.at(-1)?.slice(-4)).toEqual([
+		expect(calls.at(-3)?.slice(-4)).toEqual([
 			"is",
 			"visible",
 			"[data-persisted='true']",
 			"--json",
+		]);
+		expect(calls.slice(-2)).toEqual([
+			[
+				"/opt/browser-connect/agent-browser",
+				"--session",
+				"browser-use-run-task-run-1",
+				"close",
+				"--json",
+			],
+			[
+				"/opt/browser-connect/agent-browser",
+				"session",
+				"list",
+				"--json",
+			],
 		]);
 	});
 

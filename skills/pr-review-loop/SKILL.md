@@ -20,7 +20,7 @@ Classify from args and **stop at the first matching row**. Do NOT launch a workf
 | Package name or path supplied | Launch with `pkg` override |
 | `baseRef` / branch name supplied | Launch with `baseRef` override |
 | `resume` / run ID supplied | Resume paused run via `resumeFromRunId` |
-| Findings at `0 blocking, 0 major` | Hand off to `/bb-pr` |
+| Findings at `0 blocking, 0 major` | Hand off to `/bitbucket` |
 
 ### Pre-launch DX menu
 
@@ -117,4 +117,4 @@ When generating scripts, preserve these tiers from the template. Custom lenses i
 - Missing `runId`? Stamp the current time manually (e.g. `"2026-06-18T2100"`) — do not use `Date.now()`.
 - Custom lenses? Supply as a JS array of `{ key, label, prompt }` objects.
 - Run paused? Use `resumeFromRunId` — completed agents return cached results instantly.
-- Findings at `0 blocking, 0 major`? Hand off to `/bb-pr` to create the PR.
+- Findings at `0 blocking, 0 major`? Hand off to `/bitbucket` to create the PR.
