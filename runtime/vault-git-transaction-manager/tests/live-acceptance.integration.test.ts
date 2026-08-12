@@ -121,6 +121,320 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		}
 	});
 
+	test("public complete durably admits one inspectable worker before returning", async () => {
+		const fixture = await createFixture({
+			blockingCheck: true,
+			privateLaunchTimeoutMs: 3_000,
+		});
+		const transactionId = await fixture.begin("notes/event.md");
+		await writeFile(join(fixture.clone, "notes/event.md"), "background event\n");
+
+		const startedAt = performance.now();
+		const foregroundPromise = fixture.run([
+			"complete",
+			"--transaction-id",
+			transactionId,
+			"--summary",
+			"docs(vault): record background event",
+			"--json",
+		]);
+		let foreground: CliProcessResult | null = null;
+		let foregroundElapsedMs = 0;
+		let foregroundEnvelope: {
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				schema_version?: string;
+				outcome?: string;
+				phase?: string;
+				transaction_id?: string;
+				task_id?: string;
+			};
+		} | null = null;
+		let taskStatusAtReturn: CliProcessResult | null = null;
+		let taskStatusAfterDeadline: CliProcessResult | null = null;
+		try {
+			await waitForFile(fixture.checkMarker, 10_000);
+			foreground = await Promise.race([
+				foregroundPromise,
+				Bun.sleep(2_000).then(() => null),
+			]);
+			foregroundElapsedMs = performance.now() - startedAt;
+			foregroundEnvelope = foreground
+				? parseCliProcessJson<{
+					status?: string;
+					error?: { code?: string };
+					data?: {
+						contract_id?: string;
+						schema_version?: string;
+						outcome?: string;
+						phase?: string;
+						transaction_id?: string;
+						task_id?: string;
+					};
+				}>(foreground)
+				: null;
+			taskStatusAtReturn = await fixture.run([
+				"status",
+				"--task-id",
+				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				"--json",
+			]);
+			// Cross the production launcher's scaled whole-child deadline after the
+			// checker proves the worker is alive.
+			await Bun.sleep(3_250);
+			taskStatusAfterDeadline = await fixture.run([
+				"status",
+				"--task-id",
+				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				"--json",
+			]);
+		} finally {
+			await fixture.releaseCheck();
+		}
+		if (!taskStatusAtReturn || !taskStatusAfterDeadline) {
+			throw new Error("task status process did not run");
+		}
+		const taskId = foregroundEnvelope?.data?.task_id;
+		const taskStatusAtReturnEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				schema_version?: string;
+				transaction_id?: string;
+				task_id?: string;
+				task_state?: string;
+				foreground_non_vault_work_allowed?: boolean;
+			};
+		}>(taskStatusAtReturn);
+		const taskStatusAfterDeadlineEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				transaction_id?: string;
+				task_id?: string;
+				task_state?: string;
+				foreground_non_vault_work_allowed?: boolean;
+			};
+		}>(taskStatusAfterDeadline);
+		const publicTaskSurfaces = [
+			foreground?.stdout ?? "",
+			taskStatusAtReturn.stdout,
+			taskStatusAfterDeadline.stdout,
+		].join("\n");
+
+		// Settle the current synchronous implementation before fixture cleanup.
+		// V2 will have returned this accepted foreground response already.
+		const settledForeground = await foregroundPromise;
+		const settledForegroundEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+		}>(settledForeground);
+
+		expect({
+			foregroundElapsedUnderTwoSeconds: foregroundElapsedMs < 2_000,
+			foregroundStatus: foregroundEnvelope?.status,
+			foregroundError: foregroundEnvelope?.error?.code,
+			foregroundData: foregroundEnvelope?.data,
+			settledForegroundError: settledForegroundEnvelope.error?.code,
+			taskIdIsOpaque:
+				typeof taskId === "string" &&
+				taskId.length > 0 &&
+				taskId !== transactionId,
+			statusAtReturnExitCode: taskStatusAtReturn.exitCode,
+			statusAtReturnError: taskStatusAtReturnEnvelope.error?.code,
+			statusAtReturnData: taskStatusAtReturnEnvelope.data,
+			statusAfterDeadlineExitCode: taskStatusAfterDeadline.exitCode,
+			statusAfterDeadlineError: taskStatusAfterDeadlineEnvelope.error?.code,
+			statusAfterDeadlineData: taskStatusAfterDeadlineEnvelope.data,
+			leaksPrivateStateRoot: publicTaskSurfaces.includes(fixture.stateRoot),
+			leaksRepositoryPath: publicTaskSurfaces.includes(fixture.clone),
+			leaksRawGitCommand:
+				publicTaskSurfaces.includes("git push") ||
+				publicTaskSurfaces.includes("git commit-tree"),
+			leaksAuthBearingUrl: /https?:\/\/[^/\s:@]+:[^/\s@]+@/.test(
+				publicTaskSurfaces,
+			),
+		}).toMatchObject({
+			foregroundElapsedUnderTwoSeconds: true,
+			foregroundStatus: "ok",
+			foregroundError: undefined,
+			foregroundData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+			},
+			settledForegroundError: undefined,
+			taskIdIsOpaque: true,
+			statusAtReturnExitCode: 0,
+			statusAtReturnError: undefined,
+			statusAtReturnData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+			},
+			statusAfterDeadlineExitCode: 0,
+			statusAfterDeadlineError: undefined,
+			statusAfterDeadlineData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+			},
+			leaksPrivateStateRoot: false,
+			leaksRepositoryPath: false,
+			leaksRawGitCommand: false,
+			leaksAuthBearingUrl: false,
+		});
+	});
+
+	test(
+		"twenty identical public completions join one task and changed input refuses",
+		async () => {
+			const fixture = await createFixture({
+				blockingCheck: true,
+			});
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(join(fixture.clone, "notes/event.md"), "single-flight event\n");
+			const exactArgs = [
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): record single-flight event",
+				"--json",
+			] as const;
+
+			const firstCall = fixture.run(exactArgs);
+			try {
+				await waitForFile(fixture.checkMarker, 10_000);
+			} catch (error) {
+				await fixture.releaseCheck();
+				throw error;
+			}
+			const joiningCalls = Array.from({ length: 19 }, () => fixture.run(exactArgs));
+			const changedCall = fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): changed task fingerprint",
+				"--json",
+			]);
+			const foreground = await Promise.race([
+				Promise.all([firstCall, ...joiningCalls, changedCall]),
+				Bun.sleep(5_000).then(() => null),
+			]);
+			await fixture.releaseCheck();
+			const settled = await Promise.all([firstCall, ...joiningCalls, changedCall]);
+			const envelopes = settled.map((result) =>
+				parseCliProcessJson<{
+					status?: string;
+					error?: { code?: string };
+					data?: {
+						outcome?: string;
+						transaction_id?: string;
+						task_id?: string;
+						task_state?: string;
+					};
+				}>(result),
+			);
+			const identical = envelopes.slice(0, 20);
+			const changed = envelopes[20];
+			const taskIds = identical.map((envelope) => envelope.data?.task_id);
+			const workerExecutions = (await readFile(fixture.checkLog, "utf8").catch(
+				() => "",
+			))
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				allCallersSettledBeforeWorkerClosure: foreground !== null,
+				identicalStatuses: new Set(identical.map((envelope) => envelope.status)),
+				identicalTaskIds: new Set(taskIds),
+				taskIdIsOpaque:
+					typeof taskIds[0] === "string" &&
+					taskIds[0].length > 0 &&
+					taskIds[0] !== transactionId,
+				identicalTransactionIds: new Set(
+					identical.map((envelope) => envelope.data?.transaction_id),
+				),
+				workerExecutions,
+				changedStatus: changed?.status,
+				changedErrorIsTaskSpecific:
+					changed?.error?.code !== undefined &&
+					changed.error.code !== "remote_unavailable",
+				changedOutcome: changed?.data?.outcome,
+				changedTaskId: changed?.data?.task_id,
+			}).toEqual({
+				allCallersSettledBeforeWorkerClosure: true,
+				identicalStatuses: new Set(["ok"]),
+				identicalTaskIds: new Set([taskIds[0]]),
+				taskIdIsOpaque: true,
+				identicalTransactionIds: new Set([transactionId]),
+				workerExecutions: 1,
+				changedStatus: "error",
+				changedErrorIsTaskSpecific: true,
+				changedOutcome: "refused",
+				changedTaskId: undefined,
+			});
+		},
+		60_000,
+	);
+
+	test("malformed worker acknowledgement fails closed without claiming a remote outage", async () => {
+		const fixture = await createFixture({ privateChildMode: "malformed_ack" });
+		const transactionId = await fixture.begin("notes/event.md");
+		await writeFile(join(fixture.clone, "notes/event.md"), "malformed ack event\n");
+
+		const refused = await fixture.run([
+			"complete",
+			"--transaction-id",
+			transactionId,
+			"--summary",
+			"docs(vault): record malformed acknowledgement",
+			"--json",
+		]);
+		const envelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				outcome?: string;
+				transaction_id?: string;
+				task_state?: string;
+				changed_state?: string;
+				next_action?: { id?: string };
+			};
+		}>(refused);
+
+		expect({
+			exitCode: refused.exitCode,
+			status: envelope.status,
+			errorIsLaunchSpecific:
+				envelope.error?.code !== undefined &&
+				envelope.error.code !== "remote_unavailable",
+			changedStateIsKnown: envelope.data?.changed_state !== "partial",
+			data: envelope.data,
+		}).toMatchObject({
+			exitCode: 1,
+			status: "error",
+			errorIsLaunchSpecific: true,
+			changedStateIsKnown: true,
+			data: {
+				outcome: "refused",
+				transaction_id: transactionId,
+				task_state: "repair_needed",
+				next_action: { id: "run_doctor" },
+			},
+		});
+	});
+
 	test(
 		"two clones admit exactly one writer and fence the stale generation",
 		async () => {
@@ -492,12 +806,15 @@ interface Fixture {
 	readonly clone: string;
 	readonly stateRoot: string;
 	readonly env: NodeJS.ProcessEnv;
+	readonly checkMarker: string;
+	readonly checkLog: string;
 	readonly shimMarker: string;
 	readonly shimLog: string;
 	run(args: readonly string[]): Promise<CliProcessResult>;
 	begin(path: string): Promise<string>;
 	owner(args: readonly string[]): Promise<CliProcessResult>;
 	interruptComplete(transactionId: string): Promise<void>;
+	releaseCheck(): Promise<void>;
 	git(...args: string[]): string;
 	gitBare(...args: string[]): string;
 	remoteRefs(): string;
@@ -508,6 +825,8 @@ async function createFixture(
 	options: {
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
+		readonly privateLaunchTimeoutMs?: number;
+		readonly privateChildMode?: "malformed_ack";
 		readonly profile?: string;
 		readonly shimMode?: string;
 	} = {},
@@ -532,6 +851,8 @@ async function createCloneFixture(
 	options: {
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
+		readonly privateLaunchTimeoutMs?: number;
+		readonly privateChildMode?: "malformed_ack";
 		readonly profile?: string;
 		readonly shimMode?: string;
 	},
@@ -542,6 +863,7 @@ async function createCloneFixture(
 	const shimMarker = join(root, `${name}-shim-marker`);
 	const shimLog = join(root, `${name}-shim-log`);
 	const checkMarker = join(root, `${name}-check-marker`);
+	const checkLog = join(root, `${name}-check-log`);
 	git(root, "clone", bare, clone);
 	git(clone, "config", "user.name", "Vault Acceptance Test");
 	git(clone, "config", "user.email", "vault-acceptance@example.invalid");
@@ -564,9 +886,11 @@ async function createCloneFixture(
 		await writeFile(
 			join(clone, "vault-check.ts"),
 			[
+				'import { appendFile, writeFile } from "node:fs/promises";',
 				'import { existsSync } from "node:fs";',
-				'import { writeFile } from "node:fs/promises";',
 				"const marker = process.env.VAULT_GIT_CHECK_MARKER;",
+				"const log = process.env.VAULT_GIT_CHECK_LOG;",
+				'if (log) await appendFile(log, "worker\\n");',
 				'if (marker) { await writeFile(marker, "checking\\n"); while (!existsSync([marker, ".release"].join(""))) await Bun.sleep(10); }',
 			].join("\n"),
 		);
@@ -612,8 +936,19 @@ async function createCloneFixture(
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
 		VAULT_GIT_SHIM_LOG: shimLog,
+		VAULT_GIT_CHECK_LOG: checkLog,
 		...(options.shimMode ? { VAULT_GIT_SHIM_MODE: options.shimMode } : {}),
 		...(options.blockingCheck ? { VAULT_GIT_CHECK_MARKER: checkMarker } : {}),
+		...(options.privateLaunchTimeoutMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_PRIVATE_LAUNCH_TIMEOUT_MS: String(
+						options.privateLaunchTimeoutMs,
+					),
+				}),
+		...(options.privateChildMode === undefined
+			? {}
+			: { VAULT_GIT_TEST_PRIVATE_CHILD_MODE: options.privateChildMode }),
 	};
 	const repositoryIdentity = (
 		await resolveVaultRepositoryIdentity({
@@ -698,12 +1033,15 @@ async function createCloneFixture(
 		clone,
 		stateRoot,
 		env,
+		checkMarker,
+		checkLog,
 		shimMarker,
 		shimLog,
 		run,
 		begin,
 		owner,
 		interruptComplete,
+		releaseCheck: () => writeFile(`${checkMarker}.release`, "release\n"),
 		git: (...args) => git(clone, ...args),
 		gitBare: (...args) => git(bare, ...args),
 		remoteRefs: () => remoteRefs(bare),

@@ -24,6 +24,32 @@ const required = (name: string): string => {
 	return value;
 };
 
+// Production owns one fixed 30-second private-launch deadline today. Scale
+// exact 30-second timers in this fixture; the checker barrier stops before any
+// remote stage, so only the private launcher reaches that deadline in this row.
+const privateLaunchTimeoutMs = Number(
+	process.env.VAULT_GIT_TEST_PRIVATE_LAUNCH_TIMEOUT_MS,
+);
+if (Number.isFinite(privateLaunchTimeoutMs) && privateLaunchTimeoutMs > 0) {
+	const originalSetTimeout = globalThis.setTimeout;
+	globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+		const [callback, delay, ...callbackArgs] = args;
+		return originalSetTimeout(
+			callback,
+			delay === 30_000 ? privateLaunchTimeoutMs : delay,
+			...callbackArgs,
+		);
+	}) as typeof globalThis.setTimeout;
+}
+
+if (
+	Bun.argv.includes("--capability-fd") &&
+	process.env.VAULT_GIT_TEST_PRIVATE_CHILD_MODE === "malformed_ack"
+) {
+	process.stdout.write("{malformed-worker-ack");
+	process.exit(0);
+}
+
 const repositoryPath = required("VAULT_GIT_REPOSITORY_PATH");
 // Resolve the git identity once and inject it into both compositions; each
 // composition otherwise re-probes git for the same root, doubling subprocess
