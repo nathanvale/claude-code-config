@@ -642,6 +642,45 @@ implementation_attempt_checkpoint:
   timestamp: "2026-08-12T23:08:27+10:00"
 ```
 
+- 2026-08-12T23:25:04+10:00: U2 Validator wave completed for
+  `2104894cabb436a3c3660af7b9ae03c860acb32d`. Local testing and
+  correctness review reproduced a paired-receipt concern; independent
+  validation rejected it because `claimReceiptId` is the trusted stable
+  receipt-slot selector while `receiptId` is the bound fingerprint. Changing
+  both selects another receipt aggregate rather than bypassing the same claim.
+  Independent validation also rejected the legacy-unbound-claim concern as a
+  U2 blocker: U1 task claims are not production-created at this head and the
+  bound path fails closed. Project-standards review returned clean. The
+  independent Anthropic pass found no additional U2 blocker; its launch-before-
+  acknowledgement crash window and process-boundary proof remain assigned to
+  later worker/recovery batches. Cross-model receipt: route `claude`; requested
+  Opus/high; actual `claude-opus-5`; effort actual unverified; receipt
+  supported; independence verified. No open U2 finding remains. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260812-231156-ddd49933/`.
+
+<!-- validator-wave-completed -->
+```yaml
+validator_wave_completed:
+  batch_id: "single-flight-join-refusal"
+  implementation_commit: "2104894cabb436a3c3660af7b9ae03c860acb32d"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+    - "independent-finding-validator"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "single-flight-join-refusal@2104894cabb436a3c3660af7b9ae03c860acb32d"
+    cli_route_id: "packet.validator"
+  outcome: "clean"
+  findings: []
+```
+
 ## Workflow Learnings
 
 ```yaml
