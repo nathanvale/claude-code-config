@@ -95,6 +95,63 @@ describe("private task store", () => {
 		});
 	});
 
+	test("fails closed before join-path directory sync and retry converges on the original claim", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-join-sync-",
+		);
+		const receiptId = "receipt_55555555555555555555555555555555";
+		const input = {
+			receiptId,
+			recordedAt: "2026-08-12T12:32:00.000Z",
+		} as const;
+		const originalStore = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		});
+		const original = await originalStore.admit(input);
+		expect(original.status).toBe("created");
+
+		const calls: TaskDurabilityCall[] = [];
+		const interruptedJoiner = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+			durability: recordingTaskDurabilityPort(calls, 3),
+		});
+		let failure: unknown;
+		try {
+			await interruptedJoiner.admit(input);
+		} catch (error) {
+			failure = error;
+		}
+
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toBe(
+			"task claim durability unavailable",
+		);
+		expect((failure as Error).cause).toBeInstanceOf(Error);
+		expect(((failure as Error).cause as Error).message).toBe(
+			"crash before syncDirectory",
+		);
+		expect(calls).toEqual([
+			{ method: "writeTemp", target: "task_claim" },
+			{ method: "syncFile", target: "task_claim" },
+			{ method: "linkExclusive", target: "task_claim" },
+		]);
+		expect(await interruptedJoiner.load(receiptId)).toEqual({
+			status: "loaded",
+			state: original.state,
+		});
+
+		const retry = await createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		}).admit(input);
+		expect(retry).toEqual({ status: "existing", state: original.state });
+		expect(await readdir(originalStore.paths.claims)).toEqual([
+			`${receiptId}.json`,
+		]);
+	});
+
 	for (const [crashAt, method] of [
 		[0, "writeTemp"],
 		[1, "syncFile"],
