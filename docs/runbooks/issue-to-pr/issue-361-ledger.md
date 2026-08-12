@@ -366,13 +366,40 @@ batches:
 ## Findings data
 
 ```yaml
-findings: []
+findings:
+  - id: U1-001
+    batch_id: durable-task-admission
+    signature: durable-publish-failure-paths-unproved
+    persona: compound-engineering:ce-code-review
+    severity: P1
+    status: open
+    summary: "Durable publish failure paths lack injected ordering and interruption proof."
+    resolution: null
+  - id: U1-002
+    batch_id: durable-task-admission
+    signature: orphaned-task-claim-temporaries
+    persona: adversarial-claude
+    severity: P2
+    status: open
+    summary: "A process crash can strand task-claim temporary files without a hygiene owner."
+    resolution: null
+  - id: U1-003
+    batch_id: durable-task-admission
+    signature: corrupt-private-claims-unproved
+    persona: compound-engineering:ce-code-review
+    severity: P2
+    status: open
+    summary: "Corrupt and unsafe private claims lack fail-closed tests."
+    resolution: null
 ```
 
 ## Findings
 
 | id | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | open | Durable publish failure paths lack injected ordering and interruption proof. |  |
+| U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | open | A process crash can strand task-claim temporary files without a hygiene owner. |  |
+| U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | open | Corrupt and unsafe private claims lack fail-closed tests. |  |
 
 ## Notes
 
@@ -407,6 +434,35 @@ implementation_attempt_checkpoint:
   requires callable skill names. Awaiting Nathan's decision on the documented
   `/ce-code-review mode:report-only` fallback. No Validator packet was
   dispatched and no findings were inferred.
+
+- 2026-08-12T22:13:12+10:00: Nathan approved the documented
+  `ce-code-review` report-only fallback. The exact U1 commit received local
+  correctness, testing, maintainability, project-standards, reliability,
+  agent-native, and prior-learning lenses plus an independent Anthropic
+  adversarial pass. Cross-model receipt: requested Opus/high; actual
+  `claude-opus-5`; effort actual unverified; receipt supported; independence
+  verified. One independent finding-validation batch kept U1-001, U1-002,
+  and U1-003 and rejected four speculative candidates. U1-001 is an open P1
+  and routes to a Builder repair. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260812-220000-u1/`.
+
+validator_wave_completed:
+  batch_id: "durable-task-admission"
+  implementation_commit: "61d0e3e5249d9058d7ac00339550256a383f97e8"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+    - "independent-finding-validator"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "durable-task-admission@61d0e3e5249d9058d7ac00339550256a383f97e8"
+    cli_route_id: "packet.validator.fallback"
+  outcome: "findings-recorded"
+  findings:
+    - U1-001
+    - U1-002
+    - U1-003
 
 ## Workflow Learnings
 
