@@ -175,6 +175,7 @@ batches:
     status: in-progress
     builder_commits:
       - cc5f9195dcefe4676a43754ed3417290844beda2
+      - 252a4b515065e67b53fe61c07e0c1fd6e85dbece
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -192,8 +193,23 @@ batches:
           - "GREEN proved malformed or mismatched task and launch generations refuse before capability custody"
           - "109 focused fence tests and package TypeScript check passed"
         notes: "Builder added exact worker acknowledgement validation, inherited-FD capability custody, existing-engine delegation, and production executable-source identity."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 252a4b515065e67b53fe61c07e0c1fd6e85dbece
+        files_touched:
+          - "runtime/vault-git-transaction-manager/src/task-state.ts"
+          - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+          - "runtime/vault-git-transaction-manager/tests/task-worker.test.ts"
+        route_hint: "validator"
+        blockers: []
+        probe_results:
+          - "RED proved a replayed same-task same-generation acknowledgement lacked an explicit not-transitioned refusal"
+          - "GREEN proved only an exact transitioned outcome reaches capability custody and engine completion"
+          - "GREEN proved existing, stale, uncertain, malformed, and mismatched outcomes refuse before capability custody"
+          - "8 focused task-worker tests, package typecheck, and scoped Biome passed; broad package result remains unverified because its runner emitted no final summary"
+        notes: "Builder added an explicit durable acknowledgement CAS result contract and gated capability custody on a fresh transitioned outcome while preserving the existing engine as sole mutation owner."
     orchestrator_inline_attempts: []
-    iterations: 1
+    iterations: 2
     final_verdict: null
   - id: "task-selected-status"
     name: "Task-selected public status"
@@ -777,6 +793,26 @@ validator_wave_completed:
   outcome: "findings-recorded"
   findings:
     - U3-001
+```
+
+- 2026-08-13T05:22:05+10:00: U3 Builder repair for U3-001 returned valid,
+  reachable commit `252a4b515065e67b53fe61c07e0c1fd6e85dbece`. It touches only
+  `src/task-state.ts`, `src/task-worker.ts`, and `tests/task-worker.test.ts`
+  inside the confirmed U3 authority. RED proved the replayed same-generation
+  gap. GREEN proves that only a fresh exact `transitioned` durable-CAS result
+  reaches capability custody and the unchanged existing engine; existing,
+  stale, uncertain, malformed, and mismatched outcomes fail closed first.
+  Eight focused tests, package typecheck, and scoped Biome pass. The broad
+  package runner emitted no terminal summary, so broad proof remains
+  unverified pending the Validator wave.
+
+<!-- implementation-attempt-checkpoint -->
+```yaml
+implementation_attempt_checkpoint:
+  batch_id: "fenced-worker-composition"
+  implementation_commit: "252a4b515065e67b53fe61c07e0c1fd6e85dbece"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-13T05:22:05+10:00"
 ```
 
 ## Workflow Learnings
