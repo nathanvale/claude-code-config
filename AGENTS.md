@@ -73,7 +73,7 @@
 
 - Search with `rg`; edit manually with `apply_patch`; parallel independent reads/checks with `multi_tool_use.parallel`.
 - Research tools: use `$HOME/code/claude-code-config/context/search-tools.md`; Context7 for library/framework/API docs.
-- Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers, not ambient shell env; for auth checks never source `.env` or print key prefixes, check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
+- Claude/Codex MCP keys: use the provider-owned dotfiles wrapper, keychain, or scoped 1Password wrapper; never use `with-env` or ambient shell env. For auth checks, never source `.env` or print key prefixes; check wrapper presence, `op`/keychain readiness, and MCP config. If Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
 - Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
 - Homebrew additions/removals: edit `$HOME/code/dotfiles/config/brew/Brewfile` first; install with `brew bundle` and remove with previewed `brew bundle cleanup`; never run direct `brew install`, `brew uninstall`, or `brew tap`, because they create untracked machine drift; verify with `brew bundle check`. Homebrew 6.0+ refuses non-official taps until `brew trust <tap>` is run once for a newly added tap. Full workflow: `$HOME/code/dotfiles/AGENTS.md`.
 - Mac Mini server SSH (connect, flaky/dropped SSH, dedicated key, durable cmux/tmux): use the `mac-mini-ssh` skill.

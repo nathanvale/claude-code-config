@@ -34,7 +34,7 @@ Repo-owned research-tool contract for agents.
 - Check `codex mcp list` for configured server shape.
 - Check `codex doctor` for missing env vars or broken MCP config.
 - Check wrapper, keychain, and `op` readiness instead of inspecting secret values.
-- Use `$HOME/code/dotfiles/bin/with-env`, keychain wrappers, or 1Password-backed launchers for key-bearing MCPs.
+- Use provider-owned dotfiles wrappers, keychain wrappers, or scoped 1Password launchers for key-bearing MCPs. Never use `with-env`.
 - Never source `.env` or print key prefixes to prove auth.
 - Restart or reload the agent session after MCP config changes; existing sessions can hold stale tool metadata.
 
