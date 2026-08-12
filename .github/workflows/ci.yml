@@ -92,6 +92,11 @@ jobs:
       - name: Test (vault-git skill contract + instruction health)
         run: bash skills/test-runner/src/test-runner.sh run -- skills/vault-git/tests/ scripts/agent-instructions.test.ts
 
+      - name: Test (agent-native test-design qualification)
+        run: |
+          bun skills/test-design/evals/qualification.ts deterministic
+          bun skills/test-design/evals/qualification.ts verify
+
       - name: Typecheck Browser Use
         run: bun run --cwd skills/browser-use typecheck
 

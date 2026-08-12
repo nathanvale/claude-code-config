@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "generated_by": "skills/test-design/evals/qualification.ts",
+  "source_sha256": "9f69e54748b2e3e479531ff0d8e3c0911c88f197ce57b0c52e9657c30942750c",
+  "sources": [
+    "AGENTS.md",
+    ".github/workflows/ci.yml",
+    "scripts/agent-instructions.sh",
+    "scripts/agent-instructions.test.ts",
+    "scripts/hooks/pre-commit",
+    "scripts/multi-agent-smoke-lib.ts",
+    "scripts/multi-agent-smoke.test.ts",
+    "scripts/multi-agent-smoke.ts",
+    "skills/improve-test-architecture/SKILL.md",
+    "skills/improve-test-architecture/references/html-report.md",
+    "skills/test-design/SKILL.md",
+    "skills/test-design/evals/pairwise-scenarios.json",
+    "skills/test-design/evals/qualification.ts",
+    "skills/test-design/evals/smoke-definitions.ts",
+    "skills/test-design/references/browser-and-ui.md",
+    "skills/test-design/references/installation-host-hosted.md",
+    "skills/test-design/references/pattern-library.md",
+    "skills/test-design/references/process-and-cli.md",
+    "skills/test-design/references/runtime-ci-platform.md",
+    "skills/test-design/references/state-concurrency-recovery.md",
+    "skills/test-design/tests/skill-contract.test.ts"
+  ],
+  "results": {
+    "deterministic": true,
+    "pairwise_claude_two_consecutive": true,
+    "pairwise_codex_two_consecutive": true,
+    "mutation_claude": true,
+    "mutation_codex": true,
+    "run_only_claude": true,
+    "run_only_codex": true,
+    "missing_skill_claude": true,
+    "missing_skill_codex": true
+  }
+}
