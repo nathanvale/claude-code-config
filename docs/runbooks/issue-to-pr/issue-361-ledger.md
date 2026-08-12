@@ -5,14 +5,14 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/361"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-08-12-001-feat-vault-git-v2-background-worker-plan.md"
 started_at: "2026-08-12T18:35:16+10:00"
-status: "in-progress"
+status: "blocked"
 runbook_version: "3"
 ac_source: "drafted"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-08-12T18:35:16+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-08-12T21:07:42+10:00"
-blocked_reason: null
+blocked_reason: "builder-infrastructure-failure"
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
@@ -359,6 +359,16 @@ findings: []
 ## Notes
 
 <append-only log of decisions, blocker overrides, host/build failures, implementation checkpoints, Validator waves, findings checkpoints, reachable commit refs, and dirty/staged path summaries>
+
+- 2026-08-12T21:26:48+10:00: Builder infrastructure failure for `durable-task-admission`.
+  Builder returned unreachable `commit_sha`
+  `61d0e3e5e9b81a5e7ed5e4f139c6b748781a96e3`; actual clean reachable HEAD
+  is `61d0e3e5249d9058d7ac00339550256a383f97e8`. The reachable commit touches
+  exactly the six confirmed batch files. Focused verification: 31 tests and
+  129 assertions passed; package typecheck passed. Per the post-dispatch
+  malformed-envelope rule, no Builder attempt row, iteration increment, or
+  Validator dispatch was recorded. Resume requires Nathan to choose import,
+  retry, or abandon.
 
 ## Workflow Learnings
 
