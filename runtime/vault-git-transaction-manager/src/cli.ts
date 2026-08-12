@@ -196,6 +196,7 @@ const RESOLVED_DEPENDENCY_MANIFEST_FIELDS = [
 	"dependencies",
 	"devDependencies",
 	"optionalDependencies",
+	"peerDependencies",
 ] as const;
 const DEPENDENCY_FREE_LOCKFILE_ABSENCE_BINDING = Buffer.from(
 	"vault-git:dependency-free-lockfile-absence:v1",

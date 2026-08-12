@@ -209,6 +209,29 @@ describe("vault checker process boundary", () => {
 		});
 	}
 
+	test("refuses an unresolved peer dependency", async () => {
+		const root = await checkerFixture({
+			name: "unresolved-peer-checker",
+			private: true,
+			scripts: { check: "bun run scripts/check.ts" },
+			peerDependencies: { example: "1.0.0" },
+		});
+		await writeFile(
+			join(root, "bun.lock"),
+			JSON.stringify({
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { peerDependencies: { example: "1.0.0" } } },
+				packages: {},
+			}),
+		);
+		const checker = createVaultCheckerPort(root, unusedProcessPort());
+
+		await expect(checker.fingerprint()).rejects.toThrow(
+			"bun.lock dependency resolution is invalid",
+		);
+	});
+
 	test("accepts a lockfile with every declared dependency resolved", async () => {
 		const root = await checkerFixture({
 			name: "resolved-lockfile-checker",
