@@ -5,14 +5,14 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/361"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-08-12-001-feat-vault-git-v2-background-worker-plan.md"
 started_at: "2026-08-12T18:35:16+10:00"
-status: "blocked"
+status: "in-progress"
 runbook_version: "3"
 ac_source: "drafted"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-08-12T18:35:16+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-08-12T21:07:42+10:00"
-blocked_reason: "builder-infrastructure-failure"
+blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
@@ -63,10 +63,28 @@ batches:
       - 1
     rationale: null
     status: in-progress
-    builder_commits: []
-    builder_attempts: []
+    builder_commits:
+      - 61d0e3e5249d9058d7ac00339550256a383f97e8
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: 61d0e3e5249d9058d7ac00339550256a383f97e8
+        files_touched:
+          - "runtime/vault-git-transaction-manager/src/model.ts"
+          - "runtime/vault-git-transaction-manager/src/task-state.ts"
+          - "runtime/vault-git-transaction-manager/src/task-store.ts"
+          - "runtime/vault-git-transaction-manager/src/store.ts"
+          - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+          - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+        route_hint: "dispatch-validator-wave"
+        blockers: []
+        probe_results:
+          - "31 focused and regression tests passed with 129 assertions"
+          - "package typecheck passed"
+          - "reachable commit touches exactly the six confirmed batch files"
+        notes: "Nathan explicitly imported the verified reachable commit after the Builder returned a malformed unreachable SHA."
     orchestrator_inline_attempts: []
-    iterations: 0
+    iterations: 1
     final_verdict: null
   - id: "single-flight-join-refusal"
     name: "Single-flight join and refusal"
@@ -369,6 +387,16 @@ findings: []
   malformed-envelope rule, no Builder attempt row, iteration increment, or
   Validator dispatch was recorded. Resume requires Nathan to choose import,
   retry, or abandon.
+
+- 2026-08-12T21:30:17+10:00: Nathan selected `import`. Verified reachable
+  commit `61d0e3e5249d9058d7ac00339550256a383f97e8` became the canonical U1
+  implementation attempt. Cleared `builder-infrastructure-failure`.
+
+implementation_attempt_checkpoint:
+  batch_id: "durable-task-admission"
+  implementation_commit: "61d0e3e5249d9058d7ac00339550256a383f97e8"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-12T21:30:17+10:00"
 
 ## Workflow Learnings
 
