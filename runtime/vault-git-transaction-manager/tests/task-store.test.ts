@@ -2,6 +2,10 @@ import { readFile, readdir, stat } from "node:fs/promises";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import {
+	createNodeVaultGitDurabilityPort,
+	type VaultGitDurabilityPort,
+} from "../src/store.ts";
 import { createVaultGitTaskStore } from "../src/task-store.ts";
 import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
 
@@ -64,4 +68,135 @@ describe("private task store", () => {
 			state: admissions[0].state,
 		});
 	});
+
+	test("publishes one claim through the exact durable compare-and-set order", async () => {
+		const stateRoot = await temporaryDirectories.create("vault-git-task-order-");
+		const calls: TaskDurabilityCall[] = [];
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+			durability: recordingTaskDurabilityPort(calls),
+		});
+
+		const admitted = await store.admit({
+			receiptId: "receipt_33333333333333333333333333333333",
+			recordedAt: "2026-08-12T12:30:00.000Z",
+		});
+
+		expect(calls).toEqual([
+			{ method: "writeTemp", target: "task_claim" },
+			{ method: "syncFile", target: "task_claim" },
+			{ method: "linkExclusive", target: "task_claim" },
+			{ method: "syncDirectory", target: "task_claim" },
+		]);
+		expect(await store.load(admitted.state.receiptId)).toEqual({
+			status: "loaded",
+			state: admitted.state,
+		});
+	});
+
+	for (const [crashAt, method] of [
+		[0, "writeTemp"],
+		[1, "syncFile"],
+		[2, "linkExclusive"],
+		[3, "syncDirectory"],
+	] as const) {
+		test(`fails closed when ${method} cannot finish and preserves any published claim`, async () => {
+			const stateRoot = await temporaryDirectories.create(
+				`vault-git-task-${method}-`,
+			);
+			const calls: TaskDurabilityCall[] = [];
+			const receiptId = "receipt_44444444444444444444444444444444";
+			const store = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "vault@example",
+				durability: recordingTaskDurabilityPort(calls, crashAt),
+			});
+
+			await expect(
+				store.admit({
+					receiptId,
+					recordedAt: "2026-08-12T12:31:00.000Z",
+				}),
+			).rejects.toThrow("task claim durability unavailable");
+			expect(calls.map((call) => call.method)).toEqual(
+				taskClaimDurabilityOrder.slice(0, crashAt),
+			);
+
+			const probe = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "vault@example",
+			});
+			const loaded = await probe.load(receiptId);
+			if (method === "syncDirectory") {
+				expect(loaded).toMatchObject({
+					status: "loaded",
+					state: { receiptId, revision: 1, phase: "admitted" },
+				});
+				expect(await readdir(probe.paths.claims)).toEqual([
+					`${receiptId}.json`,
+				]);
+			} else {
+				expect(loaded).toEqual({ status: "absent" });
+				expect(await readdir(probe.paths.claims)).toEqual([]);
+			}
+		});
+	}
 });
+
+interface TaskDurabilityCall {
+	readonly method: keyof VaultGitDurabilityPort;
+	readonly target: string;
+}
+
+const taskClaimDurabilityOrder = [
+	"writeTemp",
+	"syncFile",
+	"linkExclusive",
+	"syncDirectory",
+] as const satisfies readonly (keyof VaultGitDurabilityPort)[];
+
+/** Real durability operations with deterministic pre-operation interruption. */
+function recordingTaskDurabilityPort(
+	calls: TaskDurabilityCall[],
+	crashAt = -1,
+): VaultGitDurabilityPort {
+	const real = createNodeVaultGitDurabilityPort();
+	let index = 0;
+	const run = async (
+		method: keyof VaultGitDurabilityPort,
+		target: string,
+		operation: () => Promise<void>,
+	): Promise<void> => {
+		if (index === crashAt) {
+			index += 1;
+			throw new Error(`crash before ${method}`);
+		}
+		index += 1;
+		calls.push({ method, target });
+		await operation();
+	};
+	return {
+		async writeTemp(handle, bytes, target) {
+			await run("writeTemp", target, () =>
+				real.writeTemp(handle, bytes, target),
+			);
+		},
+		async syncFile(handle, target) {
+			await run("syncFile", target, () => real.syncFile(handle, target));
+		},
+		async rename(from, to, target) {
+			await run("rename", target, () => real.rename(from, to, target));
+		},
+		async linkExclusive(from, to, target) {
+			await run("linkExclusive", target, () =>
+				real.linkExclusive(from, to, target),
+			);
+		},
+		async syncDirectory(path, target) {
+			await run("syncDirectory", target, () =>
+				real.syncDirectory(path, target),
+			);
+		},
+	};
+}
