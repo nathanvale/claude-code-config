@@ -172,7 +172,7 @@ batches:
     ac_mapping:
       - 3
     rationale: null
-    status: in-progress
+    status: converged
     builder_commits:
       - cc5f9195dcefe4676a43754ed3417290844beda2
       - 252a4b515065e67b53fe61c07e0c1fd6e85dbece
@@ -210,7 +210,7 @@ batches:
         notes: "Builder added an explicit durable acknowledgement CAS result contract and gated capability custody on a fresh transitioned outcome while preserving the existing engine as sole mutation owner."
     orchestrator_inline_attempts: []
     iterations: 2
-    final_verdict: null
+    final_verdict: converged
   - id: "task-selected-status"
     name: "Task-selected public status"
     goal: "Expose task-selected status with state, phase, heartbeat, checkpoint, elapsed time, terminal result, and one next action."
@@ -473,9 +473,9 @@ findings:
     signature: acknowledgement-result-cannot-prove-fresh-launch-transition
     persona: adversarial-claude
     severity: P0
-    status: open
+    status: fixed
     summary: "The acknowledgement result cannot prove this invocation won a fresh exact-generation durable transition before capability custody."
-    resolution: null
+    resolution: "commit 252a4b515065e67b53fe61c07e0c1fd6e85dbece"
 ```
 
 ## Findings
@@ -485,7 +485,7 @@ findings:
 | U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | fixed | The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary. | commit 9ab4458b4f51704a667c61ca055ad137883b2998 |
 | U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | deferred-P2 | A process crash can strand task-claim temporary files without a hygiene owner. | deferred-P2 |
 | U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | deferred-P2 | Corrupt and unsafe private claims lack fail-closed tests. | deferred-P2 |
-| U3-001 | fenced-worker-composition | acknowledgement-result-cannot-prove-fresh-launch-transition | adversarial-claude | P0 | open | The acknowledgement result cannot prove this invocation won a fresh exact-generation durable transition before capability custody. |  |
+| U3-001 | fenced-worker-composition | acknowledgement-result-cannot-prove-fresh-launch-transition | adversarial-claude | P0 | fixed | The acknowledgement result cannot prove this invocation won a fresh exact-generation durable transition before capability custody. | commit 252a4b515065e67b53fe61c07e0c1fd6e85dbece |
 
 ## Notes
 
@@ -857,6 +857,15 @@ validator_wave_completed:
   outcome: "clean"
   findings: []
 ```
+
+- 2026-08-13T05:45:00+10:00: `fenced-worker-composition` converged after two
+  recorded implementation attempts and a clean terminal Validator wave.
+  U3-001 closed atomically with the terminal batch using reviewed Builder
+  commit `252a4b515065e67b53fe61c07e0c1fd6e85dbece`. The U3 port contract now
+  requires an explicit fresh exact-generation durable-CAS `transitioned`
+  outcome before capability custody and unchanged engine entry. Production
+  adapter durability, stateful replay, crash recovery, and public process proof
+  remain assigned to later confirmed batches.
 
 ## Workflow Learnings
 
