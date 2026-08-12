@@ -815,6 +815,49 @@ implementation_attempt_checkpoint:
   timestamp: "2026-08-13T05:22:05+10:00"
 ```
 
+- 2026-08-13T05:31:00+10:00: U3 repair Validator wave completed for
+  `252a4b515065e67b53fe61c07e0c1fd6e85dbece`. Local correctness and
+  reliability/project-standards reviews returned no findings. Testing proposed
+  one P1 test-hardening candidate; the independent finding validator rejected
+  it because production retains and compares the independently parsed expected
+  task and launch generation, so wrong identity forwarding cannot pass the
+  existing echo test. Independent Anthropic adversarial review proposed
+  timestamp equality as a freshness fence; finding validation rejected it
+  because `acknowledgedAt` is adapter-owned metadata, may collide, and cannot
+  replace the acknowledgement owner's exact durable-CAS `transitioned`
+  authority. The exact event assertions already falsify premature capability
+  or engine entry. U3-001 is therefore code-closed at this port-contract seam;
+  the real durable CAS adapter, stateful replay, and crash-window proof remain
+  assigned to the confirmed later batches. Cross-model receipt: route
+  `claude`; requested Opus/high; actual `claude-opus-5`; effort actual
+  unverified; receipt supported; independence verified. Focused exact-path,
+  activation, engine, atomic-close, and worker proof passes 121 tests with 392
+  assertions; package typecheck passes. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260813-052500-u3-repair/`.
+
+<!-- validator-wave-completed -->
+```yaml
+validator_wave_completed:
+  batch_id: "fenced-worker-composition"
+  implementation_commit: "252a4b515065e67b53fe61c07e0c1fd6e85dbece"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+    - "independent-finding-validator"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "fenced-worker-composition@252a4b515065e67b53fe61c07e0c1fd6e85dbece"
+    cli_route_id: "packet.validator"
+  outcome: "clean"
+  findings: []
+```
+
 ## Workflow Learnings
 
 ```yaml
