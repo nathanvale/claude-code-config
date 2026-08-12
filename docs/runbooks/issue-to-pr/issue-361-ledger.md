@@ -229,12 +229,24 @@ batches:
     ac_mapping:
       - 4
     rationale: null
-    status: in-progress
+    status: blocked
     builder_commits: []
-    builder_attempts: []
+    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: null
+        files_touched: []
+        route_hint: "replacement-batch"
+        blockers:
+          - "The six-file scope cannot implement truthful task-selected status because persisted task state exposes only admitted phase and recorded time"
+          - "The task-state parser, task-ID lookup, progress revisions, heartbeat, checkpoint, and terminal persistence owners are outside the confirmed batch files"
+        probe_results:
+          - "Task lifecycle ownership is in src/task-state.ts, src/task-store.ts, and src/task-worker.ts outside this batch"
+          - "Current CLI composition exposes the receipt store, not a sanctioned task-status reader"
+        notes: "Builder preflight stopped before edits; AC 4 needs a replacement batch that includes the existing task lifecycle owners."
     orchestrator_inline_attempts: []
-    iterations: 0
-    final_verdict: null
+    iterations: 1
+    final_verdict: blocked-for-user
   - id: "safe-task-projection"
     name: "Safe public task projection"
     goal: "Keep public task output free of credentials, capabilities, private paths, auth URLs, raw Git output, and child output."
@@ -874,6 +886,15 @@ validator_wave_completed:
   repo-local tests/typecheck/Biome, Git evidence, one-commit return, and
   structured-envelope capture are available. The next action is one TDD
   Builder implementation attempt for AC 4.
+
+- 2026-08-13T05:48:12+10:00: `task-selected-status` Builder preflight
+  fail-stopped before edits or commit. The confirmed six-file scope omits the
+  existing task lifecycle owners required to persist and read task-ID keyed
+  heartbeat, checkpoint, elapsed, and terminal state. Recorded one compact
+  fail-stop attempt, marked the batch `blocked-for-user`, and routed AC 4 to a
+  replacement batch. Resume condition: validate and explicitly confirm a
+  replacement contract that includes `src/task-state.ts`, `src/task-store.ts`,
+  `src/task-worker.ts`, their focused tests, and the original public CLI files.
 
 ## Workflow Learnings
 
