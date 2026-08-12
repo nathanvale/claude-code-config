@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	copyFileSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -13,11 +15,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { qualificationSourceDigest } from "../skills/test-design/evals/qualification.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
 const vaultGitStartupRule =
 	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; only when its CLI reports the `activation_blocked` blocker, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time.";
+const testDesignStartupRule =
+	"Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.";
 
 const registeredOwnerPaths = [
 	"skills/productivity-connectors/SKILL.md",
@@ -38,6 +43,9 @@ const registeredOwnerPaths = [
 	"skills/context-advisor/SKILL.md",
 	"skills/context-advisor/references/storage-routing.md",
 	"skills/vault-git/SKILL.md",
+	"skills/test-design/SKILL.md",
+	"skills/test-design/evals/qualification.ts",
+	"skills/test-design/evals/qualification.json",
 ] as const;
 
 interface ProcessResult {
@@ -107,6 +115,27 @@ function createFixture(): Fixture {
 	for (const path of registeredOwnerPaths) {
 		writeRepositoryFile(repository, path);
 	}
+	const qualificationReceiptPath = join(
+		repositoryRoot,
+		"skills/test-design/evals/qualification.json",
+	);
+	if (existsSync(qualificationReceiptPath)) {
+		const receipt = JSON.parse(readFileSync(qualificationReceiptPath, "utf8")) as {
+			sources: string[];
+		};
+		for (const path of receipt.sources) {
+			writeRepositoryFile(repository, path);
+			copyFileSync(join(repositoryRoot, path), join(repository, path));
+		}
+		const fixtureReceipt = {
+			...JSON.parse(readFileSync(qualificationReceiptPath, "utf8")),
+			source_sha256: qualificationSourceDigest(repository),
+		};
+		writeFileSync(
+			join(repository, "skills/test-design/evals/qualification.json"),
+			`${JSON.stringify(fixtureReceipt, null, 2)}\n`,
+		);
+	}
 
 	git(repository, ["init", "--quiet"]);
 	git(repository, ["config", "user.name", "Agent Instructions Test"]);
@@ -150,6 +179,46 @@ function parseReport(result: ProcessResult): StagedReport {
 	}
 }
 
+function expectDeliveredRoute(
+	fixture: Fixture,
+	agents: string,
+	route: string,
+	staleReplacement: string,
+	qualificationSource?: string,
+): void {
+	writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
+	expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
+		route,
+	);
+	expect(readFileSync(join(fixture.home, ".claude/AGENTS.md"), "utf8")).toContain(
+		route,
+	);
+	expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	if (qualificationSource) {
+		const sourcePath = join(fixture.repository, qualificationSource);
+		const source = readFileSync(sourcePath, "utf8");
+		writeFileSync(sourcePath, `${source}\nqualification drift\n`);
+		const staleQualification = runScript(fixture, ["check", "--json"]);
+		expect(staleQualification.exitCode).toBe(1);
+		expect(parseReport(staleQualification).failures).toContain(
+			"test-design Startup Surface route lacks current qualification",
+		);
+		writeFileSync(sourcePath, source);
+		expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	}
+
+	unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
+	writeFileSync(
+		join(fixture.home, ".codex/AGENTS.md"),
+		agents.replace(route, staleReplacement),
+	);
+	const drifted = runScript(fixture, ["check", "--json"]);
+	expect(drifted.exitCode).toBe(1);
+	expect(parseReport(drifted).failures).toContain(
+		"Codex user startup drift: ~/.codex/AGENTS.md",
+	);
+}
+
 function findContrastingSortLocale(): string | undefined {
 	const locales = run("locale", ["-a"]);
 	if (locales.exitCode !== 0) return undefined;
@@ -166,33 +235,31 @@ function findContrastingSortLocale(): string | undefined {
 }
 
 describe("agent instruction staged health", () => {
+	test("delivers the mandatory test-design route through both startup surfaces", () => {
+		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
+		expect(agents).toContain(testDesignStartupRule);
+
+		withFixture((fixture) => {
+			expectDeliveredRoute(
+				fixture,
+				agents,
+				testDesignStartupRule,
+				"stale startup without the test-design route",
+				"skills/test-design/references/pattern-library.md",
+			);
+		});
+	});
+
 	test("delivers the vault-git write route through both startup surfaces", () => {
 		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
 		expect(agents).toContain(vaultGitStartupRule);
 
 		withFixture((fixture) => {
-			writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
-
-			expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
+			expectDeliveredRoute(
+				fixture,
+				agents,
 				vaultGitStartupRule,
-			);
-			expect(readFileSync(join(fixture.home, ".claude/AGENTS.md"), "utf8")).toContain(
-				vaultGitStartupRule,
-			);
-			expect(runScript(fixture, ["check"]).exitCode).toBe(0);
-
-			// Delivery negative control: a stale managed copy that lost the rule
-			// must fail projection-drift detection, so this test guards the
-			// delivery step itself, not just symlink read-back plumbing.
-			unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
-			writeFileSync(
-				join(fixture.home, ".codex/AGENTS.md"),
-				agents.replace(vaultGitStartupRule, "stale startup without the vault-git route"),
-			);
-			const drifted = runScript(fixture, ["check", "--json"]);
-			expect(drifted.exitCode).toBe(1);
-			expect(parseReport(drifted).failures).toContain(
-				"Codex user startup drift: ~/.codex/AGENTS.md",
+				"stale startup without the vault-git route",
 			);
 		});
 	});
