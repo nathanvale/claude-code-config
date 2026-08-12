@@ -3,7 +3,7 @@ issue_number: 361
 issue_title: "Vault Git V2: durable foreground admission and bounded background completion"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/361"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-08-12-001-feat-vault-git-v2-background-worker-plan.md"
 started_at: "2026-08-12T18:35:16+10:00"
 status: "in-progress"
 runbook_version: "3"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:665b63a3223dac60dd5ea87fa1805bbe9d29eb75d214ccac8d6783fd419a2fa8"
 batch_contract_digest: null
 ac_digest: "sha256:8a9e593395a488783ec3e4fda7a5083e30a28a16da74f38909e833ead169f3dd"
 ---
