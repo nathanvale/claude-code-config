@@ -272,7 +272,7 @@ batches:
     ac_mapping:
       - 4
     rationale: "replacement-contract: Builder preflight proved truthful task-selected status requires the existing task state, store, and worker owners plus their focused tests."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     orchestrator_inline_attempts: []
@@ -933,6 +933,14 @@ validator_wave_completed:
   `safe-task-projection` and `aligned-cli-contract` dependencies. Reconfirmed
   the unchanged plan and AC digests and bound the 13-batch contract to
   `sha256:de7a8490b1f34991665aff1cd533d505ef3abf2a489c82ea77bb282754a68457`.
+
+- 2026-08-13T05:55:06+10:00: Started `task-lifecycle-selected-status` after
+  its `fenced-worker-composition` dependency converged. Confirmation and
+  digest gates match the approved 13-batch replacement DAG. Codex Builder
+  readiness passed: isolated sub-agent dispatch, exact 12-file authority,
+  repo-local tests/typecheck/Biome, Git evidence, one-commit return, and
+  structured-envelope capture are available. The next action is one TDD
+  Builder implementation attempt for AC 4.
 
 ## Workflow Learnings
 
