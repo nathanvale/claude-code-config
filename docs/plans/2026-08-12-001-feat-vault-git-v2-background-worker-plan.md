@@ -214,7 +214,7 @@ files:
   - runtime/vault-git-transaction-manager/tests/cli.test.ts
   - runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts
 depends_on:
-  - durable-task-admission
+  - fenced-worker-composition
 execution_mode: tdd
 acceptance_tests:
   - "AC 4 holds: status selects the returned task ID and reports state, phase, heartbeat, checkpoint, elapsed time, terminal result, foreground continuation signal, and exactly one next action."
@@ -266,7 +266,7 @@ files:
   - runtime/vault-git-transaction-manager/tests/process-cli.ts
 depends_on:
   - fenced-worker-composition
-  - task-selected-status
+  - safe-task-projection
 execution_mode: tdd
 acceptance_tests:
   - "AC 6 holds: complete returns after durable acknowledgement while the worker remains alive and status stays in_progress beyond the scaled former 30-second private-launch deadline without remote_unavailable."
