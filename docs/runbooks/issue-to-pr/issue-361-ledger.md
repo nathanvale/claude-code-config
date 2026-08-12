@@ -229,7 +229,7 @@ batches:
     ac_mapping:
       - 4
     rationale: null
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     orchestrator_inline_attempts: []
@@ -866,6 +866,14 @@ validator_wave_completed:
   outcome before capability custody and unchanged engine entry. Production
   adapter durability, stateful replay, crash recovery, and public process proof
   remain assigned to later confirmed batches.
+
+- 2026-08-13T05:40:04+10:00: Started `task-selected-status` after its
+  `fenced-worker-composition` dependency converged. Plan, batch-contract, and
+  acceptance-criteria digests match confirmed ledger state. Codex Builder
+  readiness passed: isolated sub-agent dispatch, exact six-file authority,
+  repo-local tests/typecheck/Biome, Git evidence, one-commit return, and
+  structured-envelope capture are available. The next action is one TDD
+  Builder implementation attempt for AC 4.
 
 ## Workflow Learnings
 
