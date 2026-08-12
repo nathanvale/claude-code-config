@@ -387,7 +387,7 @@ findings:
     persona: compound-engineering:ce-code-review
     severity: P1
     status: open
-    summary: "Durable publish failure paths lack injected ordering and interruption proof."
+    summary: "The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary."
     resolution: null
   - id: U1-002
     batch_id: durable-task-admission
@@ -411,7 +411,7 @@ findings:
 
 | id | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | open | Durable publish failure paths lack injected ordering and interruption proof. |  |
+| U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | open | The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary. |  |
 | U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | open | A process crash can strand task-claim temporary files without a hygiene owner. |  |
 | U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | open | Corrupt and unsafe private claims lack fail-closed tests. |  |
 
@@ -488,6 +488,33 @@ implementation_attempt_checkpoint:
   implementation_commit: "7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T22:21:58+10:00"
+
+- 2026-08-12T22:30:22+10:00: U1 repair Validator wave completed for
+  `7a3994b878a1e15d9f8cbf4c9258329e36fafb74`. The repair proves the fresh
+  publication path, but the existing-claim `EEXIST` join path still lacks
+  directory-sync interruption proof. Local testing review and independent
+  Anthropic review agree on the gap. Cross-model receipt: requested Opus/high;
+  actual `claude-opus-5`; effort actual unverified; receipt supported;
+  independence verified. U1-001 remains open with the same signature. U1-002
+  and U1-003 remain open P2 findings. The `same-signature-twice` hatch does not
+  fire because U1-001 never closed and reopened; `finding-count-rises` does not
+  fire because the open P0/P1 count remains one. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260812-222500-u1-repair/`.
+
+validator_wave_completed:
+  batch_id: "durable-task-admission"
+  implementation_commit: "7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "durable-task-admission@7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
+    cli_route_id: "packet.validator.fallback"
+  outcome: "findings-recorded"
+  findings:
+    - U1-001
 
 ## Workflow Learnings
 
