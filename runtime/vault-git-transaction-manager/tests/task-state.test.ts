@@ -129,6 +129,65 @@ describe("durable task state", () => {
 		});
 	});
 
+	test("allows Doctor to refine an unknown outcome into a known repair", () => {
+		const admitted = createVaultGitTaskState({
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T11:30:00.000Z",
+		});
+		const unknown = advanceVaultGitTaskState(admitted, {
+			state: "unknown",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "partial",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		});
+
+		const refined = advanceVaultGitTaskState(unknown, {
+			state: "repair_needed",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:32:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "local",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		});
+
+		expect(refined).toMatchObject({
+			revision: unknown.revision + 1,
+			state: "repair_needed",
+			phase: "terminal",
+		});
+		expect(() => advanceVaultGitTaskState(refined, {
+			state: "unknown",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:33:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "partial",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		})).toThrow("task state transition invalid");
+	});
+
 	test("rejects capability-shaped or additional persisted fields", () => {
 		expect(() =>
 			parseVaultGitTaskState({

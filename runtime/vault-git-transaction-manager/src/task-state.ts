@@ -127,8 +127,13 @@ export function advanceVaultGitTaskState(
 	previous: VaultGitTaskState,
 	input: VaultGitTaskStateAdvanceInput,
 ): VaultGitTaskState {
+	// Doctor may refine an unclassified outcome into a known repair, but never the
+	// reverse: a proven repair must not decay back into unknown, and closed absorbs.
+	const terminalRefinement =
+		previous.state === "unknown" && input.state === "repair_needed";
 	if (
 		(previous.phase === "terminal" &&
+			!terminalRefinement &&
 			(previous.state === "closed" || input.state !== "closed")) ||
 		(input.phase === "terminal") !== (input.terminalResult != null) ||
 		(input.phase === "admitted" &&
