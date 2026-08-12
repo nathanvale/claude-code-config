@@ -16,12 +16,32 @@
 			"env": { "MCP_IDLE_EXIT_MS": "0" }
 		},
 		"mcp-atlassian": {
-			"command": "${HOME}/code/dotfiles/bin/mcp-atlassian",
-			"args": [],
-			"env": {
-				"JIRA_PROJECTS_FILTER": "SMSTSF,SMSTPMX",
-				"CONFLUENCE_SPACES_FILTER": "SP2,DE"
-			}
+			"command": "${HOME}/code/dotfiles/bin/with-one-password-token",
+			"args": [
+				"inject-many",
+				"JIRA_URL",
+				"op://API Credentials/JIRA_MONASH_API_TOKEN/url",
+				"JIRA_USERNAME",
+				"op://API Credentials/JIRA_MONASH_API_TOKEN/username",
+				"JIRA_API_TOKEN",
+				"op://API Credentials/JIRA_MONASH_API_TOKEN/credential",
+				"CONFLUENCE_URL",
+				"op://API Credentials/CONFLUENCE_MONASH_API_TOKEN/url",
+				"CONFLUENCE_USERNAME",
+				"op://API Credentials/CONFLUENCE_MONASH_API_TOKEN/username",
+				"CONFLUENCE_API_TOKEN",
+				"op://API Credentials/CONFLUENCE_MONASH_API_TOKEN/credential",
+				"--",
+				"/usr/bin/env",
+				"JIRA_PROJECTS_FILTER=SMSTSF,SMSTPMX",
+				"CONFLUENCE_SPACES_FILTER=SP2,DE",
+				"uvx",
+				"--system-certs",
+				"--python=3.12",
+				"--with",
+				"fakeredis<2.35",
+				"mcp-atlassian"
+			]
 		}
 	}
 }
