@@ -79,6 +79,41 @@ describe("Vault Git activation front door", () => {
 		);
 	});
 
+	test("uses one observation time for prepared evidence inspection", async () => {
+		const stateRoot = await tempDirectories.create("vault-git-activation-clock-");
+		const store = createReceiptStore({
+			stateRoot,
+			repositoryIdentity: "fixture-vault",
+		});
+		const evidence = preparedEvidenceForTest({
+			capturedAt: "2026-08-12T00:00:00.000Z",
+		});
+		await store.publishPreparedEvidence(evidence);
+		let clockCalls = 0;
+		const preparer: VaultGitActivationPreparer = {
+			async prepare() {
+				throw new Error("prepare not expected");
+			},
+			async revalidate() {
+				return liveActivationBindingsForTest(evidence);
+			},
+		};
+		const frontDoor = createVaultGitActivationFrontDoor({
+			store,
+			preparer,
+			clock: () => {
+				clockCalls += 1;
+				return clockCalls === 1
+					? "2026-08-12T00:09:59.000Z"
+					: "2026-08-12T00:10:01.000Z";
+			},
+			createAuthority: authorityFactory(store, preparer),
+		});
+
+		expect(await frontDoor.inspect()).toMatchObject({ status: "prepared" });
+		expect(clockCalls).toBe(1);
+	});
+
 	test("admits only the exact fresh evidence through the internal human review capability", async () => {
 		const { store, evidence, frontDoor } = await createReviewFixture(
 			"vault-git-activation-review-",
