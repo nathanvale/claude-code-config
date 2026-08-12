@@ -878,7 +878,8 @@ async function preparationFixture(overrides: {
 			scripts: { check: "bun run scripts/check.ts" },
 		}),
 	);
-	if (overrides.includeLockfile !== false) {
+	const includeLockfile = overrides.includeLockfile !== false;
+	if (includeLockfile) {
 		await writeFile(
 			join(repositoryPath, "bun.lock"),
 			JSON.stringify({
@@ -899,7 +900,7 @@ async function preparationFixture(overrides: {
 	git(repositoryPath, [
 		"add",
 		"package.json",
-		...(overrides.includeLockfile === false ? [] : ["bun.lock"]),
+		...(includeLockfile ? ["bun.lock"] : []),
 		"scripts/check.ts",
 		"schemas/frontmatter-contract.json",
 	]);

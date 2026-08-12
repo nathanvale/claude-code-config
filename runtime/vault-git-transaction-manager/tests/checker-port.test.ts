@@ -164,6 +164,75 @@ describe("vault checker process boundary", () => {
 		);
 	});
 
+	for (const [name, lockfile] of [
+		[
+			"empty packages",
+			{
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { dependencies: { example: "1.0.0" } } },
+				packages: {},
+			},
+		],
+		[
+			"missing declared resolution",
+			{
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { dependencies: { example: "1.0.0" } } },
+				packages: { another: ["another@1.0.0", ""] },
+			},
+		],
+		[
+			"stale declared specifier",
+			{
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { dependencies: { example: "2.0.0" } } },
+				packages: { example: ["example@2.0.0", ""] },
+			},
+		],
+	] as const) {
+		test(`refuses ${name} for a dependency-bearing manifest`, async () => {
+			const root = await checkerFixture({
+				name: "unresolved-lockfile-checker",
+				private: true,
+				scripts: { check: "bun run scripts/check.ts" },
+				dependencies: { example: "1.0.0" },
+			});
+			await writeFile(join(root, "bun.lock"), JSON.stringify(lockfile));
+			const checker = createVaultCheckerPort(root, unusedProcessPort());
+
+			await expect(checker.fingerprint()).rejects.toThrow(
+				"bun.lock dependency resolution is invalid",
+			);
+		});
+	}
+
+	test("accepts a lockfile with every declared dependency resolved", async () => {
+		const root = await checkerFixture({
+			name: "resolved-lockfile-checker",
+			private: true,
+			scripts: { check: "bun run scripts/check.ts" },
+			dependencies: { example: "1.0.0" },
+		});
+		await writeFile(
+			join(root, "bun.lock"),
+			JSON.stringify({
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { dependencies: { example: "1.0.0" } } },
+				packages: { example: ["example@1.0.0", ""] },
+			}),
+		);
+		const checker = createVaultCheckerPort(root, unusedProcessPort());
+
+		await expect(checker.fingerprint()).resolves.toMatchObject({
+			entrypointHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+			dependencyBundleHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+		});
+	});
+
 	async function checkerFixture(
 		manifest: Readonly<Record<string, unknown>>,
 	): Promise<string> {

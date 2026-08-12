@@ -192,6 +192,11 @@ const LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
 	"catalogs",
 	"workspaces",
 ] as const;
+const RESOLVED_DEPENDENCY_MANIFEST_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"optionalDependencies",
+] as const;
 const DEPENDENCY_FREE_LOCKFILE_ABSENCE_BINDING = Buffer.from(
 	"vault-git:dependency-free-lockfile-absence:v1",
 	"utf8",
@@ -1227,13 +1232,70 @@ function assertValidBunLockfile(
 	const dependencySurface = LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
 		Object.hasOwn(manifest, field),
 	);
+	const packages = record.packages;
 	if (
 		dependencySurface !== undefined &&
-		(typeof record.packages !== "object" ||
-			record.packages === null ||
-			Array.isArray(record.packages))
+		(typeof packages !== "object" ||
+			packages === null ||
+			Array.isArray(packages))
 	) {
 		throw new Error("bun.lock dependency contract is invalid");
+	}
+	assertDeclaredDependencyResolutions(manifest, record);
+}
+
+function assertDeclaredDependencyResolutions(
+	manifest: Readonly<Record<string, unknown>>,
+	lockfile: Readonly<Record<string, unknown>>,
+): void {
+	const workspaces = lockfile.workspaces as Readonly<Record<string, unknown>>;
+	const rootWorkspace = workspaces[""];
+	const packages = lockfile.packages;
+	for (const field of RESOLVED_DEPENDENCY_MANIFEST_FIELDS) {
+		if (!Object.hasOwn(manifest, field)) continue;
+		const dependencies = manifest[field];
+		if (
+			typeof dependencies !== "object" ||
+			dependencies === null ||
+			Array.isArray(dependencies)
+		) {
+			throw new Error(`package.json ${field} is not an object`);
+		}
+		const entries = Object.entries(dependencies);
+		if (entries.length === 0) continue;
+		if (
+			typeof rootWorkspace !== "object" ||
+			rootWorkspace === null ||
+			Array.isArray(rootWorkspace) ||
+			typeof packages !== "object" ||
+			packages === null ||
+			Array.isArray(packages)
+		) {
+			throw new Error("bun.lock dependency resolution is invalid");
+		}
+		const lockedDependencies = (
+			rootWorkspace as Readonly<Record<string, unknown>>
+		)[field];
+		if (
+			typeof lockedDependencies !== "object" ||
+			lockedDependencies === null ||
+			Array.isArray(lockedDependencies)
+		) {
+			throw new Error("bun.lock dependency resolution is invalid");
+		}
+		for (const [name, specifier] of entries) {
+			const resolution = (packages as Readonly<Record<string, unknown>>)[name];
+			if (
+				typeof specifier !== "string" ||
+				(lockedDependencies as Readonly<Record<string, unknown>>)[name] !==
+					specifier ||
+				!Array.isArray(resolution) ||
+				typeof resolution[0] !== "string" ||
+				resolution[0].length === 0
+			) {
+				throw new Error("bun.lock dependency resolution is invalid");
+			}
+		}
 	}
 }
 

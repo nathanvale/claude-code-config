@@ -168,15 +168,13 @@ async function inspectActivation(
 	options: VaultGitActivationFrontDoorOptions,
 	authority: VaultGitActivationAuthority,
 ): Promise<VaultGitActivationFrontDoorResult> {
-	const current = await inspectVaultGitActivationState(
-		options.store,
-		options.clock(),
-	);
+	const observedAt = options.clock();
+	const current = await inspectVaultGitActivationState(options.store, observedAt);
 	if (current.status === "unavailable") {
 		return restriction("revalidation_unavailable", "activation_admission");
 	}
 	if (current.status === "unprepared") {
-		return evaluateVaultGitPreparedEvidence(null, options.clock());
+		return evaluateVaultGitPreparedEvidence(null, observedAt);
 	}
 	if (current.status === "revoked" || current.status === "invalidated") {
 		return restriction(current.status, "activation_admission");
@@ -191,7 +189,7 @@ async function inspectActivation(
 		}
 		return projectVaultGitActivatedResult(current.evidence, "none");
 	}
-	return evaluateVaultGitPreparedEvidence(current.evidence, options.clock());
+	return evaluateVaultGitPreparedEvidence(current.evidence, observedAt);
 }
 
 function projectPreparationResult(
