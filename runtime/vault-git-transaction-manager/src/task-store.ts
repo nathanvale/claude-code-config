@@ -68,6 +68,16 @@ export type VaultGitTaskTransitionResult =
 	| { readonly status: "transitioned"; readonly state: VaultGitTaskState }
 	| { readonly status: "stale"; readonly state: VaultGitTaskState };
 
+/** Optional ownership fences applied before one durable task transition. */
+export interface VaultGitTaskTransitionFence {
+	/**
+	 * Launch generation the caller believes it still owns. A transition whose
+	 * persisted generation differs is refused as stale, so a superseded worker
+	 * cannot terminalize the launch attempt that replaced it.
+	 */
+	readonly expectedLaunchGeneration?: string | null;
+}
+
 /** Private compare-and-set store for receipt-scoped background tasks. */
 export interface VaultGitTaskStore {
 	readonly repositoryId: string;
@@ -85,6 +95,7 @@ export interface VaultGitTaskStore {
 		taskId: string,
 		expectedRevision: number,
 		input: VaultGitTaskStateAdvanceInput,
+		fence?: VaultGitTaskTransitionFence,
 	): Promise<VaultGitTaskTransitionResult>;
 }
 
@@ -225,11 +236,17 @@ export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): Vaul
 		claimPath,
 		load,
 		loadByTaskId,
-		async transition(taskId, expectedRevision, input) {
+		async transition(taskId, expectedRevision, input, fence) {
 			await prepareTask(taskId);
 			const loaded = await loadByTaskId(taskId);
 			if (loaded.status !== "loaded") throw new Error(`task state unavailable: ${loaded.status}`);
 			if (loaded.state.revision !== expectedRevision) return { status: "stale", state: loaded.state };
+			if (
+				fence?.expectedLaunchGeneration !== undefined &&
+				loaded.state.launchGeneration !== fence.expectedLaunchGeneration
+			) {
+				return { status: "stale", state: loaded.state };
+			}
 			const next = advanceVaultGitTaskState(loaded.state, input);
 			const created = await publishExclusiveJson(
 				revisionPath(taskHistory(taskId), next.revision),

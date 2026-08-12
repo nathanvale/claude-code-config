@@ -95,7 +95,11 @@ import {
 } from "./ports.ts";
 import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitRepairResult } from "./repair.ts";
-import { createVaultGitTaskStore, type VaultGitTaskStore } from "./task-store.ts";
+import {
+	createVaultGitTaskStore,
+	type VaultGitTaskStore,
+	type VaultGitTaskTransitionFence,
+} from "./task-store.ts";
 import {
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
@@ -1743,7 +1747,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 					blocker: "worker_launch_failed",
 					retrySafety: "operator_required",
 				},
-			});
+			}, { expectedLaunchGeneration: launchGeneration });
 		}
 	}
 	const acknowledgementDeadline = performance.now() + 1_500;
@@ -2228,7 +2232,7 @@ async function executeBackgroundWorkerCompletion(
 				blocker: result.blocker ?? null,
 				retrySafety: result.retrySafety,
 			},
-		});
+		}, { expectedLaunchGeneration: launchGeneration });
 		return result;
 	} catch (error) {
 		await transitionTaskUntilSettled(taskStore, taskId, {
@@ -2247,7 +2251,7 @@ async function executeBackgroundWorkerCompletion(
 				blocker: "human_required",
 				retrySafety: "operator_required",
 			},
-		}).catch(() => undefined);
+		}, { expectedLaunchGeneration: launchGeneration }).catch(() => undefined);
 		throw error;
 	} finally {
 		if (heartbeat) clearInterval(heartbeat);
@@ -2329,11 +2333,23 @@ async function transitionTaskUntilSettled(
 	store: VaultGitTaskStore,
 	taskId: string,
 	input: import("./task-state.ts").VaultGitTaskStateAdvanceInput,
+	fence?: VaultGitTaskTransitionFence,
 ): Promise<void> {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const current = await store.loadByTaskId(taskId);
 		if (current.status !== "loaded" || current.state.phase === "terminal") return;
-		const transitioned = await store.transition(taskId, current.state.revision, input);
+		// A superseded launch generation must never terminalize the attempt that
+		// replaced it, so the fence refuses instead of retrying onto a new revision.
+		if (
+			fence?.expectedLaunchGeneration !== undefined &&
+			current.state.launchGeneration !== fence.expectedLaunchGeneration
+		) return;
+		const transitioned = await store.transition(
+			taskId,
+			current.state.revision,
+			input,
+			fence,
+		);
 		if (transitioned.status === "transitioned") return;
 	}
 	throw new Error("task terminal transition contention exceeded");

@@ -303,6 +303,82 @@ describe("private task store", () => {
 			}
 		});
 	}
+
+	test("refuses a terminal write from a superseded launch generation", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-stale-generation-",
+		);
+		const receiptId = "receipt_55555555555555555555555555555555";
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		});
+		const admitted = await store.admit({
+			receiptId,
+			transactionId: "txn_55555555555555555555555555555555",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T14:00:00.000Z",
+		});
+		const taskId = admitted.state.taskId;
+		const stale = "launch_11111111111111111111111111111111";
+		const live = "launch_22222222222222222222222222222222";
+
+		const launching = await store.transition(taskId, admitted.state.revision, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-12T14:00:01.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: live,
+			launchExpiresAt: "2026-08-12T14:00:03.000Z",
+			workerPid: 4242,
+			workerProcessIdentity: "d".repeat(64),
+		});
+		if (launching.status !== "transitioned") throw new Error("launch setup failed");
+		const running = await store.transition(taskId, launching.state.revision, {
+			state: "in_progress",
+			phase: "running",
+			updatedAt: "2026-08-12T14:00:02.000Z",
+			heartbeatAt: "2026-08-12T14:00:02.000Z",
+			checkpoint: "checking",
+			launchGeneration: live,
+			launchExpiresAt: null,
+			workerPid: 4242,
+			workerProcessIdentity: "d".repeat(64),
+		});
+		if (running.status !== "transitioned") throw new Error("running setup failed");
+
+		const refused = await store.transition(
+			taskId,
+			running.state.revision,
+			{
+				state: "repair_needed",
+				phase: "terminal",
+				updatedAt: "2026-08-12T14:00:04.000Z",
+				heartbeatAt: "2026-08-12T14:00:04.000Z",
+				checkpoint: "checking",
+				launchGeneration: stale,
+				launchExpiresAt: null,
+				workerPid: 9999,
+				workerProcessIdentity: "e".repeat(64),
+				terminalResult: {
+					outcome: "refused",
+					phase: "checking",
+					changedState: "none",
+					blocker: "human_required",
+					retrySafety: "operator_required",
+				},
+			},
+			{ expectedLaunchGeneration: stale },
+		);
+
+		expect(refused.status).toBe("stale");
+		const current = await store.loadByTaskId(taskId);
+		expect(current).toMatchObject({
+			status: "loaded",
+			state: { state: "in_progress", phase: "running", launchGeneration: live },
+		});
+	});
 });
 
 interface TaskDurabilityCall {
