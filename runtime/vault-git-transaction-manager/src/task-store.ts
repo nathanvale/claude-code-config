@@ -9,8 +9,12 @@ import {
 	type VaultGitDurabilityPort,
 } from "./store.ts";
 import {
+	createVaultGitTaskClaim,
 	createVaultGitTaskState,
+	parseVaultGitTaskClaim,
 	parseVaultGitTaskState,
+	type VaultGitTaskBindingInput,
+	type VaultGitTaskClaim,
 } from "./task-state.ts";
 
 /** Construction options for one repository-scoped private task store. */
@@ -31,6 +35,14 @@ export interface VaultGitTaskAdmissionInput {
 	readonly recordedAt: string;
 }
 
+/** Exact receipt-selected caller binding for one completion task. */
+export interface VaultGitTaskClaimOrJoinInput extends VaultGitTaskBindingInput {
+	/** Trusted receipt selector that owns the immutable claim path. */
+	readonly claimReceiptId: string;
+	/** Injected ISO timestamp retained only when this caller wins. */
+	readonly recordedAt: string;
+}
+
 /** Observable result of one compare-and-set task admission. */
 export interface VaultGitTaskAdmission {
 	/** Whether this caller created the claim or joined the stored winner. */
@@ -38,6 +50,24 @@ export interface VaultGitTaskAdmission {
 	/** Immutable task state selected by the receipt claim. */
 	readonly state: VaultGitTaskState;
 }
+
+/** Observable single-flight decision for one completion task caller. */
+export type VaultGitTaskClaimOrJoinResult =
+	| {
+			readonly status: "created";
+			readonly launch: "winner";
+			readonly state: VaultGitTaskState;
+	  }
+	| {
+			readonly status: "existing";
+			readonly launch: "joined";
+			readonly state: VaultGitTaskState;
+	  }
+	| {
+			readonly status: "refused";
+			readonly launch: "refused";
+			readonly reason: "task_input_mismatch";
+	  };
 
 /** Fail-closed read result for one receipt-scoped task claim. */
 export type VaultGitTaskLoadResult =
@@ -58,6 +88,10 @@ export interface VaultGitTaskStore {
 	claimPath(receiptId: string): string;
 	/** Atomically create or load the one task claimed by a receipt. */
 	admit(input: VaultGitTaskAdmissionInput): Promise<VaultGitTaskAdmission>;
+	/** Select one launch winner or join only an exactly bound task claim. */
+	claimOrJoin(
+		input: VaultGitTaskClaimOrJoinInput,
+	): Promise<VaultGitTaskClaimOrJoinResult>;
 	/** Load the task claimed by one receipt without changing it. */
 	load(receiptId: string): Promise<VaultGitTaskLoadResult>;
 }
@@ -121,7 +155,18 @@ export function createVaultGitTaskStore(
 		return join(paths.claims, `${receiptId}.json`);
 	}
 
-	async function load(receiptId: string): Promise<VaultGitTaskLoadResult> {
+	type StoredTaskClaim = {
+		readonly state: VaultGitTaskState;
+		readonly bindingDigest: string | null;
+	};
+
+	async function loadClaim(
+		receiptId: string,
+	): Promise<
+		| { readonly status: "absent" }
+		| { readonly status: "loaded"; readonly claim: StoredTaskClaim }
+		| { readonly status: "corrupt"; readonly reason: string }
+	> {
 		let source: string;
 		try {
 			source = await readPrivateTaskState(claimPath(receiptId));
@@ -130,14 +175,32 @@ export function createVaultGitTaskStore(
 			return { status: "corrupt", reason: "task claim unreadable" };
 		}
 		try {
-			const state = parseVaultGitTaskState(JSON.parse(source));
+			const value: unknown = JSON.parse(source);
+			let claim: StoredTaskClaim;
+			try {
+				const bound = parseVaultGitTaskClaim(value);
+				claim = {
+					state: taskStateFromClaim(bound),
+					bindingDigest: bound.bindingDigest,
+				};
+			} catch {
+				claim = { state: parseVaultGitTaskState(value), bindingDigest: null };
+			}
+			const { state } = claim;
 			if (state.receiptId !== receiptId) {
 				return { status: "corrupt", reason: "task claim receipt mismatch" };
 			}
-			return { status: "loaded", state };
+			return { status: "loaded", claim };
 		} catch {
 			return { status: "corrupt", reason: "task claim malformed" };
 		}
+	}
+
+	async function load(receiptId: string): Promise<VaultGitTaskLoadResult> {
+		const loaded = await loadClaim(receiptId);
+		return loaded.status === "loaded"
+			? { status: "loaded", state: loaded.claim.state }
+			: loaded;
 	}
 
 	return {
@@ -145,6 +208,45 @@ export function createVaultGitTaskStore(
 		paths,
 		claimPath,
 		load,
+		async claimOrJoin(input) {
+			assertReceiptId(input.claimReceiptId);
+			assertReceiptId(input.receiptId);
+			if (input.claimReceiptId !== input.receiptId) {
+				return {
+					status: "refused",
+					launch: "refused",
+					reason: "task_input_mismatch",
+				};
+			}
+			await prepare();
+			const state = createVaultGitTaskState({
+				taskId: `task_${randomUUID().replaceAll("-", "")}`,
+				receiptId: input.receiptId,
+				recordedAt: input.recordedAt,
+			});
+			const claim = createVaultGitTaskClaim(state, input);
+			const created = await publishTaskClaim(
+				claimPath(input.claimReceiptId),
+				claim,
+				durability,
+			);
+			if (created) return { status: "created", launch: "winner", state };
+			const existing = await loadClaim(input.claimReceiptId);
+			if (existing.status !== "loaded") {
+				throw new Error(`existing task claim unavailable: ${existing.status}`);
+			}
+			return existing.claim.bindingDigest === claim.bindingDigest
+				? {
+						status: "existing",
+						launch: "joined",
+						state: existing.claim.state,
+					}
+				: {
+						status: "refused",
+						launch: "refused",
+						reason: "task_input_mismatch",
+					};
+		},
 		async admit(input) {
 			await prepare();
 			const state = createVaultGitTaskState({
@@ -169,7 +271,7 @@ export function createVaultGitTaskStore(
 
 async function publishTaskClaim(
 	path: string,
-	state: VaultGitTaskState,
+	state: VaultGitTaskState | VaultGitTaskClaim,
 	durability: VaultGitDurabilityPort,
 ): Promise<boolean> {
 	const bytes = new TextEncoder().encode(`${JSON.stringify(state)}\n`);
@@ -198,6 +300,17 @@ async function publishTaskClaim(
 		if (handle) await handle.close().catch(() => undefined);
 		await unlink(temporary).catch(() => undefined);
 	}
+}
+
+function taskStateFromClaim(claim: VaultGitTaskClaim): VaultGitTaskState {
+	return parseVaultGitTaskState({
+		schemaVersion: claim.schemaVersion,
+		taskId: claim.taskId,
+		receiptId: claim.receiptId,
+		revision: claim.revision,
+		phase: claim.phase,
+		recordedAt: claim.recordedAt,
+	});
 }
 
 async function readPrivateTaskState(path: string): Promise<string> {

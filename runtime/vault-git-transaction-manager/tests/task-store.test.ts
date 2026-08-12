@@ -14,6 +14,69 @@ const temporaryDirectories = createTempDirectoryFixture();
 afterEach(temporaryDirectories.cleanup);
 
 describe("private task store", () => {
+	test("twenty identical claim-or-join calls select one task and one launch winner while changed bindings refuse", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-single-flight-",
+		);
+		const claimReceiptId = "receipt_11111111111111111111111111111111";
+		const stores = Array.from({ length: 20 }, () =>
+			createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "vault@example",
+			}),
+		);
+		const input = {
+			claimReceiptId,
+			receiptId: claimReceiptId,
+			transactionId: "txn_22222222222222222222222222222222",
+			remote: "origin",
+			generation: "a".repeat(40),
+			capabilityDigest: "c".repeat(64),
+			normalizedInput:
+				'{"command":"complete","summary":"PRIVATE-SUMMARY-CANARY"}',
+			recordedAt: "2026-08-12T13:00:00.000Z",
+		} as const;
+
+		const selected = await Promise.all(
+			stores.map((store) => store.claimOrJoin(input)),
+		);
+		const taskIds = new Set(
+			selected.flatMap((result) =>
+				result.status === "refused" ? [] : [result.state.taskId],
+			),
+		);
+
+		expect(selected.filter((result) => result.launch === "winner")).toHaveLength(1);
+		expect(selected.filter((result) => result.launch === "joined")).toHaveLength(19);
+		expect(taskIds.size).toBe(1);
+
+		const mismatches = [
+			{ ...input, transactionId: "txn_33333333333333333333333333333333" },
+			{ ...input, receiptId: "receipt_44444444444444444444444444444444" },
+			{ ...input, remote: "staging" },
+			{ ...input, generation: "b".repeat(40) },
+			{ ...input, capabilityDigest: "d".repeat(64) },
+			{
+				...input,
+				normalizedInput:
+					'{"command":"complete","summary":"changed normalized input"}',
+			},
+		] as const;
+		for (const mismatch of mismatches) {
+			expect(await stores[0].claimOrJoin(mismatch)).toEqual({
+				status: "refused",
+				launch: "refused",
+				reason: "task_input_mismatch",
+			});
+		}
+
+		const claimSource = await readFile(stores[0].claimPath(claimReceiptId), "utf8");
+		expect(claimSource).not.toContain("PRIVATE-SUMMARY-CANARY");
+		expect(await readdir(stores[0].paths.claims)).toEqual([
+			`${claimReceiptId}.json`,
+		]);
+	});
+
 	test("twenty concurrent admissions create one immutable receipt claim and one opaque task id", async () => {
 		const stateRoot = await temporaryDirectories.create("vault-git-task-store-");
 		const receiptId = "receipt_22222222222222222222222222222222";

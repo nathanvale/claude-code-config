@@ -1,8 +1,31 @@
+import { createHash } from "node:crypto";
+
 import {
 	VAULT_GIT_TASK_PHASES,
 	type VaultGitTaskState,
 	type VaultGitTaskStateInput,
 } from "./model.ts";
+
+/** Immutable inputs that decide whether a completion caller may join a task. */
+export interface VaultGitTaskBindingInput {
+	/** Receipt proposed by the completion caller. */
+	readonly receiptId: string;
+	/** Exact transaction selected for completion. */
+	readonly transactionId: string;
+	/** Exact named remote bound by the receipt. */
+	readonly remote: string;
+	/** Exact fencing generation owned by the receipt. */
+	readonly generation: string;
+	/** SHA-256 digest of the inherited owner capability, never its bytes. */
+	readonly capabilityDigest: string;
+	/** Canonical completion input supplied by the CLI owner. */
+	readonly normalizedInput: string;
+}
+
+/** Private immutable task claim with a one-way caller-binding digest. */
+export type VaultGitTaskClaim = Readonly<
+	VaultGitTaskState & { readonly bindingDigest: string }
+>;
 
 /**
  * Create the first immutable state for a receipt-scoped background task.
@@ -31,6 +54,94 @@ export function createVaultGitTaskState(
 		phase: "admitted",
 		recordedAt: input.recordedAt,
 	});
+}
+
+/**
+ * Bind one immutable task state to the exact completion caller inputs.
+ *
+ * @param state - Validated capability-free task state
+ * @param input - Exact transaction, receipt, fence, capability digest, and input
+ * @returns Frozen claim whose one-way binding contains no raw capability or input
+ * @throws {Error} When a binding field is malformed
+ */
+export function createVaultGitTaskClaim(
+	state: VaultGitTaskState,
+	input: VaultGitTaskBindingInput,
+): VaultGitTaskClaim {
+	return Object.freeze({
+		...state,
+		bindingDigest: digestVaultGitTaskBinding(input),
+	});
+}
+
+/**
+ * Parse one exact persisted task claim.
+ *
+ * @param value - Unknown private claim value
+ * @returns Frozen validated task claim
+ * @throws {Error} When the claim is malformed or contains additional fields
+ */
+export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("task claim invalid");
+	}
+	const record = value as Record<string, unknown>;
+	const expectedKeys = [
+		"schemaVersion",
+		"taskId",
+		"receiptId",
+		"revision",
+		"phase",
+		"recordedAt",
+		"bindingDigest",
+	] as const;
+	if (
+		Object.keys(record).length !== expectedKeys.length ||
+		!expectedKeys.every((key) => Object.hasOwn(record, key)) ||
+		typeof record.bindingDigest !== "string" ||
+		!/^[0-9a-f]{64}$/.test(record.bindingDigest)
+	) {
+		throw new Error("task claim invalid");
+	}
+	const state = parseVaultGitTaskState({
+		schemaVersion: record.schemaVersion,
+		taskId: record.taskId,
+		receiptId: record.receiptId,
+		revision: record.revision,
+		phase: record.phase,
+		recordedAt: record.recordedAt,
+	});
+	return Object.freeze({ ...state, bindingDigest: record.bindingDigest });
+}
+
+/** Produce the canonical one-way binding for claim comparison. */
+export function digestVaultGitTaskBinding(
+	input: VaultGitTaskBindingInput,
+): string {
+	if (
+		!/^receipt_[0-9a-f]{32}$/.test(input.receiptId) ||
+		!/^txn_[0-9a-f]{32}$/.test(input.transactionId) ||
+		input.remote.length === 0 ||
+		input.remote !== input.remote.trim() ||
+		!(/^[0-9a-f]{40}$/.test(input.generation) ||
+			/^[0-9a-f]{64}$/.test(input.generation)) ||
+		!/^[0-9a-f]{64}$/.test(input.capabilityDigest) ||
+		input.normalizedInput.length === 0
+	) {
+		throw new Error("task binding invalid");
+	}
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				receiptId: input.receiptId,
+				transactionId: input.transactionId,
+				remote: input.remote,
+				generation: input.generation,
+				capabilityDigest: input.capabilityDigest,
+				normalizedInput: input.normalizedInput,
+			}),
+		)
+		.digest("hex");
 }
 
 /**
