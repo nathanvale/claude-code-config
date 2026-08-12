@@ -398,6 +398,16 @@ implementation_attempt_checkpoint:
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T21:30:17+10:00"
 
+- 2026-08-12T21:56:38+10:00: U1 Validator wave fail-stop. None of the five
+  required always-on persona skill names is available in the Codex host skill
+  catalog: `ce-correctness-reviewer`, `ce-testing-reviewer`,
+  `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, and
+  `ce-adversarial-reviewer`. Their prompt references exist inside the
+  installed Compound Engineering bundle, but the Issue-to-PR invocation rule
+  requires callable skill names. Awaiting Nathan's decision on the documented
+  `/ce-code-review mode:report-only` fallback. No Validator packet was
+  dispatched and no findings were inferred.
+
 ## Workflow Learnings
 
 ```yaml
