@@ -542,6 +542,35 @@ implementation_attempt_checkpoint:
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T22:39:06+10:00"
 
+- 2026-08-12T22:49:02+10:00: U1 repair Validator wave completed for
+  `9ab4458b4f51704a667c61ca055ad137883b2998`. Local correctness, testing,
+  and project-standards reviewers returned no findings. Independent Anthropic
+  review proposed one P1 false-pass concern; a fresh finding validator rejected
+  it because the pre-seeded immutable claim and awaited real exclusive link
+  force `EEXIST`, while the original-state and single-claim assertions fail if
+  new publication occurs. U1-001 is fixed by the reviewed commit. U1-002 and
+  U1-003 remain open P2 findings for the separate convergence checkpoint.
+  Cross-model receipt: route `claude`; requested Opus/high; actual
+  `claude-opus-5`; effort actual unverified; receipt supported; independence
+  verified. Ledger closure awaits the separate terminal batch-convergence
+  checkpoint. Focused proof: 7 tests, 39 assertions. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260812-224301-c7c3436f/`.
+
+validator_wave_completed:
+  batch_id: "durable-task-admission"
+  implementation_commit: "9ab4458b4f51704a667c61ca055ad137883b2998"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+    - "independent-finding-validator"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "durable-task-admission@9ab4458b4f51704a667c61ca055ad137883b2998"
+    cli_route_id: "packet.validator.fallback"
+  outcome: "clean"
+  findings: []
+
 ## Workflow Learnings
 
 ```yaml
