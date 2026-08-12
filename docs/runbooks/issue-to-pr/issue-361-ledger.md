@@ -133,10 +133,26 @@ batches:
       - 2
     rationale: null
     status: in-progress
-    builder_commits: []
-    builder_attempts: []
+    builder_commits:
+      - 2104894cabb436a3c3660af7b9ae03c860acb32d
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: 2104894cabb436a3c3660af7b9ae03c860acb32d
+        files_touched:
+          - "runtime/vault-git-transaction-manager/src/task-state.ts"
+          - "runtime/vault-git-transaction-manager/src/task-store.ts"
+          - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+        route_hint: "dispatch-validator-wave"
+        blockers: []
+        probe_results:
+          - "RED proved claimOrJoin absent: 7 passed, 1 failed, 39 assertions"
+          - "GREEN task-state, task-store, and CLI proof: 25 tests, 143 assertions"
+          - "package typecheck and scoped Biome passed"
+          - "scoped coverage: task-state 100% functions and 95.83% lines; task-store 91.30% functions and 94.68% lines"
+        notes: "Builder added immutable one-way binding plus receipt-scoped claim-or-join CAS; twenty identical callers select one launch winner and six changed bindings refuse."
     orchestrator_inline_attempts: []
-    iterations: 0
+    iterations: 1
     final_verdict: null
   - id: "fenced-worker-composition"
     name: "Fenced worker composition"
@@ -609,6 +625,22 @@ validator_wave_completed:
   U1-001 closed atomically with the terminal batch using reviewed Builder
   commit `9ab4458b4f51704a667c61ca055ad137883b2998`. U1-002 and U1-003 are
   non-blocking P2 findings auto-closed as `deferred-P2` for PR follow-up.
+
+- 2026-08-12T23:08:27+10:00: U2 Builder implementation returned valid,
+  reachable commit `2104894cabb436a3c3660af7b9ae03c860acb32d`. It touches only
+  `src/task-state.ts`, `src/task-store.ts`, and `tests/task-store.test.ts`
+  inside the confirmed six-file authority. RED proved `claimOrJoin` absent;
+  GREEN proved the twenty-caller single-flight seam, six mismatch refusals,
+  capability-free one-way persistence, package typecheck, and scoped Biome.
+
+<!-- implementation-attempt-checkpoint -->
+```yaml
+implementation_attempt_checkpoint:
+  batch_id: "single-flight-join-refusal"
+  implementation_commit: "2104894cabb436a3c3660af7b9ae03c860acb32d"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-12T23:08:27+10:00"
+```
 
 ## Workflow Learnings
 
