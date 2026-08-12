@@ -2,9 +2,31 @@ import { createHash } from "node:crypto";
 
 import {
 	VAULT_GIT_TASK_PHASES,
+	VAULT_GIT_TASK_STATES,
+	VAULT_GIT_CHANGED_STATES,
+	VAULT_GIT_BLOCKER_IDS,
+	VAULT_GIT_RESULT_OUTCOMES,
+	VAULT_GIT_RETRY_SAFETIES,
+	VAULT_GIT_TRANSACTION_PHASES,
 	type VaultGitTaskState,
 	type VaultGitTaskStateInput,
+	type VaultGitTaskTerminalResult,
 } from "./model.ts";
+
+/** Mutable fields accepted by one monotonic task-state transition. */
+export interface VaultGitTaskStateAdvanceInput {
+	readonly state: VaultGitTaskState["state"];
+	readonly phase: VaultGitTaskState["phase"];
+	readonly updatedAt: string;
+	readonly heartbeatAt: string | null;
+	readonly checkpoint: VaultGitTaskState["checkpoint"];
+	readonly launchGeneration?: string | null;
+	readonly launchExpiresAt?: string | null;
+	readonly workerPid?: number | null;
+	readonly workerProcessIdentity?: string | null;
+	readonly launchAttempt?: number;
+	readonly terminalResult?: VaultGitTaskTerminalResult | null;
+}
 
 /** Immutable inputs that decide whether a completion caller may join a task. */
 export interface VaultGitTaskBindingInput {
@@ -82,9 +104,69 @@ export function createVaultGitTaskState(
 		schemaVersion: 1,
 		taskId: input.taskId,
 		receiptId: input.receiptId,
+		transactionId: input.transactionId,
+		leaseGeneration: input.leaseGeneration,
 		revision: 1,
+		state: "claimed",
 		phase: "admitted",
 		recordedAt: input.recordedAt,
+		updatedAt: input.recordedAt,
+		heartbeatAt: null,
+		checkpoint: null,
+		launchGeneration: null,
+		launchExpiresAt: null,
+		workerPid: null,
+		workerProcessIdentity: null,
+		launchAttempt: 0,
+		terminalResult: null,
+	});
+}
+
+/** Build the next monotonic task revision without granting worker authority. */
+export function advanceVaultGitTaskState(
+	previous: VaultGitTaskState,
+	input: VaultGitTaskStateAdvanceInput,
+): VaultGitTaskState {
+	if (
+		(previous.phase === "terminal" &&
+			(previous.state === "closed" || input.state !== "closed")) ||
+		(input.phase === "terminal") !== (input.terminalResult != null) ||
+		(input.phase === "admitted" &&
+			input.state !== "claimed" &&
+			input.state !== "launching") ||
+		(input.phase === "running" && input.state !== "in_progress") ||
+		(input.phase === "terminal" &&
+			!(["closed", "repair_needed", "unknown"] as const).includes(
+				input.state as never,
+			)) ||
+		Date.parse(input.updatedAt) < Date.parse(previous.updatedAt)
+	) {
+		throw new Error("task state transition invalid");
+	}
+	return parseVaultGitTaskState({
+		...previous,
+		revision: previous.revision + 1,
+		state: input.state,
+		phase: input.phase,
+		updatedAt: input.updatedAt,
+		heartbeatAt: input.heartbeatAt,
+		checkpoint: input.checkpoint,
+		launchGeneration:
+			input.launchGeneration === undefined
+				? previous.launchGeneration
+				: input.launchGeneration,
+		launchExpiresAt:
+			input.launchExpiresAt === undefined
+				? previous.launchExpiresAt
+				: input.launchExpiresAt,
+		workerPid: input.workerPid === undefined ? previous.workerPid : input.workerPid,
+		workerProcessIdentity: input.workerProcessIdentity === undefined
+			? previous.workerProcessIdentity
+			: input.workerProcessIdentity,
+		launchAttempt: input.launchAttempt === undefined
+			? previous.launchAttempt
+			: input.launchAttempt,
+		terminalResult: input.terminalResult ?? null,
 	});
 }
 
@@ -122,9 +204,21 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 		"schemaVersion",
 		"taskId",
 		"receiptId",
+		"transactionId",
+		"leaseGeneration",
 		"revision",
+		"state",
 		"phase",
 		"recordedAt",
+		"updatedAt",
+		"heartbeatAt",
+		"checkpoint",
+		"launchGeneration",
+		"launchExpiresAt",
+		"workerPid",
+		"workerProcessIdentity",
+		"launchAttempt",
+		"terminalResult",
 		"bindingDigest",
 	] as const;
 	if (
@@ -139,9 +233,21 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 		schemaVersion: record.schemaVersion,
 		taskId: record.taskId,
 		receiptId: record.receiptId,
+		transactionId: record.transactionId,
+		leaseGeneration: record.leaseGeneration,
 		revision: record.revision,
+		state: record.state,
 		phase: record.phase,
 		recordedAt: record.recordedAt,
+		updatedAt: record.updatedAt,
+		heartbeatAt: record.heartbeatAt,
+		checkpoint: record.checkpoint,
+		launchGeneration: record.launchGeneration,
+		launchExpiresAt: record.launchExpiresAt,
+		workerPid: record.workerPid,
+		workerProcessIdentity: record.workerProcessIdentity,
+		launchAttempt: record.launchAttempt,
+		terminalResult: record.terminalResult,
 	});
 	return Object.freeze({ ...state, bindingDigest: record.bindingDigest });
 }
@@ -290,9 +396,21 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		"schemaVersion",
 		"taskId",
 		"receiptId",
+		"transactionId",
+		"leaseGeneration",
 		"revision",
+		"state",
 		"phase",
 		"recordedAt",
+		"updatedAt",
+		"heartbeatAt",
+		"checkpoint",
+		"launchGeneration",
+		"launchExpiresAt",
+		"workerPid",
+		"workerProcessIdentity",
+		"launchAttempt",
+		"terminalResult",
 	] as const;
 	if (
 		typeof value !== "object" ||
@@ -310,10 +428,57 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		!/^task_[0-9a-f]{32}$/.test(record.taskId) ||
 		typeof record.receiptId !== "string" ||
 		!/^receipt_[0-9a-f]{32}$/.test(record.receiptId) ||
-		record.revision !== 1 ||
+		typeof record.transactionId !== "string" ||
+		!/^txn_[0-9a-f]{32}$/.test(record.transactionId) ||
+		typeof record.leaseGeneration !== "string" ||
+		!(/^[0-9a-f]{40}$/.test(record.leaseGeneration) ||
+			/^[0-9a-f]{64}$/.test(record.leaseGeneration)) ||
+		typeof record.revision !== "number" ||
+		!Number.isSafeInteger(record.revision) ||
+		record.revision < 1 ||
+		!VAULT_GIT_TASK_STATES.includes(record.state as never) ||
 		!VAULT_GIT_TASK_PHASES.includes(record.phase as never) ||
 		typeof record.recordedAt !== "string" ||
-		!isExactIsoTimestamp(record.recordedAt)
+		!isExactIsoTimestamp(record.recordedAt) ||
+		typeof record.updatedAt !== "string" ||
+		!isExactIsoTimestamp(record.updatedAt) ||
+		(record.heartbeatAt !== null &&
+			(typeof record.heartbeatAt !== "string" ||
+				!isExactIsoTimestamp(record.heartbeatAt))) ||
+		(record.checkpoint !== null &&
+			!VAULT_GIT_TRANSACTION_PHASES.includes(record.checkpoint as never)) ||
+		(record.launchGeneration !== null &&
+			(typeof record.launchGeneration !== "string" ||
+				!/^launch_[0-9a-f]{32}$/.test(record.launchGeneration))) ||
+		(record.launchExpiresAt !== null &&
+			(typeof record.launchExpiresAt !== "string" ||
+				!isExactIsoTimestamp(record.launchExpiresAt))) ||
+		(record.workerPid !== null &&
+			(typeof record.workerPid !== "number" ||
+				!Number.isSafeInteger(record.workerPid) ||
+				record.workerPid <= 0)) ||
+		(record.workerProcessIdentity !== null &&
+			(typeof record.workerProcessIdentity !== "string" ||
+				!/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity))) ||
+		typeof record.launchAttempt !== "number" ||
+		!Number.isSafeInteger(record.launchAttempt) ||
+		record.launchAttempt < 0 ||
+		record.launchAttempt > 2 ||
+		(record.workerPid === null) !== (record.workerProcessIdentity === null) ||
+		!isTaskTerminalResult(record.terminalResult) ||
+		(record.phase === "terminal") !== (record.terminalResult !== null) ||
+		(record.phase === "admitted" &&
+			record.state !== "claimed" &&
+			record.state !== "launching") ||
+		(record.state === "launching" &&
+			(record.launchGeneration === null || record.launchExpiresAt === null)) ||
+		(record.state === "in_progress" &&
+			(record.launchGeneration === null || record.launchExpiresAt !== null)) ||
+		(record.phase === "running" && record.state !== "in_progress") ||
+		(record.phase === "terminal" &&
+			!(["closed", "repair_needed", "unknown"] as const).includes(
+				record.state as never,
+			))
 	) {
 		throw new Error("task state invalid");
 	}
@@ -321,10 +486,46 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		schemaVersion: 1,
 		taskId: record.taskId,
 		receiptId: record.receiptId,
-		revision: 1,
-		phase: "admitted",
+		transactionId: record.transactionId,
+		leaseGeneration: record.leaseGeneration,
+		revision: record.revision,
+		state: record.state as VaultGitTaskState["state"],
+		phase: record.phase as VaultGitTaskState["phase"],
 		recordedAt: record.recordedAt,
+		updatedAt: record.updatedAt,
+		heartbeatAt: record.heartbeatAt as string | null,
+		checkpoint: record.checkpoint as VaultGitTaskState["checkpoint"],
+		launchGeneration: record.launchGeneration as string | null,
+		launchExpiresAt: record.launchExpiresAt as string | null,
+		workerPid: record.workerPid as number | null,
+		workerProcessIdentity: record.workerProcessIdentity as string | null,
+		launchAttempt: record.launchAttempt as number,
+		terminalResult:
+			record.terminalResult as VaultGitTaskTerminalResult | null,
 	});
+}
+
+function isTaskTerminalResult(value: unknown): boolean {
+	if (value === null) return true;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		Object.keys(record).length === 5 &&
+		Object.hasOwn(record, "outcome") &&
+		Object.hasOwn(record, "phase") &&
+		Object.hasOwn(record, "changedState") &&
+		Object.hasOwn(record, "blocker") &&
+		Object.hasOwn(record, "retrySafety") &&
+		VAULT_GIT_RESULT_OUTCOMES.includes(record.outcome as never) &&
+		VAULT_GIT_TRANSACTION_PHASES.includes(record.phase as never) &&
+		VAULT_GIT_CHANGED_STATES.includes(record.changedState as never) &&
+		(record.blocker === null ||
+			(typeof record.blocker === "string" &&
+				VAULT_GIT_BLOCKER_IDS.includes(record.blocker as never))) &&
+		VAULT_GIT_RETRY_SAFETIES.includes(record.retrySafety as never)
+	);
 }
 
 function isExactIsoTimestamp(value: string): boolean {

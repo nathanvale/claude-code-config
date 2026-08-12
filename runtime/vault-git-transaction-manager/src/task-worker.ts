@@ -38,6 +38,10 @@ export interface VaultGitTaskWorkerOptions {
 	) => Promise<VaultGitTaskWorkerAcknowledgementResult>;
 	/** Existing inherited-descriptor capability custody adapter. */
 	readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
+	/** Start observational progress only after the exact durable acknowledgement. */
+	readonly onAcknowledged?: (
+		acknowledgement: VaultGitTaskWorkerAcknowledgementInput,
+	) => void;
 	/** Injected acknowledgement clock. */
 	readonly now?: () => Date;
 }
@@ -91,6 +95,7 @@ export function createVaultGitTaskWorker(
 			) {
 				throw new Error("task worker acknowledgement mismatch");
 			}
+			options.onAcknowledged?.(acknowledgement);
 			const capability = await readCapability(input.capabilityDescriptor);
 			const result = await options.engine.complete({
 				transactionId: input.transactionId,

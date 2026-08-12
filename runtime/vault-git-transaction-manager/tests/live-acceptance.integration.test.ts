@@ -429,7 +429,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			data: {
 				outcome: "refused",
 				transaction_id: transactionId,
-				task_state: "repair_needed",
+				task_state: "launching",
 				next_action: { id: "run_doctor" },
 			},
 		});

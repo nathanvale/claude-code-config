@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
 	createVaultGitCliComposition,
+	projectVaultGitBackgroundWorkerEnvironment,
 	runVaultGitForTest,
 	type VaultGitCliComposition,
 } from "../src/cli.ts";
@@ -37,6 +38,23 @@ const ACTIVATION_EVIDENCE_REFERENCE =
 afterEach(tempDirectories.cleanup);
 
 describe("vault-git CLI composition", () => {
+	test("scrubs ambient authority before detached worker launch", () => {
+		expect(
+			projectVaultGitBackgroundWorkerEnvironment({
+				HOME: "/profile",
+				PATH: "/bin",
+				VAULT_GIT_REPOSITORY_PATH: "/vault",
+				AWS_SECRET_ACCESS_KEY: "must-not-cross",
+				BITBUCKET_API_TOKEN: "must-not-cross",
+				VAULT_GIT_TASK_ID: "hostile-parent-task",
+			}),
+		).toEqual({
+			HOME: "/profile",
+			PATH: "/bin",
+			VAULT_GIT_REPOSITORY_PATH: "/vault",
+		});
+	});
+
 	test("derives the private-store identity from the configured checkout", async () => {
 		const repositoryPath = await temp("vault-git-composition-identity-");
 		const initialized = spawnSync(
@@ -487,6 +505,69 @@ describe("vault-git CLI composition", () => {
 			command: "doctor",
 			outcome: "read_only",
 			changed_state: "none",
+		});
+	});
+
+	test("reports an unknown task locally with one cause-specific action", async () => {
+		const base = fakeComposition(fakeEngine());
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: {
+				repositoryId: "task-store-fixture",
+				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
+				claimPath: () => "/private/claims/receipt",
+				async admit() { throw new Error("admit not expected"); },
+				async claimOrJoin() { throw new Error("claim not expected"); },
+				async load() { return { status: "absent" }; },
+				async loadByTaskId() { return { status: "absent" }; },
+				async transition() { throw new Error("transition not expected"); },
+			},
+		};
+		const taskId = "task_11111111111111111111111111111111";
+		const run = await runVaultGitForTest(["status", "--task-id", taskId, "--json"], {
+			composition,
+			launchPrivate: false,
+		});
+		const envelope = JSON.parse(run.stdout);
+
+		expect(run.exitCode).toBe(1);
+		expect(envelope.data).toMatchObject({
+			command: "status",
+			blockers: ["task_not_found"],
+			task_id: taskId,
+			next_action: { id: "change_input" },
+		});
+		expect(envelope.runtime_actions).toHaveLength(1);
+		expect(run.stderr).toBe("");
+	});
+
+	test("fails closed when selected task state is corrupt", async () => {
+		const base = fakeComposition(fakeEngine());
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: {
+				repositoryId: "a".repeat(64),
+				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
+				claimPath() { return "/private/claim"; },
+				async admit() { throw new Error("admit not expected"); },
+				async claimOrJoin() { throw new Error("claim not expected"); },
+				async load() { return { status: "absent" }; },
+				async loadByTaskId() { return { status: "corrupt", reason: "malformed" }; },
+				async transition() { throw new Error("transition not expected"); },
+			},
+		};
+		const taskId = "task_22222222222222222222222222222222";
+		const run = await runVaultGitForTest(["status", "--task-id", taskId, "--json"], {
+			composition,
+			launchPrivate: false,
+		});
+		const envelope = JSON.parse(run.stdout);
+
+		expect(run.exitCode).toBe(1);
+		expect(envelope.data).toMatchObject({
+			blockers: ["receipt_corrupt"],
+			task_id: taskId,
+			next_action: { id: "inspect_private_receipt" },
 		});
 	});
 

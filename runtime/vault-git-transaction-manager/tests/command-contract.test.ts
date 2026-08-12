@@ -701,6 +701,8 @@ function argvForFlag(
 			return [...argv, flag, "docs(vault): record example"];
 		case "--transaction-id":
 			return [...argv, flag, "txn_00000000000000000000000000000000"];
+		case "--task-id":
+			return [...argv, flag, "task_00000000000000000000000000000000"];
 		default:
 			return [...argv, flag];
 	}

@@ -165,6 +165,12 @@ const transactionIdFlag = {
 		description: "Select the public transaction correlation id.",
 	},
 } as const;
+const taskIdFlag = {
+	"--task-id": {
+		type: "string",
+		description: "Select one opaque background-completion task.",
+	},
+} as const;
 const capabilityFdFlag = {
 	"--capability-fd": {
 		type: "string",
@@ -186,7 +192,7 @@ const expectedFlags = {
 		"--capability-fd",
 		"--summary",
 	],
-	status: ["--json"],
+	status: ["--json", "--task-id"],
 	activation: ["--json", "--no-input"],
 	preview: ["--json", "--transaction-id"],
 	doctor: ["--json", "--transaction-id"],
@@ -348,7 +354,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	status: {
 		script: "vault-git",
 		summary: "Show bounded read-only transaction state with exactly one next safe action.",
-		usage: [`vault-git status [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git status [--task-id <id>] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
 		mutation: "read",
@@ -359,7 +365,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		interactivity: "none",
 		resultContract: lifecycleResultContract,
 		actionAffordances,
-		flags: jsonFlag,
+		flags: { ...jsonFlag, ...taskIdFlag },
 		exitCodes: vaultGitExitCodes,
 	},
 	activation: {
@@ -523,6 +529,8 @@ export interface ParsedVaultGitInvocation {
 	readonly noInput: boolean;
 	/** Optional non-secret transaction id. */
 	readonly transactionId?: string;
+	/** Optional opaque background task selector. */
+	readonly taskId?: string;
 	/** Optional inherited capability descriptor. */
 	readonly capabilityFd?: number;
 	/** Optional meaningful event type. */
@@ -570,6 +578,7 @@ export function parseVaultGitInvocation(
 	let json = false;
 	let noInput = false;
 	let transactionId: string | undefined;
+	let taskId: string | undefined;
 	let capabilityFd: number | undefined;
 	let event: VaultGitEventType | undefined;
 	let summary: string | undefined;
@@ -628,6 +637,12 @@ export function parseVaultGitInvocation(
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
 				transactionId = parsed;
+				break;
+			}
+			case "--task-id": {
+				const parsed = inlineValue ?? requireValue(argv, index, flag);
+				if (inlineValue === undefined) index += 1;
+				taskId = parsed;
 				break;
 			}
 			case "--capability-fd": {
@@ -694,6 +709,7 @@ export function parseVaultGitInvocation(
 		priorWriterStopped,
 		paths,
 		...(transactionId === undefined ? {} : { transactionId }),
+		...(taskId === undefined ? {} : { taskId }),
 		...(capabilityFd === undefined ? {} : { capabilityFd }),
 		...(event === undefined ? {} : { event }),
 		...(summary === undefined ? {} : { summary }),

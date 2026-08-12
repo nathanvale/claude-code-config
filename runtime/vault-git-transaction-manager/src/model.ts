@@ -377,8 +377,26 @@ export interface VaultGitReceipt {
 	readonly diagnosticsReference: string;
 }
 
-/** Durable phases available before a background worker is launched. */
-export const VAULT_GIT_TASK_PHASES = ["admitted"] as const;
+/** Public lifecycle states for one durable background-completion task. */
+export const VAULT_GIT_TASK_STATES = [
+	"claimed",
+	"launching",
+	"in_progress",
+	"closed",
+	"repair_needed",
+	"unknown",
+] as const;
+
+/** Durable phases of one background-completion task. */
+export const VAULT_GIT_TASK_PHASES = [
+	"admitted",
+	"running",
+	"terminal",
+] as const;
+
+/** One public task lifecycle state. */
+export type VaultGitTaskLifecycleState =
+	(typeof VAULT_GIT_TASK_STATES)[number];
 
 /** One durable background-completion task phase. */
 export type VaultGitTaskPhase = (typeof VAULT_GIT_TASK_PHASES)[number];
@@ -389,8 +407,21 @@ export interface VaultGitTaskStateInput {
 	readonly taskId: string;
 	/** Receipt whose exclusive completion claim owns the task. */
 	readonly receiptId: string;
+	/** Public transaction correlation selected by the task. */
+	readonly transactionId: string;
+	/** Exact lease generation bound by admission. */
+	readonly leaseGeneration: string;
 	/** Injected ISO timestamp for deterministic state. */
 	readonly recordedAt: string;
+}
+
+/** Bounded engine result retained by a terminal task revision. */
+export interface VaultGitTaskTerminalResult {
+	readonly outcome: VaultGitResultOutcome;
+	readonly phase: VaultGitTransactionPhase;
+	readonly changedState: VaultGitChangedState;
+	readonly blocker: VaultGitBlockerId | null;
+	readonly retrySafety: VaultGitRetrySafety;
 }
 
 /** Capability-free immutable state for one admitted background task. */
@@ -401,12 +432,36 @@ export interface VaultGitTaskState {
 	readonly taskId: string;
 	/** Receipt whose exclusive completion claim owns the task. */
 	readonly receiptId: string;
+	/** Public transaction correlation selected by the task. */
+	readonly transactionId: string;
+	/** Exact lease generation bound by admission. */
+	readonly leaseGeneration: string;
 	/** Monotonic compare-and-set revision. */
-	readonly revision: 1;
+	readonly revision: number;
+	/** Public task lifecycle state. */
+	readonly state: VaultGitTaskLifecycleState;
 	/** Durable task phase. */
 	readonly phase: VaultGitTaskPhase;
-	/** Injected ISO timestamp. */
+	/** Injected task admission timestamp. */
 	readonly recordedAt: string;
+	/** Timestamp of this durable revision. */
+	readonly updatedAt: string;
+	/** Observational worker liveness sample; never authority. */
+	readonly heartbeatAt: string | null;
+	/** Last engine-owned transaction phase observed by the task. */
+	readonly checkpoint: VaultGitTransactionPhase | null;
+	/** Exact launch-attempt fence, never authority beyond acknowledgement. */
+	readonly launchGeneration: string | null;
+	/** Expiry of an unacknowledged launch attempt; null after acknowledgement. */
+	readonly launchExpiresAt: string | null;
+	/** Private OS process correlation; observational only, never authority. */
+	readonly workerPid: number | null;
+	/** Digest of OS process identity used to reject PID reuse. */
+	readonly workerProcessIdentity: string | null;
+	/** Bounded launch count. One initial launch and one recovery launch maximum. */
+	readonly launchAttempt: number;
+	/** Bounded result present only for a terminal task phase. */
+	readonly terminalResult: VaultGitTaskTerminalResult | null;
 }
 
 /**
@@ -478,6 +533,11 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"activation_blocked",
 	"vault_unconfigured",
 	"remote_unavailable",
+	"task_not_found",
+	"task_input_mismatch",
+	"worker_launch_failed",
+	"worker_launch_protocol_failed",
+	"worker_lost",
 	"main_behind",
 	"main_ahead",
 	"main_diverged",
@@ -746,6 +806,24 @@ export interface VaultGitLifecycleResultPayload {
 	readonly blockers: readonly VaultGitBlockerId[];
 	/** Public transaction correlation when one exists. */
 	readonly transaction_id?: string;
+	/** Selected opaque background-task correlation. */
+	readonly task_id?: string;
+	/** Exact lease generation bound by the selected task. */
+	readonly lease_generation?: string;
+	/** Selected task lifecycle state. */
+	readonly task_state?: VaultGitTaskLifecycleState;
+	/** Selected task lifecycle phase. */
+	readonly task_phase?: VaultGitTaskPhase;
+	/** Latest observational heartbeat timestamp. */
+	readonly task_heartbeat_at?: string | null;
+	/** Last durably observed engine checkpoint. */
+	readonly task_checkpoint?: VaultGitTransactionPhase | null;
+	/** Milliseconds elapsed since durable task admission. */
+	readonly task_elapsed_ms?: number;
+	/** Bounded terminal engine result, null while non-terminal. */
+	readonly task_terminal_result?: VaultGitTaskTerminalResult | null;
+	/** Whether foreground work outside this vault transaction may continue. */
+	readonly foreground_non_vault_work_allowed?: boolean;
 	/** Read-side transaction state when classification produced one. */
 	readonly transaction_state?: VaultGitTransactionState;
 	/** Exact doctor-admitted repair action when one exists. */

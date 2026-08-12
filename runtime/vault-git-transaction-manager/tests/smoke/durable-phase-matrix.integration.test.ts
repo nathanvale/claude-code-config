@@ -17,6 +17,35 @@ setDefaultTimeout(180_000);
 
 afterEach(cleanupSmokeFixtures);
 
+async function waitForTerminalTask(
+	fixture: Awaited<ReturnType<typeof mkSmokeFixture>>,
+	accepted: Awaited<ReturnType<Awaited<ReturnType<typeof mkSmokeFixture>>["run"]>>,
+) {
+	const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(accepted).data
+		?.task_id;
+	let status = await fixture.run([
+		"status",
+		"--task-id",
+		taskId ?? "task_missing",
+		"--json",
+	]);
+	for (let attempt = 0; attempt < 500; attempt += 1) {
+		const state = parseCliProcessJson<{ data?: { task_state?: string } }>(status)
+			.data?.task_state;
+		if (state === "closed" || state === "repair_needed" || state === "unknown") {
+			return status;
+		}
+		await Bun.sleep(10);
+		status = await fixture.run([
+			"status",
+			"--task-id",
+			taskId ?? "task_missing",
+			"--json",
+		]);
+	}
+	throw new Error("task did not reach a terminal state");
+}
+
 describe("AE5: every persisted phase has one safe continuation", () => {
 	test("intent_durable resumes after a real process kill before remote CAS", async () => {
 		const fixture = await mkSmokeFixture();
@@ -323,7 +352,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		await writeFile(join(fixture.clone, "notes/event.md"), "repairable bytes\n");
 		const before = fixture.snapshot();
 
-		const refused = await fixture.run([
+		const accepted = await fixture.run([
 			"complete",
 			"--transaction-id",
 			transactionId,
@@ -331,12 +360,19 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			"docs(vault): preserve failed check",
 			"--json",
 		]);
-		expect(refused.exitCode).toBe(1);
-		expect(parseCliProcessJson(refused)).toMatchObject({
-			status: "error",
-			error: { code: "vault_check_failed" },
-			data: { phase: "repairable", changed_state: "local" },
-			continuation: { next_action_id: "run_repair" },
+		expect(accepted.exitCode).toBe(0);
+		const repairableTask = await waitForTerminalTask(fixture, accepted);
+		expect(parseCliProcessJson(repairableTask)).toMatchObject({
+			status: "ok",
+			data: {
+				task_state: "repair_needed",
+				task_checkpoint: "repairable",
+				task_terminal_result: {
+					blocker: "vault_check_failed",
+					changedState: "local",
+				},
+			},
+			continuation: { next_action_id: "run_doctor" },
 		});
 		assertRefsUnchanged(before, fixture.snapshot());
 		assertLedgerState(fixture, "held");
@@ -379,7 +415,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		await writeFile(join(fixture.clone, "notes/event.md"), "partial close bytes\n");
 		const before = fixture.snapshot();
 
-		const refused = await fixture.run([
+		const accepted = await fixture.run([
 			"complete",
 			"--transaction-id",
 			transactionId,
@@ -387,16 +423,20 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			"docs(vault): preserve partial publication",
 			"--json",
 		]);
-		expect(refused.exitCode).toBe(1);
-		expect(parseCliProcessJson(refused)).toMatchObject({
-			status: "error",
-			error: { code: "host_contract_breach" },
+		expect(accepted.exitCode).toBe(0);
+		const humanRequiredTask = await waitForTerminalTask(fixture, accepted);
+		expect(parseCliProcessJson(humanRequiredTask)).toMatchObject({
+			status: "ok",
 			data: {
-				phase: "human_required",
-				changed_state: "partial",
-				retry_safety: "operator_required",
+				task_state: "unknown",
+				task_checkpoint: "human_required",
+				task_terminal_result: {
+					blocker: "host_contract_breach",
+					changedState: "partial",
+					retrySafety: "operator_required",
+				},
 			},
-			continuation: { next_action_id: "request_operator_review" },
+			continuation: { next_action_id: "run_doctor" },
 		});
 		const after = fixture.snapshot();
 		expect(after.localMain).not.toBe(before.localMain);
@@ -492,7 +532,13 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		expect(completed.exitCode).toBe(0);
 		expect(parseCliProcessJson(completed)).toMatchObject({
 			status: "ok",
-			data: { outcome: "completed", phase: "closed" },
+			data: { outcome: "advanced", task_state: "in_progress" },
+			continuation: { next_action_id: "inspect_status" },
+		});
+		const terminal = await waitForTerminalTask(fixture, completed);
+		expect(parseCliProcessJson(terminal)).toMatchObject({
+			status: "ok",
+			data: { outcome: "completed", phase: "closed", task_state: "closed" },
 			continuation: { next_action_id: "none" },
 		});
 		const after = fixture.snapshot();

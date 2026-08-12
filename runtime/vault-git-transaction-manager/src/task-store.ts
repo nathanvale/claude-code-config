@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -9,12 +9,14 @@ import {
 	type VaultGitDurabilityPort,
 } from "./store.ts";
 import {
+	advanceVaultGitTaskState,
 	createVaultGitTaskClaim,
 	createVaultGitTaskState,
 	parseVaultGitTaskClaim,
 	parseVaultGitTaskState,
 	type VaultGitTaskBindingInput,
 	type VaultGitTaskClaim,
+	type VaultGitTaskStateAdvanceInput,
 } from "./task-state.ts";
 
 /** Construction options for one repository-scoped private task store. */
@@ -22,131 +24,102 @@ export interface VaultGitTaskStoreOptions {
 	/** Injected XDG state root. */
 	readonly stateRoot: string;
 	/** Stable, non-secret canonical repository identity. */
-	readonly repositoryIdentity: string;
+	readonly repositoryIdentity?: string;
+	/** Exact repository namespace already selected by the receipt store. */
+	readonly repositoryId?: string;
 	/** Load-bearing durability operations. @defaultValue node syscall port */
 	readonly durability?: VaultGitDurabilityPort;
 }
 
 /** Receipt-scoped input for one background task admission. */
 export interface VaultGitTaskAdmissionInput {
-	/** Receipt that may own at most one admitted background task. */
 	readonly receiptId: string;
-	/** Injected ISO timestamp retained only when this admission wins. */
+	readonly transactionId: string;
+	readonly leaseGeneration: string;
 	readonly recordedAt: string;
 }
 
 /** Exact receipt-selected caller binding for one completion task. */
 export interface VaultGitTaskClaimOrJoinInput extends VaultGitTaskBindingInput {
-	/** Trusted receipt selector that owns the immutable claim path. */
 	readonly claimReceiptId: string;
-	/** Injected ISO timestamp retained only when this caller wins. */
 	readonly recordedAt: string;
 }
 
 /** Observable result of one compare-and-set task admission. */
 export interface VaultGitTaskAdmission {
-	/** Whether this caller created the claim or joined the stored winner. */
 	readonly status: "created" | "existing";
-	/** Immutable task state selected by the receipt claim. */
 	readonly state: VaultGitTaskState;
 }
 
 /** Observable single-flight decision for one completion task caller. */
 export type VaultGitTaskClaimOrJoinResult =
-	| {
-			readonly status: "created";
-			readonly launch: "winner";
-			readonly state: VaultGitTaskState;
-	  }
-	| {
-			readonly status: "existing";
-			readonly launch: "joined";
-			readonly state: VaultGitTaskState;
-	  }
-	| {
-			readonly status: "refused";
-			readonly launch: "refused";
-			readonly reason: "task_input_mismatch";
-	  };
+	| { readonly status: "created"; readonly launch: "winner"; readonly state: VaultGitTaskState }
+	| { readonly status: "existing"; readonly launch: "joined"; readonly state: VaultGitTaskState }
+	| { readonly status: "refused"; readonly launch: "refused"; readonly reason: "task_input_mismatch" };
 
-/** Fail-closed read result for one receipt-scoped task claim. */
+/** Fail-closed read result for one task. */
 export type VaultGitTaskLoadResult =
 	| { readonly status: "absent" }
 	| { readonly status: "loaded"; readonly state: VaultGitTaskState }
 	| { readonly status: "corrupt"; readonly reason: string };
 
+/** Compare-and-set outcome for one durable task transition. */
+export type VaultGitTaskTransitionResult =
+	| { readonly status: "transitioned"; readonly state: VaultGitTaskState }
+	| { readonly status: "stale"; readonly state: VaultGitTaskState };
+
 /** Private compare-and-set store for receipt-scoped background tasks. */
 export interface VaultGitTaskStore {
-	/** Stable repository identity digest shared with the receipt store. */
 	readonly repositoryId: string;
-	/** Private paths exposed for inspection and adapter tests. */
 	readonly paths: {
 		readonly repositoryRoot: string;
 		readonly claims: string;
+		readonly tasks: string;
 	};
-	/** Resolve the private immutable claim path for one receipt. */
 	claimPath(receiptId: string): string;
-	/** Atomically create or load the one task claimed by a receipt. */
 	admit(input: VaultGitTaskAdmissionInput): Promise<VaultGitTaskAdmission>;
-	/** Select one launch winner or join only an exactly bound task claim. */
-	claimOrJoin(
-		input: VaultGitTaskClaimOrJoinInput,
-	): Promise<VaultGitTaskClaimOrJoinResult>;
-	/** Load the task claimed by one receipt without changing it. */
+	claimOrJoin(input: VaultGitTaskClaimOrJoinInput): Promise<VaultGitTaskClaimOrJoinResult>;
 	load(receiptId: string): Promise<VaultGitTaskLoadResult>;
+	loadByTaskId(taskId: string): Promise<VaultGitTaskLoadResult>;
+	transition(
+		taskId: string,
+		expectedRevision: number,
+		input: VaultGitTaskStateAdvanceInput,
+	): Promise<VaultGitTaskTransitionResult>;
 }
 
 /**
- * Create one private task store whose claim file is the initial task state.
+ * Create one private task store with receipt-scoped claims and append-only task revisions.
  *
- * Publishing the state itself with link-based compare-and-set avoids a split
- * claim/state transaction: concurrent callers observe one complete immutable
- * record and one independently generated opaque task id.
- *
- * @param options - Injected private state root and repository identity
- * @returns Receipt-scoped task admission and read operations
- * @throws {Error} When private storage or durable publication is unavailable
- *
- * @example
- * ```typescript
- * const store = createVaultGitTaskStore({
- *   stateRoot: "/home/agent/.local/state",
- *   repositoryIdentity: "vault@example",
- * })
- * const admission = await store.admit({
- *   receiptId: "receipt_22222222222222222222222222222222",
- *   recordedAt: "2026-08-12T11:45:00.000Z",
- * })
- * ```
+ * @param options - Private state root, repository identity, and durability adapter
+ * @returns Atomic claim, lookup, and revision-CAS operations
+ * @throws {Error} When private storage cannot be validated or published durably
  */
-export function createVaultGitTaskStore(
-	options: VaultGitTaskStoreOptions,
-): VaultGitTaskStore {
-	if (options.stateRoot.length === 0 || options.repositoryIdentity.length === 0) {
-		throw new Error("state root and repository identity must not be empty");
+export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): VaultGitTaskStore {
+	if (
+		options.stateRoot.length === 0 ||
+		(options.repositoryIdentity === undefined) === (options.repositoryId === undefined)
+	) {
+		throw new Error("state root and exactly one repository identity must be provided");
 	}
-	const repositoryId = createHash("sha256")
-		.update(options.repositoryIdentity)
+	const repositoryId = options.repositoryId ?? createHash("sha256")
+		.update(options.repositoryIdentity as string)
 		.digest("hex");
+	if (!/^[a-f0-9]{64}$/u.test(repositoryId)) {
+		throw new Error("repository id must be a lowercase SHA-256 digest");
+	}
 	const managerRoot = join(options.stateRoot, "vault-git-transaction-manager");
 	const repositoryRoot = join(managerRoot, repositoryId);
 	const paths = {
 		repositoryRoot,
 		claims: join(repositoryRoot, "task-claims"),
+		tasks: join(repositoryRoot, "tasks"),
 	} as const;
 	const durability = options.durability ?? createNodeVaultGitDurabilityPort();
 
 	async function prepare(): Promise<void> {
-		for (const path of [managerRoot, repositoryRoot, paths.claims]) {
-			await mkdir(path, { recursive: true, mode: 0o700 });
-			const metadata = await lstat(path);
-			if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-				throw new Error("private task state path is not a directory");
-			}
-			await chmod(path, 0o700);
-			if (((await lstat(path)).mode & 0o777) !== 0o700) {
-				throw new Error("private task state directory permissions unavailable");
-			}
+		for (const path of [managerRoot, repositoryRoot, paths.claims, paths.tasks]) {
+			await preparePrivateDirectory(path);
 		}
 	}
 
@@ -155,51 +128,94 @@ export function createVaultGitTaskStore(
 		return join(paths.claims, `${receiptId}.json`);
 	}
 
-	type StoredTaskClaim = {
-		readonly state: VaultGitTaskState;
-		readonly bindingDigest: string | null;
-	};
+	function taskRoot(taskId: string): string {
+		assertTaskId(taskId);
+		return join(paths.tasks, taskId);
+	}
 
-	async function loadClaim(
-		receiptId: string,
-	): Promise<
+	function taskHistory(taskId: string): string {
+		return join(taskRoot(taskId), "history");
+	}
+
+	function taskCurrent(taskId: string): string {
+		return join(taskRoot(taskId), "current.json");
+	}
+
+	async function prepareTask(taskId: string): Promise<void> {
+		await prepare();
+		await preparePrivateDirectory(taskRoot(taskId));
+		await preparePrivateDirectory(taskHistory(taskId));
+	}
+
+	async function loadClaim(receiptId: string): Promise<
 		| { readonly status: "absent" }
-		| { readonly status: "loaded"; readonly claim: StoredTaskClaim }
+		| { readonly status: "loaded"; readonly claim: VaultGitTaskClaim }
 		| { readonly status: "corrupt"; readonly reason: string }
 	> {
 		let source: string;
 		try {
-			source = await readPrivateTaskState(claimPath(receiptId));
+			source = await readPrivateFile(claimPath(receiptId));
 		} catch (error) {
 			if (isMissing(error)) return { status: "absent" };
 			return { status: "corrupt", reason: "task claim unreadable" };
 		}
 		try {
-			const value: unknown = JSON.parse(source);
-			let claim: StoredTaskClaim;
-			try {
-				const bound = parseVaultGitTaskClaim(value);
-				claim = {
-					state: taskStateFromClaim(bound),
-					bindingDigest: bound.bindingDigest,
-				};
-			} catch {
-				claim = { state: parseVaultGitTaskState(value), bindingDigest: null };
-			}
-			const { state } = claim;
-			if (state.receiptId !== receiptId) {
-				return { status: "corrupt", reason: "task claim receipt mismatch" };
-			}
-			return { status: "loaded", claim };
+			const claim = parseVaultGitTaskClaim(JSON.parse(source));
+			return claim.receiptId === receiptId
+				? { status: "loaded", claim }
+				: { status: "corrupt", reason: "task claim receipt mismatch" };
 		} catch {
 			return { status: "corrupt", reason: "task claim malformed" };
 		}
 	}
 
+	async function ensureInitialState(state: VaultGitTaskState): Promise<void> {
+		await prepareTask(state.taskId);
+		const created = await publishExclusiveJson(
+			revisionPath(taskHistory(state.taskId), state.revision),
+			state,
+			durability,
+		);
+		if (created) await replaceJson(taskCurrent(state.taskId), state, durability);
+	}
+
+	async function loadByTaskId(taskId: string): Promise<VaultGitTaskLoadResult> {
+		assertTaskId(taskId);
+		let names: string[];
+		try {
+			const rootMetadata = await lstat(taskRoot(taskId));
+			const historyMetadata = await lstat(taskHistory(taskId));
+			if (
+				!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink() ||
+				!historyMetadata.isDirectory() || historyMetadata.isSymbolicLink()
+			) return { status: "corrupt", reason: "task state directory invalid" };
+			names = (await readdir(taskHistory(taskId)))
+				.filter((name) => /^\d{12}\.json$/.test(name))
+				.sort();
+		} catch (error) {
+			if (isMissing(error)) return { status: "absent" };
+			return { status: "corrupt", reason: "task state unreadable" };
+		}
+		const latest = names.at(-1);
+		if (!latest) return { status: "corrupt", reason: "task history empty" };
+		try {
+			const state = parseVaultGitTaskState(
+				JSON.parse(await readPrivateFile(join(taskHistory(taskId), latest))),
+			);
+			return state.taskId === taskId
+				? { status: "loaded", state }
+				: { status: "corrupt", reason: "task state id mismatch" };
+		} catch {
+			return { status: "corrupt", reason: "task state malformed" };
+		}
+	}
+
 	async function load(receiptId: string): Promise<VaultGitTaskLoadResult> {
-		const loaded = await loadClaim(receiptId);
-		return loaded.status === "loaded"
-			? { status: "loaded", state: loaded.claim.state }
+		const claim = await loadClaim(receiptId);
+		if (claim.status !== "loaded") return claim;
+		const loaded = await loadByTaskId(claim.claim.taskId);
+		return loaded.status === "absent"
+			? { status: "loaded", state: taskStateFromClaim(claim.claim) }
 			: loaded;
 	}
 
@@ -208,89 +224,101 @@ export function createVaultGitTaskStore(
 		paths,
 		claimPath,
 		load,
+		loadByTaskId,
+		async transition(taskId, expectedRevision, input) {
+			await prepareTask(taskId);
+			const loaded = await loadByTaskId(taskId);
+			if (loaded.status !== "loaded") throw new Error(`task state unavailable: ${loaded.status}`);
+			if (loaded.state.revision !== expectedRevision) return { status: "stale", state: loaded.state };
+			const next = advanceVaultGitTaskState(loaded.state, input);
+			const created = await publishExclusiveJson(
+				revisionPath(taskHistory(taskId), next.revision),
+				next,
+				durability,
+			);
+			if (!created) {
+				const current = await loadByTaskId(taskId);
+				if (current.status !== "loaded") throw new Error("task CAS winner unavailable");
+				return { status: "stale", state: current.state };
+			}
+			await replaceJson(taskCurrent(taskId), next, durability);
+			return { status: "transitioned", state: next };
+		},
 		async claimOrJoin(input) {
 			assertReceiptId(input.claimReceiptId);
 			assertReceiptId(input.receiptId);
 			if (input.claimReceiptId !== input.receiptId) {
-				return {
-					status: "refused",
-					launch: "refused",
-					reason: "task_input_mismatch",
-				};
+				return { status: "refused", launch: "refused", reason: "task_input_mismatch" };
 			}
 			await prepare();
 			const state = createVaultGitTaskState({
 				taskId: `task_${randomUUID().replaceAll("-", "")}`,
 				receiptId: input.receiptId,
+				transactionId: input.transactionId,
+				leaseGeneration: input.generation,
 				recordedAt: input.recordedAt,
 			});
 			const claim = createVaultGitTaskClaim(state, input);
-			const created = await publishTaskClaim(
-				claimPath(input.claimReceiptId),
-				claim,
-				durability,
-			);
-			if (created) return { status: "created", launch: "winner", state };
-			const existing = await loadClaim(input.claimReceiptId);
-			if (existing.status !== "loaded") {
-				throw new Error(`existing task claim unavailable: ${existing.status}`);
+			const created = await publishExclusiveJson(claimPath(input.claimReceiptId), claim, durability);
+			if (created) {
+				await ensureInitialState(state);
+				return { status: "created", launch: "winner", state };
 			}
-			return existing.claim.bindingDigest === claim.bindingDigest
-				? {
-						status: "existing",
-						launch: "joined",
-						state: existing.claim.state,
-					}
-				: {
-						status: "refused",
-						launch: "refused",
-						reason: "task_input_mismatch",
-					};
+			const existing = await loadClaim(input.claimReceiptId);
+			if (existing.status !== "loaded") throw new Error(`existing task claim unavailable: ${existing.status}`);
+			if (existing.claim.bindingDigest !== claim.bindingDigest) {
+				return { status: "refused", launch: "refused", reason: "task_input_mismatch" };
+			}
+			await ensureInitialState(taskStateFromClaim(existing.claim));
+			const latest = await loadByTaskId(existing.claim.taskId);
+			if (latest.status !== "loaded") throw new Error("existing task state unavailable");
+			return { status: "existing", launch: "joined", state: latest.state };
 		},
 		async admit(input) {
-			await prepare();
-			const state = createVaultGitTaskState({
-				taskId: `task_${randomUUID().replaceAll("-", "")}`,
+			const binding: VaultGitTaskClaimOrJoinInput = {
+				claimReceiptId: input.receiptId,
 				receiptId: input.receiptId,
+				transactionId: input.transactionId,
+				remote: "admission",
+				generation: input.leaseGeneration,
+				capabilityDigest: "0".repeat(64),
+				normalizedInput: "admission",
 				recordedAt: input.recordedAt,
-			});
-			const created = await publishTaskClaim(
-				claimPath(input.receiptId),
-				state,
-				durability,
-			);
-			if (created) return { status: "created", state };
-			const existing = await load(input.receiptId);
-			if (existing.status !== "loaded") {
-				throw new Error(`existing task claim unavailable: ${existing.status}`);
-			}
-			return { status: "existing", state: existing.state };
+			};
+			const result = await this.claimOrJoin(binding);
+			if (result.status === "refused") throw new Error("task admission binding mismatch");
+			return { status: result.status, state: result.state };
 		},
 	};
 }
 
-async function publishTaskClaim(
+async function preparePrivateDirectory(path: string): Promise<void> {
+	await mkdir(path, { recursive: true, mode: 0o700 });
+	const metadata = await lstat(path);
+	if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("private task state path is not a directory");
+	await chmod(path, 0o700);
+	if (((await lstat(path)).mode & 0o777) !== 0o700) throw new Error("private task state directory permissions unavailable");
+}
+
+async function publishExclusiveJson(
 	path: string,
-	state: VaultGitTaskState | VaultGitTaskClaim,
+	value: unknown,
 	durability: VaultGitDurabilityPort,
 ): Promise<boolean> {
-	const bytes = new TextEncoder().encode(`${JSON.stringify(state)}\n`);
 	const temporary = `${path}.tmp-${randomUUID()}`;
 	let handle: FileHandle | undefined;
 	try {
 		handle = await open(temporary, "wx", 0o600);
-		await durability.writeTemp(handle, bytes, "task_claim");
+		await durability.writeTemp(handle, new TextEncoder().encode(`${JSON.stringify(value)}\n`), "task_claim");
 		await durability.syncFile(handle, "task_claim");
 		await handle.close();
 		handle = undefined;
 		try {
 			await durability.linkExclusive(temporary, path, "task_claim");
 		} catch (error) {
-			if (isExists(error)) {
-				await durability.syncDirectory(join(path, ".."), "task_claim");
-				return false;
-			}
-			throw error;
+			if (!isExists(error)) throw error;
+			await durability.syncDirectory(join(path, ".."), "task_claim");
+			return false;
 		}
 		await durability.syncDirectory(join(path, ".."), "task_claim");
 		return true;
@@ -302,33 +330,48 @@ async function publishTaskClaim(
 	}
 }
 
-function taskStateFromClaim(claim: VaultGitTaskClaim): VaultGitTaskState {
-	return parseVaultGitTaskState({
-		schemaVersion: claim.schemaVersion,
-		taskId: claim.taskId,
-		receiptId: claim.receiptId,
-		revision: claim.revision,
-		phase: claim.phase,
-		recordedAt: claim.recordedAt,
-	});
+async function replaceJson(path: string, value: unknown, durability: VaultGitDurabilityPort): Promise<void> {
+	const temporary = `${path}.tmp-${randomUUID()}`;
+	let handle: FileHandle | undefined;
+	try {
+		handle = await open(temporary, "wx", 0o600);
+		await durability.writeTemp(handle, new TextEncoder().encode(`${JSON.stringify(value)}\n`), "task_claim");
+		await durability.syncFile(handle, "task_claim");
+		await handle.close();
+		handle = undefined;
+		await durability.rename(temporary, path, "task_claim");
+		await durability.syncDirectory(join(path, ".."), "task_claim");
+	} catch (error) {
+		throw new Error("task state durability unavailable", { cause: error });
+	} finally {
+		if (handle) await handle.close().catch(() => undefined);
+		await unlink(temporary).catch(() => undefined);
+	}
 }
 
-async function readPrivateTaskState(path: string): Promise<string> {
+function revisionPath(history: string, revision: number): string {
+	return join(history, `${String(revision).padStart(12, "0")}.json`);
+}
+
+function taskStateFromClaim(claim: VaultGitTaskClaim): VaultGitTaskState {
+	const { bindingDigest: _bindingDigest, ...state } = claim;
+	return parseVaultGitTaskState(state);
+}
+
+async function readPrivateFile(path: string): Promise<string> {
 	const metadata = await lstat(path);
-	if (
-		!metadata.isFile() ||
-		metadata.isSymbolicLink() ||
-		(metadata.mode & 0o777) !== 0o600
-	) {
-		throw new Error("private task claim permissions invalid");
+	if (!metadata.isFile() || metadata.isSymbolicLink() || (metadata.mode & 0o777) !== 0o600) {
+		throw new Error("private task state permissions invalid");
 	}
 	return readFile(path, "utf8");
 }
 
 function assertReceiptId(value: string): void {
-	if (!/^receipt_[0-9a-f]{32}$/.test(value)) {
-		throw new Error("invalid receipt id");
-	}
+	if (!/^receipt_[0-9a-f]{32}$/.test(value)) throw new Error("invalid receipt id");
+}
+
+function assertTaskId(value: string): void {
+	if (!/^task_[0-9a-f]{32}$/.test(value)) throw new Error("invalid task id");
 }
 
 function isMissing(error: unknown): boolean {
