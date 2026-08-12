@@ -29,6 +29,7 @@
 - High-risk ambiguity: ask one question.
 - Execute in small, reviewable steps.
 - Test meaningful changes.
+- Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.
 - Preserve unrelated user/agent changes.
 - Startup source: `$HOME/code/claude-code-config/AGENTS.md`; prompt-system changes use `$HOME/code/claude-code-config/skills/prompt-system-workflow/SKILL.md`; check delivery with `$HOME/code/claude-code-config/scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
@@ -55,7 +56,6 @@
 - For any first-party skill create/update request, edit the canonical source under `$HOME/code/claude-code-config/skills/<id>/` regardless of the current project; never edit generated `~/.claude/skills/` or `~/.agents/skills/` projections.
 - After any first-party skill change, run `setup sync --check --json`; follow with `setup sync` after add/rename/remove or when Nathan asks to sync. Content-only edits use live projections, so a clean check needs no apply. Otherwise inspect with `setup catalog`; preflight named third-party work with `setup catalog <id>`, then use `skills-sync` to change `skills-sources.yml`, regenerate `skills-lock.json`, and restore verified projections.
 - Never author, review, heal, or repair a `SKILL.md` before reading `$HOME/code/claude-code-config/skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
-- Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.
 - Name owner paths; don't copy contracts, flags, schemas, state machines, or output semantics.
@@ -66,7 +66,6 @@
 - Risky skills: choose invocation mode and tool permissions deliberately.
 - Add small rules only from documented recurring failure patterns.
 - Prune or substitute before adding instructions.
-- Delete prose that does not change behavior.
 - Frontmatter: quote `description`; YAML-parse after edits.
 
 ## Tools
