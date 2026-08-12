@@ -80,3 +80,10 @@ attachment.
   Exit 20 carries exactly one Repair Path anchor — follow it; never retry a
   convention port or fall back to a cold browser.
 - Blocked or recovering: `browser-use guide --topic recovery`.
+- Repeated terminal defect in `browser-use`, `browser-connect`, `warm-chrome`,
+  a supported adapter CLI, or Browser Use Security; wrong or missing prose
+  route; or prose-led outcome that does not satisfy the user's explicit request:
+  hand off to
+  `../browser-use-support-ticket/SKILL.md`; file one redacted, deduplicated
+  public support ticket. Do not file expected login, user, or target-site
+  blockers.
