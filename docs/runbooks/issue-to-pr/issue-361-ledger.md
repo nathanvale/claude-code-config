@@ -10,14 +10,14 @@ runbook_version: "3"
 ac_source: "drafted"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-08-12T18:35:16+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-08-12T21:07:42+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: "sha256:aab2966d1a778145bc1f8d6a9b6f3a666787866780180623ae7667d3c45e56a6"
-batch_contract_digest: null
+batch_contract_digest: "sha256:51ec15084b7e24d292eb45acce52bf99caa6e6917acf812b9167d0495872ca75"
 ac_digest: "sha256:8a9e593395a488783ec3e4fda7a5083e30a28a16da74f38909e833ead169f3dd"
 ---
 
@@ -44,7 +44,305 @@ Format and protocol live in `references/ledger-and-helper.md`.
 ## Batches
 
 ```yaml
-batches: []
+batches:
+  - id: "durable-task-admission"
+    name: "Durable task admission"
+    goal: "Return one durable opaque task ID within 2 seconds, only after exclusive claim and worker acknowledgement."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-store.ts"
+      - "runtime/vault-git-transaction-manager/src/store.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 1 holds at the U1 seam: twenty concurrent task-store admissions create one receipt-scoped claim and one opaque task ID, with immutable CAS-backed state and no capability bytes persisted. The later U6 public-process test completes AC 1's acknowledgement and latency proof."
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "single-flight-join-refusal"
+    name: "Single-flight join and refusal"
+    goal: "Join identical concurrent calls to one task and one worker; refuse changed transaction, generation, capability, or input."
+    files:
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-store.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+    depends_on:
+      - "durable-task-admission"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 2 holds at the U2 seam: twenty concurrent claim-or-join calls select one task and one launch winner, while changed transaction, receipt, remote, generation, capability digest, and normalized input refuse. The later U10 real-process proof completes the one-worker criterion."
+    ac_mapping:
+      - 2
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "fenced-worker-composition"
+    name: "Fenced worker composition"
+    goal: "Keep the existing engine as sole mutation owner and preserve every exact-path, head, lease, activation, capability, and generation fence."
+    files:
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/src/engine.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-worker.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+    depends_on:
+      - "single-flight-join-refusal"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 3 holds: background completion invokes the existing engine after acknowledgement and every existing exact-path, head, lease, activation, capability, and generation regression remains green."
+    ac_mapping:
+      - 3
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "task-selected-status"
+    name: "Task-selected public status"
+    goal: "Expose task-selected status with state, phase, heartbeat, checkpoint, elapsed time, terminal result, and one next action."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/command-contract.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/command-contract.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+    depends_on:
+      - "fenced-worker-composition"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 4 holds: status selects the returned task ID and reports state, phase, heartbeat, checkpoint, elapsed time, terminal result, foreground continuation signal, and exactly one next action."
+    ac_mapping:
+      - 4
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "safe-task-projection"
+    name: "Safe public task projection"
+    goal: "Keep public task output free of credentials, capabilities, private paths, auth URLs, raw Git output, and child output."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
+    depends_on:
+      - "task-selected-status"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 5 holds: combined complete and task-status stdout and stderr disclose none of the injected credential, capability, private-path, auth-URL, raw-Git, child-output, or process diagnostic canaries."
+    ac_mapping:
+      - 5
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "acknowledged-detached-launch"
+    name: "Acknowledged detached launch"
+    goal: "Keep healthy work beyond 30 seconds in_progress; never falsely report remote_unavailable."
+    files:
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/src/store.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/store.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
+    depends_on:
+      - "fenced-worker-composition"
+      - "safe-task-projection"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 6 holds: complete returns after durable acknowledgement while the worker remains alive and status stays in_progress beyond the scaled former 30-second private-launch deadline without remote_unavailable."
+    ac_mapping:
+      - 6
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "cause-true-failure-classification"
+    name: "Cause-true failure classification"
+    goal: "Distinguish launch failure, lost worker, genuine remote failure, repair_needed, and genuinely unknown."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/src/task-reconciliation.ts"
+      - "runtime/vault-git-transaction-manager/src/doctor.ts"
+      - "runtime/vault-git-transaction-manager/src/repair.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-reconciliation.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
+    depends_on:
+      - "acknowledged-detached-launch"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 7 holds: malformed and missing acknowledgement, spawn failure, lost worker, genuine remote failure, repair_needed, and unknown retain cause-true status; Doctor-proven or repair-proven closure CAS-advances the same task to closed without a second worker, while unknown publication remains fail closed."
+    ac_mapping:
+      - 7
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "ownership-crash-recovery"
+    name: "Ownership crash recovery"
+    goal: "Recover claim-before-spawn, acknowledgement-before-response, restart, and stale-heartbeat cases without duplicate workers, commits, pushes, or lease owners."
+    files:
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-store.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/smoke/fixture.ts"
+    depends_on:
+      - "cause-true-failure-classification"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 8 holds: foreground death after claim and after acknowledgement, process restart, stale heartbeat, and a late expired-attempt child yield at most one task, worker, commit, push, and lease owner."
+    ac_mapping:
+      - 8
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "aligned-cli-contract"
+    name: "Aligned CLI contract"
+    goal: "Align CLI discovery, help, parsing, schemas, and runtime behaviour."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/command-contract.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/command-contract.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
+      - "runtime/vault-git-transaction-manager/README.md"
+    depends_on:
+      - "task-selected-status"
+      - "cause-true-failure-classification"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 9 holds: discovery metadata, rendered status help, parser acceptance, additive lifecycle schema 1, production executable-source identity, and real runtime behaviour agree on the same task-selected contract."
+    ac_mapping:
+      - 9
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "production-process-proof-matrix"
+    name: "Production-process proof matrix"
+    goal: "Pass real-process admission, concurrency, crash, privacy, guard-falsification, and existing regression suites."
+    files:
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/activation-negative-controls.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/background-worker-negative-controls.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/smoke/durable-phase-matrix.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/smoke/fixture.ts"
+      - "runtime/vault-git-transaction-manager/tests/smoke/fixture-selftest.integration.test.ts"
+    depends_on:
+      - "ownership-crash-recovery"
+      - "safe-task-projection"
+      - "aligned-cli-contract"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 10 holds: the public admission, twenty-caller, parent-death, restart, stale-heartbeat, worker-phase, privacy, guard-falsification, exact-path, atomic-close, two-clone, Doctor, repair, and unrelated-state suites pass."
+    ac_mapping:
+      - 10
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "live-exact-path-qualification"
+    name: "Live exact-path qualification"
+    goal: "Prove one separately approved live exact-path transaction, remote closure, aligned main, and clean-clone vault check."
+    files:
+      - "docs/runbooks/issue-to-pr/issue-361-ledger.md"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/smoke/real-path.integration.test.ts"
+    depends_on:
+      - "production-process-proof-matrix"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 11 holds: with separate approval, one live exact-path complete returns within two seconds, its worker closes remotely, local and remote main align, and a clean clone passes the vault check."
+    ac_mapping:
+      - 11
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "exact-head-qualification"
+    name: "Exact-head qualification"
+    goal: "Finish with zero open P0/P1 findings and green hosted CI."
+    files:
+      - "docs/runbooks/issue-to-pr/issue-361-ledger.md"
+      - "runtime/vault-git-transaction-manager/package.json"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+    depends_on:
+      - "live-exact-path-qualification"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 12 holds: exact-head adversarial review reports zero open P0/P1 findings and every required hosted CI check is green at that same head."
+    ac_mapping:
+      - 12
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
