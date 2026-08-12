@@ -379,6 +379,59 @@ describe("private task store", () => {
 			state: { state: "in_progress", phase: "running", launchGeneration: live },
 		});
 	});
+
+	test("refuses a transition published against a superseded revision", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-stale-revision-",
+		);
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		});
+		const admitted = await store.admit({
+			receiptId: "receipt_66666666666666666666666666666666",
+			transactionId: "txn_66666666666666666666666666666666",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T15:00:00.000Z",
+		});
+		const taskId = admitted.state.taskId;
+		const staleRevision = admitted.state.revision;
+
+		const advanced = await store.transition(taskId, staleRevision, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-12T15:00:01.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: "launch_33333333333333333333333333333333",
+			launchExpiresAt: "2026-08-12T15:00:03.000Z",
+			workerPid: 4242,
+			workerProcessIdentity: "d".repeat(64),
+		});
+		if (advanced.status !== "transitioned") throw new Error("launch setup failed");
+
+		const replayed = await store.transition(taskId, staleRevision, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-12T15:00:02.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: "launch_44444444444444444444444444444444",
+			launchExpiresAt: "2026-08-12T15:00:04.000Z",
+			workerPid: 5252,
+			workerProcessIdentity: "e".repeat(64),
+		});
+
+		expect(replayed.status).toBe("stale");
+		expect(await store.loadByTaskId(taskId)).toMatchObject({
+			status: "loaded",
+			state: {
+				revision: advanced.state.revision,
+				launchGeneration: "launch_33333333333333333333333333333333",
+				workerPid: 4242,
+			},
+		});
+	});
 });
 
 interface TaskDurabilityCall {
