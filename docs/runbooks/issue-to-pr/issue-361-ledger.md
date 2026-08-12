@@ -65,6 +65,7 @@ batches:
     status: in-progress
     builder_commits:
       - 61d0e3e5249d9058d7ac00339550256a383f97e8
+      - 7a3994b878a1e15d9f8cbf4c9258329e36fafb74
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -83,8 +84,21 @@ batches:
           - "package typecheck passed"
           - "reachable commit touches exactly the six confirmed batch files"
         notes: "Nathan explicitly imported the verified reachable commit after the Builder returned a malformed unreachable SHA."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 7a3994b878a1e15d9f8cbf4c9258329e36fafb74
+        files_touched:
+          - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+        route_hint: "dispatch-validator-wave"
+        blockers: []
+        probe_results:
+          - "exact writeTemp, syncFile, linkExclusive, syncDirectory ordering proved"
+          - "pre-operation failure injected at every durability boundary"
+          - "36 focused and regression tests passed with 147 assertions"
+          - "package typecheck and Biome passed"
+        notes: "Builder repaired only U1-001 with a test-only TDD commit; U1-002 and U1-003 remain untouched."
     orchestrator_inline_attempts: []
-    iterations: 1
+    iterations: 2
     final_verdict: null
   - id: "single-flight-join-refusal"
     name: "Single-flight join and refusal"
@@ -463,6 +477,11 @@ validator_wave_completed:
     - U1-001
     - U1-002
     - U1-003
+
+- 2026-08-12T22:21:09+10:00: Builder repair for U1-001 returned a valid,
+  reachable commit `7a3994b878a1e15d9f8cbf4c9258329e36fafb74`. It touches only
+  `tests/task-store.test.ts`, proves the exact durability operation order,
+  injects failure at each boundary, and leaves U1-002/U1-003 untouched.
 
 ## Workflow Learnings
 
