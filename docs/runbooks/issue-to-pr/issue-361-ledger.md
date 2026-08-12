@@ -172,7 +172,7 @@ batches:
     ac_mapping:
       - 3
     rationale: null
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     orchestrator_inline_attempts: []
@@ -686,6 +686,13 @@ validator_wave_completed:
   Reviewed Builder commit `2104894cabb436a3c3660af7b9ae03c860acb32d`
   proves the U2 task-store seam. Real-process one-worker behavior remains
   assigned to the confirmed U10 batch.
+
+- 2026-08-12T23:31:00+10:00: Started `fenced-worker-composition` after its
+  `single-flight-join-refusal` dependency converged. Codex Builder readiness
+  passed: isolated dispatch, scoped editing, repo-local checks, Git evidence,
+  one-commit return, and structured-envelope capture are available. The next
+  action is one TDD Builder implementation attempt inside the confirmed U3
+  file boundary.
 
 ## Workflow Learnings
 
