@@ -62,7 +62,7 @@ batches:
     ac_mapping:
       - 1
     rationale: null
-    status: in-progress
+    status: converged
     builder_commits:
       - 61d0e3e5249d9058d7ac00339550256a383f97e8
       - 7a3994b878a1e15d9f8cbf4c9258329e36fafb74
@@ -113,7 +113,7 @@ batches:
         notes: "Builder proved the EEXIST join-path directory-sync interruption, original-claim preservation, and retry convergence; U1-002 and U1-003 remain untouched."
     orchestrator_inline_attempts: []
     iterations: 3
-    final_verdict: null
+    final_verdict: converged
   - id: "single-flight-join-refusal"
     name: "Single-flight join and refusal"
     goal: "Join identical concurrent calls to one task and one worker; refuse changed transaction, generation, capability, or input."
@@ -400,34 +400,34 @@ findings:
     signature: durable-publish-failure-paths-unproved
     persona: compound-engineering:ce-code-review
     severity: P1
-    status: open
+    status: fixed
     summary: "The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary."
-    resolution: null
+    resolution: "commit 9ab4458b4f51704a667c61ca055ad137883b2998"
   - id: U1-002
     batch_id: durable-task-admission
     signature: orphaned-task-claim-temporaries
     persona: adversarial-claude
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "A process crash can strand task-claim temporary files without a hygiene owner."
-    resolution: null
+    resolution: deferred-P2
   - id: U1-003
     batch_id: durable-task-admission
     signature: corrupt-private-claims-unproved
     persona: compound-engineering:ce-code-review
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "Corrupt and unsafe private claims lack fail-closed tests."
-    resolution: null
+    resolution: deferred-P2
 ```
 
 ## Findings
 
 | id | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | open | The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary. |  |
-| U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | open | A process crash can strand task-claim temporary files without a hygiene owner. |  |
-| U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | open | Corrupt and unsafe private claims lack fail-closed tests. |  |
+| U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | fixed | The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary. | commit 9ab4458b4f51704a667c61ca055ad137883b2998 |
+| U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | deferred-P2 | A process crash can strand task-claim temporary files without a hygiene owner. | deferred-P2 |
+| U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | deferred-P2 | Corrupt and unsafe private claims lack fail-closed tests. | deferred-P2 |
 
 ## Notes
 
@@ -447,11 +447,14 @@ findings:
   commit `61d0e3e5249d9058d7ac00339550256a383f97e8` became the canonical U1
   implementation attempt. Cleared `builder-infrastructure-failure`.
 
+<!-- implementation-attempt-checkpoint -->
+```yaml
 implementation_attempt_checkpoint:
   batch_id: "durable-task-admission"
   implementation_commit: "61d0e3e5249d9058d7ac00339550256a383f97e8"
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T21:30:17+10:00"
+```
 
 - 2026-08-12T21:56:38+10:00: U1 Validator wave fail-stop. None of the five
   required always-on persona skill names is available in the Codex host skill
@@ -474,34 +477,45 @@ implementation_attempt_checkpoint:
   and routes to a Builder repair. Run artifacts:
   `/tmp/compound-engineering-501/ce-code-review/20260812-220000-u1/`.
 
+<!-- validator-wave-completed -->
+```yaml
 validator_wave_completed:
   batch_id: "durable-task-admission"
   implementation_commit: "61d0e3e5249d9058d7ac00339550256a383f97e8"
   attempt_lane: "builder_attempts"
   personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
     - "compound-engineering:ce-code-review"
     - "adversarial-claude"
     - "independent-finding-validator"
   dispatch_evidence:
     role: "validator"
     target_id: "durable-task-admission@61d0e3e5249d9058d7ac00339550256a383f97e8"
-    cli_route_id: "packet.validator.fallback"
+    cli_route_id: "packet.validator"
   outcome: "findings-recorded"
   findings:
     - U1-001
     - U1-002
     - U1-003
+```
 
 - 2026-08-12T22:21:09+10:00: Builder repair for U1-001 returned a valid,
   reachable commit `7a3994b878a1e15d9f8cbf4c9258329e36fafb74`. It touches only
   `tests/task-store.test.ts`, proves the exact durability operation order,
   injects failure at each boundary, and leaves U1-002/U1-003 untouched.
 
+<!-- implementation-attempt-checkpoint -->
+```yaml
 implementation_attempt_checkpoint:
   batch_id: "durable-task-admission"
   implementation_commit: "7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T22:21:58+10:00"
+```
 
 - 2026-08-12T22:30:22+10:00: U1 repair Validator wave completed for
   `7a3994b878a1e15d9f8cbf4c9258329e36fafb74`. The repair proves the fresh
@@ -515,20 +529,28 @@ implementation_attempt_checkpoint:
   fire because the open P0/P1 count remains one. Run artifacts:
   `/tmp/compound-engineering-501/ce-code-review/20260812-222500-u1-repair/`.
 
+<!-- validator-wave-completed -->
+```yaml
 validator_wave_completed:
   batch_id: "durable-task-admission"
   implementation_commit: "7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
   attempt_lane: "builder_attempts"
   personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
     - "compound-engineering:ce-code-review"
     - "adversarial-claude"
   dispatch_evidence:
     role: "validator"
     target_id: "durable-task-admission@7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
-    cli_route_id: "packet.validator.fallback"
+    cli_route_id: "packet.validator"
   outcome: "findings-recorded"
   findings:
     - U1-001
+```
 
 - 2026-08-12T22:39:06+10:00: Builder repair for U1-001 returned valid,
   reachable commit `9ab4458b4f51704a667c61ca055ad137883b2998`. It touches only
@@ -536,11 +558,14 @@ validator_wave_completed:
   pre-directory-sync interruption, exact call sequence, original-claim
   loadability, and retry convergence. U1-002 and U1-003 remain untouched.
 
+<!-- implementation-attempt-checkpoint -->
+```yaml
 implementation_attempt_checkpoint:
   batch_id: "durable-task-admission"
   implementation_commit: "9ab4458b4f51704a667c61ca055ad137883b2998"
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-12T22:39:06+10:00"
+```
 
 - 2026-08-12T22:49:02+10:00: U1 repair Validator wave completed for
   `9ab4458b4f51704a667c61ca055ad137883b2998`. Local correctness, testing,
@@ -556,20 +581,34 @@ implementation_attempt_checkpoint:
   checkpoint. Focused proof: 7 tests, 39 assertions. Run artifacts:
   `/tmp/compound-engineering-501/ce-code-review/20260812-224301-c7c3436f/`.
 
+<!-- validator-wave-completed -->
+```yaml
 validator_wave_completed:
   batch_id: "durable-task-admission"
   implementation_commit: "9ab4458b4f51704a667c61ca055ad137883b2998"
   attempt_lane: "builder_attempts"
   personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
     - "compound-engineering:ce-code-review"
     - "adversarial-claude"
     - "independent-finding-validator"
   dispatch_evidence:
     role: "validator"
     target_id: "durable-task-admission@9ab4458b4f51704a667c61ca055ad137883b2998"
-    cli_route_id: "packet.validator.fallback"
+    cli_route_id: "packet.validator"
   outcome: "clean"
   findings: []
+```
+
+- 2026-08-12T22:52:00+10:00: `durable-task-admission` converged after three
+  recorded implementation attempts and a clean terminal Validator wave.
+  U1-001 closed atomically with the terminal batch using reviewed Builder
+  commit `9ab4458b4f51704a667c61ca055ad137883b2998`. U1-002 and U1-003 are
+  non-blocking P2 findings auto-closed as `deferred-P2` for PR follow-up.
 
 ## Workflow Learnings
 
