@@ -25,6 +25,7 @@ const MAX_DIAGNOSTICS = 50
 const MAX_REDACTIONS = 20
 const MAX_TOOL_VERSIONS = 20
 const MAX_ISSUE_BODY_CHARS = 60_000
+const GITHUB_COMMAND_TIMEOUT_MS = 30_000
 
 /** One complete shell command plus its observed result and effect boundary. */
 export interface SupportTicketCommand {
@@ -572,19 +573,39 @@ export function buildSupportTicket(
 	const diagnostics = optionalTextList(input.diagnostics, "diagnostics").map((item) =>
 		redactSupportText(item, homeDirectory),
 	)
-	const environment = input.environment ?? {}
+	const environment =
+		input.environment === undefined ? {} : requiredObject(input.environment, "environment")
+	const environmentHarness =
+		environment.harness === undefined
+			? undefined
+			: redactSupportText(requiredText(environment.harness, "environment_harness"), homeDirectory)
+	const environmentOperatingSystem =
+		environment.operatingSystem === undefined
+			? undefined
+			: redactSupportText(
+					requiredText(environment.operatingSystem, "environment_operatingSystem"),
+					homeDirectory,
+				)
+	const environmentSourceRevision =
+		environment.sourceRevision === undefined
+			? undefined
+			: redactSupportText(
+					requiredText(environment.sourceRevision, "environment_sourceRevision"),
+					homeDirectory,
+				)
+	const environmentInstallChannel =
+		environment.installChannel === undefined
+			? undefined
+			: redactSupportText(
+					requiredText(environment.installChannel, "environment_installChannel"),
+					homeDirectory,
+				)
 	const toolVersions = sanitizeToolVersions(environment.toolVersions, homeDirectory)
 	const environmentRows = [
-		environment.harness ? `Harness: ${redactSupportText(environment.harness, homeDirectory)}` : null,
-		environment.operatingSystem
-			? `OS: ${redactSupportText(environment.operatingSystem, homeDirectory)}`
-			: null,
-		environment.sourceRevision
-			? `Source revision: ${redactSupportText(environment.sourceRevision, homeDirectory)}`
-			: null,
-		environment.installChannel
-			? `Install channel: ${redactSupportText(environment.installChannel, homeDirectory)}`
-			: null,
+		environmentHarness ? `Harness: ${environmentHarness}` : null,
+		environmentOperatingSystem ? `OS: ${environmentOperatingSystem}` : null,
+		environmentSourceRevision ? `Source revision: ${environmentSourceRevision}` : null,
+		environmentInstallChannel ? `Install channel: ${environmentInstallChannel}` : null,
 		...Object.entries(toolVersions).map(([tool, version]) => `${tool}: ${version}`),
 	].filter((item): item is string => item !== null)
 	const fingerprint = createHash("sha256")
@@ -628,19 +649,11 @@ export function buildSupportTicket(
 		retry: { disposition: retryDisposition, nextAction },
 		commands,
 		environment: {
-			harness: environment.harness
-				? redactSupportText(environment.harness, homeDirectory)
-				: undefined,
-			operatingSystem: environment.operatingSystem
-				? redactSupportText(environment.operatingSystem, homeDirectory)
-				: undefined,
+			harness: environmentHarness,
+			operatingSystem: environmentOperatingSystem,
 			toolVersions,
-			sourceRevision: environment.sourceRevision
-				? redactSupportText(environment.sourceRevision, homeDirectory)
-				: undefined,
-			installChannel: environment.installChannel
-				? redactSupportText(environment.installChannel, homeDirectory)
-				: undefined,
+			sourceRevision: environmentSourceRevision,
+			installChannel: environmentInstallChannel,
 		},
 	}
 	const triageRows = [
@@ -791,49 +804,55 @@ export function fileSupportTicket(
 			`Create the ${SUPPORT_LABEL} label in ${SUPPORT_REPOSITORY}, then retry.`,
 		)
 	}
-	const issuesOutput = requireGithubSuccess(
-		runtime.run([
-			"issue",
-			"list",
-			"--repo",
-			SUPPORT_REPOSITORY,
-			"--state",
-			"open",
-			"--label",
-			SUPPORT_LABEL,
-			"--limit",
-			"1000",
-			"--json",
-			"number,title,body,url",
-		]),
-		"github_issue_lookup_failed",
-	)
-	let issues: Array<{ number?: unknown; body?: unknown; url?: unknown }>
-	try {
-		issues = JSON.parse(issuesOutput) as Array<{
-			number?: unknown
-			body?: unknown
-			url?: unknown
-		}>
-	} catch {
-		throw new SupportTicketError(
-			"github_issue_lookup_invalid",
-			6,
-			"Inspect gh issue list JSON output, then retry.",
+	for (const marker of ticket.duplicateMarkers) {
+		const issuesOutput = requireGithubSuccess(
+			runtime.run([
+				"issue",
+				"list",
+				"--repo",
+				SUPPORT_REPOSITORY,
+				"--state",
+				"open",
+				"--label",
+				SUPPORT_LABEL,
+				"--search",
+				`in:body "${marker}"`,
+				"--json",
+				"number,title,body,url",
+			]),
+			"github_issue_lookup_failed",
 		)
-	}
-	const duplicate = issues.find(
-		(issue) =>
-			typeof issue.body === "string" &&
-			ticket.duplicateMarkers.some((marker) => (issue.body as string).includes(marker)),
-	)
-	if (duplicate && typeof duplicate.url === "string") {
-		return {
-			outcome: "deduplicated",
-			issueNumber: typeof duplicate.number === "number" ? duplicate.number : undefined,
-			issueUrl: duplicate.url,
-			fingerprint: ticket.fingerprint,
-			contentDigest: ticket.contentDigest,
+		let issues: Array<{ number?: unknown; body?: unknown; url?: unknown }>
+		try {
+			const parsed = JSON.parse(issuesOutput) as unknown
+			if (!Array.isArray(parsed)) throw new Error("Expected an issue list")
+			issues = parsed as Array<{
+				number?: unknown
+				body?: unknown
+				url?: unknown
+			}>
+		} catch {
+			throw new SupportTicketError(
+				"github_issue_lookup_invalid",
+				6,
+				"Inspect gh issue list JSON output, then retry.",
+			)
+		}
+		const duplicate = issues.find(
+			(issue) =>
+				typeof issue.body === "string" &&
+				ticket.duplicateMarkers.some((candidate) =>
+					(issue.body as string).includes(candidate),
+				),
+		)
+		if (duplicate && typeof duplicate.url === "string") {
+			return {
+				outcome: "deduplicated",
+				issueNumber: typeof duplicate.number === "number" ? duplicate.number : undefined,
+				issueUrl: duplicate.url,
+				fingerprint: ticket.fingerprint,
+				contentDigest: ticket.contentDigest,
+			}
 		}
 	}
 	const createResult = runtime.run(
@@ -965,6 +984,7 @@ const productionGithubRuntime: GithubRuntime = {
 			stdout: "pipe",
 			stderr: "pipe",
 			stdin: stdin === undefined ? undefined : new TextEncoder().encode(stdin),
+			timeout: GITHUB_COMMAND_TIMEOUT_MS,
 		})
 		return {
 			exitCode: result.exitCode,

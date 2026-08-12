@@ -279,11 +279,36 @@ describe("support ticket safety", () => {
 		).toThrow("invalid_commands_1_exitCode")
 	})
 
+	test.each([
+		["environment", [], "invalid_environment"],
+		["environment harness", { harness: 42 }, "invalid_environment_harness"],
+		[
+			"environment operating system",
+			{ operatingSystem: false },
+			"invalid_environment_operatingSystem",
+		],
+		[
+			"environment source revision",
+			{ sourceRevision: 123 },
+			"invalid_environment_sourceRevision",
+		],
+		[
+			"environment install channel",
+			{ installChannel: {} },
+			"invalid_environment_installChannel",
+		],
+	] as const)("refuses malformed %s", (_name, environment, errorCode) => {
+		expect(() =>
+			buildSupportTicket({ ...INPUT, environment } as unknown as SupportTicketInput),
+		).toThrow(errorCode)
+	})
+
 	test("deduplicates an open issue before creating a new one", () => {
 		const ticket = buildSupportTicket(INPUT, "/Users/nathan")
 		const runtime = new FakeGithubRuntime([
 			{ exitCode: 0, stdout: "nathanvale\n", stderr: "" },
 			{ exitCode: 0, stdout: '[{"name":"browser-use"}]', stderr: "" },
+			{ exitCode: 0, stdout: "[]", stderr: "" },
 			{
 				exitCode: 0,
 				stdout: JSON.stringify([
@@ -307,13 +332,39 @@ describe("support ticket safety", () => {
 
 		expect(result.outcome).toBe("deduplicated")
 		expect(result.issueNumber).toBe(42)
-		expect(runtime.calls).toHaveLength(3)
+		expect(runtime.calls).toHaveLength(4)
+		expect(runtime.calls[2]?.args).toEqual([
+			"issue",
+			"list",
+			"--repo",
+			"nathanvale/claude-code-config",
+			"--state",
+			"open",
+			"--label",
+			"browser-use",
+			"--search",
+			`in:body "${ticket.duplicateMarkers[0]}"`,
+			"--json",
+			"number,title,body,url",
+		])
+		expect(runtime.calls[3]?.args).toContain(`in:body "${ticket.duplicateMarkers[1]}"`)
 	})
 
 	test("creates one labelled issue with the sanitized body over stdin", () => {
 		const runtime = new FakeGithubRuntime([
 			{ exitCode: 0, stdout: "nathanvale\n", stderr: "" },
 			{ exitCode: 0, stdout: '[{"name":"browser-use"}]', stderr: "" },
+			{
+				exitCode: 0,
+				stdout: JSON.stringify([
+					{
+						number: 41,
+						body: "Search false positive without an exact duplicate marker.",
+						url: "https://github.com/nathanvale/claude-code-config/issues/41",
+					},
+				]),
+				stderr: "",
+			},
 			{ exitCode: 0, stdout: "[]", stderr: "" },
 			{
 				exitCode: 0,
@@ -330,9 +381,9 @@ describe("support ticket safety", () => {
 		)
 
 		expect(result.outcome).toBe("created")
-		expect(runtime.calls[3]?.args).toContain("browser-use")
-		expect(runtime.calls[3]?.stdin).toContain("## Full command history")
-		expect(runtime.calls[3]?.stdin).not.toContain("/Users/nathan")
+		expect(runtime.calls[4]?.args).toContain("browser-use")
+		expect(runtime.calls[4]?.stdin).toContain("## Full command history")
+		expect(runtime.calls[4]?.stdin).not.toContain("/Users/nathan")
 	})
 
 	test("refuses the wrong active GitHub identity before repository reads", () => {
@@ -367,6 +418,7 @@ describe("support ticket safety", () => {
 		const runtime = new FakeGithubRuntime([
 			{ exitCode: 0, stdout: "nathanvale\n", stderr: "" },
 			{ exitCode: 0, stdout: '[{"name":"browser-use"}]', stderr: "" },
+			{ exitCode: 0, stdout: "[]", stderr: "" },
 			{ exitCode: 0, stdout: "[]", stderr: "" },
 			{ exitCode: 1, stdout: "", stderr: "network interrupted" },
 		])
@@ -460,6 +512,27 @@ describe("support ticket safety", () => {
 			expect(envelope.error.code).toBe("input_json_invalid")
 			expect(envelope.error.same_input_retry).toBe("safe-after-repair")
 			expect(envelope.continuation.next_action_id).toBe("repair_support_ticket")
+		} finally {
+			rmSync(directory, { recursive: true, force: true })
+		}
+	})
+
+	test("returns invalid input for malformed environment metadata", () => {
+		const directory = mkdtempSync(join(tmpdir(), "browser-use-support-ticket-"))
+		const inputPath = join(directory, "input.json")
+		try {
+			writeFileSync(inputPath, `${JSON.stringify({ ...INPUT, environment: { harness: 42 } })}\n`)
+			const result = runCli(["preview", "--input", inputPath, "--json"])
+			const envelope = JSON.parse(result.stdout.toString()) as {
+				status: string
+				error: { code: string; exit_code: number }
+			}
+
+			expect(result.exitCode).toBe(3)
+			expect(result.stderr.toString()).toBe("")
+			expect(envelope.status).toBe("error")
+			expect(envelope.error.code).toBe("invalid_environment_harness")
+			expect(envelope.error.exit_code).toBe(3)
 		} finally {
 			rmSync(directory, { recursive: true, force: true })
 		}
