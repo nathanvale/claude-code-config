@@ -66,6 +66,7 @@ batches:
     builder_commits:
       - 61d0e3e5249d9058d7ac00339550256a383f97e8
       - 7a3994b878a1e15d9f8cbf4c9258329e36fafb74
+      - 9ab4458b4f51704a667c61ca055ad137883b2998
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -97,8 +98,21 @@ batches:
           - "36 focused and regression tests passed with 147 assertions"
           - "package typecheck and Biome passed"
         notes: "Builder repaired only U1-001 with a test-only TDD commit; U1-002 and U1-003 remain untouched."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 9ab4458b4f51704a667c61ca055ad137883b2998
+        files_touched:
+          - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+        route_hint: "dispatch-validator-wave"
+        blockers: []
+        probe_results:
+          - "focused task-store proof passed: 7 tests and 39 assertions"
+          - "relevant durability regressions passed: 37 tests and 156 assertions"
+          - "package typecheck and Biome passed"
+          - "Fallow reported zero introduced findings"
+        notes: "Builder proved the EEXIST join-path directory-sync interruption, original-claim preservation, and retry convergence; U1-002 and U1-003 remain untouched."
     orchestrator_inline_attempts: []
-    iterations: 2
+    iterations: 3
     final_verdict: null
   - id: "single-flight-join-refusal"
     name: "Single-flight join and refusal"
@@ -515,6 +529,18 @@ validator_wave_completed:
   outcome: "findings-recorded"
   findings:
     - U1-001
+
+- 2026-08-12T22:39:06+10:00: Builder repair for U1-001 returned valid,
+  reachable commit `9ab4458b4f51704a667c61ca055ad137883b2998`. It touches only
+  `tests/task-store.test.ts` and proves the existing-claim `EEXIST` path's
+  pre-directory-sync interruption, exact call sequence, original-claim
+  loadability, and retry convergence. U1-002 and U1-003 remain untouched.
+
+implementation_attempt_checkpoint:
+  batch_id: "durable-task-admission"
+  implementation_commit: "9ab4458b4f51704a667c61ca055ad137883b2998"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-12T22:39:06+10:00"
 
 ## Workflow Learnings
 
