@@ -132,7 +132,7 @@ batches:
     ac_mapping:
       - 2
     rationale: null
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     orchestrator_inline_attempts: []
