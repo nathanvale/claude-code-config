@@ -6,40 +6,44 @@ import type {
 	SmokeTestDefinition,
 } from "../../../scripts/multi-agent-smoke-lib.ts";
 
-const artifacts = [
-	"test",
-	"fixture",
-	"mock",
-	"snapshot",
-	"test-helper",
-	"test-harness",
-] as const;
-const handbacks = [
-	"tdd",
-	"diagnosing-bugs",
-	"ci-testbed",
-	"cli-author",
-	"test-runner",
-	"improve-test-architecture",
-] as const;
-const profiles = [
-	"process-and-cli",
-	"browser-and-ui",
-	"state-concurrency-recovery",
-	"installation-host-hosted",
-	"runtime-ci-platform",
-] as const;
-const operations = ["create", "change", "read", "run"] as const;
-const seams = ["existing", "new", "disputed"] as const;
+/** Canonical pairwise factors shared by manifest validation and contract tests. @internal */
+export const testDesignScenarioFactors = {
+	artifacts: [
+		"test",
+		"fixture",
+		"mock",
+		"snapshot",
+		"test-helper",
+		"test-harness",
+	],
+	handbacks: [
+		"tdd",
+		"diagnosing-bugs",
+		"ci-testbed",
+		"cli-author",
+		"test-runner",
+		"improve-test-architecture",
+	],
+	profiles: [
+		"process-and-cli",
+		"browser-and-ui",
+		"state-concurrency-recovery",
+		"installation-host-hosted",
+		"runtime-ci-platform",
+	],
+	operations: ["create", "change", "read", "run"],
+	seams: ["existing", "new", "disputed"],
+} as const;
 
-type Scenario = {
+/** One frozen routing scenario validated by the shared factor vocabulary. @internal */
+export type TestDesignScenario = {
 	id: string;
 	prompt: string;
-	artifact: (typeof artifacts)[number];
-	handback: (typeof handbacks)[number];
-	profiles: (typeof profiles)[number][];
-	operation: (typeof operations)[number];
-	seam: (typeof seams)[number];
+	artifact: (typeof testDesignScenarioFactors.artifacts)[number];
+	handback: (typeof testDesignScenarioFactors.handbacks)[number];
+	profiles: (typeof testDesignScenarioFactors.profiles)[number][];
+	operation: (typeof testDesignScenarioFactors.operations)[number];
+	seam: (typeof testDesignScenarioFactors.seams)[number];
 	expected: {
 		invokeTestDesign: boolean;
 		briefBeforeEdit: boolean;
@@ -47,6 +51,9 @@ type Scenario = {
 		continuation: "return" | "await-seam-approval";
 	};
 };
+
+const { artifacts, handbacks, profiles, operations, seams } =
+	testDesignScenarioFactors;
 
 function objectSchema(properties: Record<string, unknown>): JsonSchema {
 	return {
@@ -61,7 +68,7 @@ function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
 	return Object.keys(value).sort().join("\n") === keys.toSorted().join("\n");
 }
 
-function parseScenarios(): Scenario[] {
+function parseScenarios(): TestDesignScenario[] {
 	const parsed = JSON.parse(
 		readFileSync(join(import.meta.dir, "pairwise-scenarios.json"), "utf8"),
 	) as unknown;
@@ -121,7 +128,7 @@ function parseScenarios(): Scenario[] {
 			throw new Error(`test-design pairwise scenario is invalid: ${String(scenario.id)}`);
 		}
 	}
-	return scenarios as Scenario[];
+	return scenarios as TestDesignScenario[];
 }
 
 function readPatternLibrary(): string {
@@ -135,7 +142,7 @@ function readPatternLibrary(): string {
 		.join("\n\n");
 }
 
-function decisionFor(scenario: Scenario): string {
+function decisionFor(scenario: TestDesignScenario): string {
 	const route = scenario.expected.invokeTestDesign
 		? "test-design"
 		: "current-workflow";
@@ -303,6 +310,7 @@ The test-runner workflow remains active. Run-only work is requested conceptually
 	},
 };
 
+/** Test-design smoke definitions appended to the shared runtime matrix. @internal */
 export const testDesignSmokeTests: readonly SmokeTestDefinition[] = [
 	createPairwiseDefinition(),
 	mutationDefinition,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import {
 	buildSmokeCommand,
 	DEFAULT_TIMEOUT_MS,
@@ -15,6 +16,8 @@ import {
 	runSmokeTest,
 	SMOKE_TESTS,
 } from "./multi-agent-smoke-lib.ts";
+
+const repositoryRoot = resolve(import.meta.dir, "..");
 
 describe("multi-agent smoke library", () => {
 	test("includes the prompt-boundary and operator smoke matrix", () => {
@@ -63,7 +66,7 @@ describe("multi-agent smoke library", () => {
 		}
 	});
 
-	test("frozen pairwise profile oracle rejects loading every profile", () => {
+	test("frozen pairwise probe rejects a corrupted profile-segment decision", () => {
 		const definition = getSmokeTest("test-design-pairwise-frozen");
 		const expected = definition.expectations.claude;
 		const firstScenario = Object.keys(expected).find((key) => key.startsWith("s1"));
@@ -77,6 +80,9 @@ describe("multi-agent smoke library", () => {
 	});
 
 	test("test-design canaries distinguish mutation from run-only work", () => {
+		expect(
+			getSmokeTest("test-design-mutation-route").runtime?.challengeField,
+		).toBe("qualificationChallenge");
 		for (const harness of ["claude", "codex"] as const) {
 			expect(
 				evaluateOutput(getSmokeTest("test-design-mutation-route"), harness, {
@@ -227,12 +233,12 @@ describe("multi-agent smoke library", () => {
 		const { command: claudeCommand, cleanup: cleanupClaude } = buildSmokeCommand({
 			testId: "test-design-mutation-route",
 			harness: "claude",
-			cwd: process.cwd(),
+			cwd: repositoryRoot,
 		});
 		const { command: codexCommand, cleanup: cleanupCodex } = buildSmokeCommand({
 			testId: "test-design-mutation-route",
 			harness: "codex",
-			cwd: process.cwd(),
+			cwd: repositoryRoot,
 		});
 		try {
 			expect(claudeCommand[claudeCommand.indexOf("--model") + 1]).toBe("opus");
@@ -416,9 +422,15 @@ describe("multi-agent smoke library", () => {
 				traceProof,
 			}).every((assertion) => assertion.ok),
 		).toBe(true);
+		const forbiddenProfileRelativePath =
+			traceProof.forbiddenProfileRelativePaths[0];
+		expect(forbiddenProfileRelativePath).toBeDefined();
+		if (!forbiddenProfileRelativePath) {
+			throw new Error("Expected at least one forbidden profile path");
+		}
 		const forbiddenChallenge = createProfileQualificationChallenge(
 			challenge,
-			traceProof.forbiddenProfileRelativePaths[0],
+			forbiddenProfileRelativePath,
 		);
 		const codexWithIrrelevantRead = `${codexTrace}\n${JSON.stringify({
 			type: "item.completed",

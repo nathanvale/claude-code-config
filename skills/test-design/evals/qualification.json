@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "skills/test-design/evals/qualification.ts",
-  "source_sha256": "9f69e54748b2e3e479531ff0d8e3c0911c88f197ce57b0c52e9657c30942750c",
+  "source_sha256": "862d1349b7f98b9c0630d9db2f802d7303a0bb7425e9fee686ea1ee463de6697",
   "sources": [
     "AGENTS.md",
     ".github/workflows/ci.yml",

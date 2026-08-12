@@ -53,7 +53,10 @@ export type SmokeTestId =
 	| "test-design-run-only-negative"
 	| "test-design-pairwise-frozen";
 
+/** JSON scalar accepted by smoke schemas and assertion results. @internal */
 export type JsonPrimitive = boolean | number | string | null;
+
+/** Minimal object-schema contract consumed by both runtime harnesses. @internal */
 export type JsonSchema = {
 	type: "object";
 	properties: Record<string, unknown>;
@@ -61,8 +64,10 @@ export type JsonSchema = {
 	additionalProperties: boolean;
 };
 
+/** Exact structured output expected from one smoke runtime. @internal */
 export type ExpectedResult = Record<string, JsonPrimitive>;
 
+/** Optional runtime controls and qualification proofs for a smoke definition. @internal */
 export type SmokeRuntimeSpec = {
 	projectSkills?: { id: string; sourceRelativePath: string }[];
 	challengeField?: string;
@@ -228,6 +233,15 @@ function copySkillProjection(
 	cpSync(source, destination, { recursive: true });
 }
 
+class MissingSmokeProfileError extends Error {
+	constructor(projectedPath: string, skillId: string, relativePath: string) {
+		super(
+			`Missing projected smoke profile: ${projectedPath}. Restore ${relativePath} under skills/${skillId}, run setup sync, then retry qualification.`,
+		);
+		this.name = "MissingSmokeProfileError";
+	}
+}
+
 function prepareRuntimeProject(
 	tempRoot: string,
 	sourceCwd: string,
@@ -272,6 +286,13 @@ function prepareRuntimeProject(
 					traceProof.skillId,
 					relativePath,
 				);
+				if (!existsSync(profilePath)) {
+					throw new MissingSmokeProfileError(
+						profilePath,
+						traceProof.skillId,
+						relativePath,
+					);
+				}
 				const source = readFileSync(profilePath, "utf8");
 				writeFileSync(
 					profilePath,
@@ -309,6 +330,14 @@ function expectedForRun(
 	return expected;
 }
 
+/**
+ * Bind one runtime challenge to the profile path whose contents must be observed.
+ *
+ * @param challenge - Random challenge injected into the projected skill.
+ * @param relativePath - Profile path relative to the projected skill root.
+ * @returns Stable path-bound challenge for trace and structured-output checks.
+ * @internal
+ */
 export function createProfileQualificationChallenge(
 	challenge: string,
 	relativePath: string,
@@ -326,7 +355,11 @@ function prepareSmokeCommandCwd(input: {
 	challenge: string;
 	omitProjectSkills?: boolean;
 }): string {
-	if (input.test.runtime?.projectSkills || input.test.runtime?.mutationProof) {
+	if (
+		input.test.runtime?.projectSkills ||
+		input.test.runtime?.mutationProof ||
+		input.test.runtime?.traceProof
+	) {
 		return prepareRuntimeProject(
 			input.tempRoot,
 			input.sourceCwd,
@@ -1387,6 +1420,13 @@ function successfulCodexCommandOutput(stdout: string): string[] {
 	});
 }
 
+/**
+ * Convert harness trace events into mechanical skill and profile-read assertions.
+ *
+ * @param input - Harness output plus the path-bound qualification challenge.
+ * @returns Trace assertions that distinguish native loading from self-report.
+ * @internal
+ */
 export function evaluateRuntimeTrace(input: {
 	harness: HarnessName;
 	stdout: string;
@@ -1750,7 +1790,10 @@ export async function runSmokeTest(input: {
 					ok: typeof actual === "string" && actual.trim().length > 0,
 				});
 			}
-			const fixture = readFileSync(join(commandCwd, proof.fixtureRelativePath), "utf8");
+			const fixturePath = join(commandCwd, proof.fixtureRelativePath);
+			const fixture = existsSync(fixturePath)
+				? readFileSync(fixturePath, "utf8")
+				: null;
 			assertions.push({
 				key: "mutation:fixture-unchanged",
 				expected: proof.expectedFixture,

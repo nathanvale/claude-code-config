@@ -88,7 +88,7 @@
     },
     {
       "id": "p06-test-improve-test-architecture",
-      "prompt": "While improve-test-architecture remains the active workflow, create the repository-owned test concerning Bun and Node behaviour across CI platforms at the new seam.",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create the repository-owned test concerning Bun and Node behaviour across CI platforms at the new seam.",
       "artifact": "test",
       "handback": "improve-test-architecture",
       "profiles": [
@@ -190,7 +190,7 @@
     },
     {
       "id": "p12-fixture-improve-test-architecture",
-      "prompt": "While improve-test-architecture remains the active workflow, create the repository-owned fixture concerning fresh installation, activation, and host discovery at the new seam.",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create the repository-owned fixture concerning fresh installation, activation, and host discovery at the new seam.",
       "artifact": "fixture",
       "handback": "improve-test-architecture",
       "profiles": [
@@ -394,7 +394,7 @@
     },
     {
       "id": "p24-snapshot-improve-test-architecture",
-      "prompt": "While improve-test-architecture remains the active workflow, change the repository-owned snapshot concerning public CLI exit status, stdout, and timeout semantics at the disputed seam.",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, change the repository-owned snapshot concerning public CLI exit status, stdout, and timeout semantics at the disputed seam.",
       "artifact": "snapshot",
       "handback": "improve-test-architecture",
       "profiles": [

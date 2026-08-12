@@ -53,6 +53,14 @@ type QualificationReceipt = {
 	};
 };
 
+/**
+ * Hash every source that can change the qualified Startup Surface behaviour.
+ *
+ * @param root - Repository root containing the registered qualification sources.
+ * @returns Stable digest bound to source paths and contents.
+ * @throws When a registered source is missing.
+ * @internal
+ */
 export function qualificationSourceDigest(root = repositoryRoot): string {
 	const hash = createHash("sha256");
 	for (const path of QUALIFICATION_SOURCE_PATHS) {
@@ -82,23 +90,30 @@ function verifyReceipt(): { ok: boolean; reason: string } {
 		return { ok: false, reason: "qualification receipt must be an object" };
 	}
 	const receipt = candidate as Record<string, unknown>;
-	if (
-		!exactKeys(receipt, [
-			"schema_version",
-			"generated_by",
-			"source_sha256",
-			"sources",
-			"results",
-		]) ||
-		receipt.schema_version !== 1 ||
-		receipt.generated_by !== "skills/test-design/evals/qualification.ts" ||
-		receipt.source_sha256 !== qualificationSourceDigest() ||
-		!Array.isArray(receipt.sources) ||
-		receipt.sources.join("\n") !== QUALIFICATION_SOURCE_PATHS.join("\n") ||
-		typeof receipt.results !== "object" ||
-		receipt.results === null
-	) {
-		return { ok: false, reason: "qualification receipt does not match current sources" };
+	try {
+		if (
+			!exactKeys(receipt, [
+				"schema_version",
+				"generated_by",
+				"source_sha256",
+				"sources",
+				"results",
+			]) ||
+			receipt.schema_version !== 1 ||
+			receipt.generated_by !== "skills/test-design/evals/qualification.ts" ||
+			receipt.source_sha256 !== qualificationSourceDigest() ||
+			!Array.isArray(receipt.sources) ||
+			receipt.sources.join("\n") !== QUALIFICATION_SOURCE_PATHS.join("\n") ||
+			typeof receipt.results !== "object" ||
+			receipt.results === null
+		) {
+			return { ok: false, reason: "qualification receipt does not match current sources" };
+		}
+	} catch (error) {
+		return {
+			ok: false,
+			reason: error instanceof Error ? error.message : "qualification source check failed",
+		};
 	}
 	const resultKeys = [
 		"deterministic",
@@ -121,8 +136,9 @@ function verifyReceipt(): { ok: boolean; reason: string } {
 async function deterministic(): Promise<void> {
 	const proc = Bun.spawn({
 		cmd: [
-			"bun",
-			"test",
+			resolve(repositoryRoot, "skills/test-runner/src/test-runner.sh"),
+			"run",
+			"--",
 			"skills/test-design/tests/skill-contract.test.ts",
 			"scripts/multi-agent-smoke.test.ts",
 			"scripts/agent-instructions.test.ts",
@@ -195,15 +211,15 @@ async function qualify(): Promise<void> {
 async function main(): Promise<void> {
 	const command = Bun.argv[2] ?? "verify";
 	const json = Bun.argv.includes("--json");
+	if (!["deterministic", "verify", "qualify"].includes(command)) {
+		throw new Error(`unknown qualification command: ${command}`);
+	}
 	if (command === "deterministic") {
 		await deterministic();
 		return;
 	}
 	if (command === "qualify") {
 		await qualify();
-	}
-	if (!["verify", "qualify"].includes(command)) {
-		throw new Error(`unknown qualification command: ${command}`);
 	}
 	const result = verifyReceipt();
 	if (json) console.log(JSON.stringify(result));

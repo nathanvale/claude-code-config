@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
+import {
+	testDesignScenarioFactors,
+	type TestDesignScenario,
+} from "../evals/smoke-definitions.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "../../..");
 const testDesignPath = resolve(import.meta.dir, "../SKILL.md");
@@ -24,51 +28,19 @@ const scenarioMatrixPath = resolve(
 const startupRule =
 	"Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.";
 
-const artifactTypes = [
-	"test",
-	"fixture",
-	"mock",
-	"snapshot",
-	"test-helper",
-	"test-harness",
-] as const;
-const handbacks = [
-	"tdd",
-	"diagnosing-bugs",
-	"ci-testbed",
-	"cli-author",
-	"test-runner",
-	"improve-test-architecture",
-] as const;
-const profiles = [
-	"process-and-cli",
-	"browser-and-ui",
-	"state-concurrency-recovery",
-	"installation-host-hosted",
-	"runtime-ci-platform",
-] as const;
+const {
+	artifacts: artifactTypes,
+	handbacks,
+	profiles,
+	operations,
+	seams,
+} = testDesignScenarioFactors;
 const profilePaths = Object.fromEntries(
 	profiles.map((profile) => [
 		profile,
 		resolve(import.meta.dir, `../references/${profile}.md`),
 	]),
 ) as Record<(typeof profiles)[number], string>;
-
-type Scenario = {
-	id: string;
-	prompt: string;
-	artifact: (typeof artifactTypes)[number];
-	handback: (typeof handbacks)[number];
-	profiles: (typeof profiles)[number][];
-	operation: "create" | "change" | "read" | "run";
-	seam: "existing" | "new" | "disputed";
-	expected: {
-		invokeTestDesign: boolean;
-		briefBeforeEdit: boolean;
-		activeWorkflowRemainsDriver: boolean;
-		continuation: "return" | "await-seam-approval";
-	};
-};
 
 function requiredText(path: string): string {
 	if (!existsSync(path)) throw new Error(`required source missing: ${path}`);
@@ -95,10 +67,10 @@ function parseSkill(path: string): {
 	};
 }
 
-function parseScenarios(): Scenario[] {
+function parseScenarios(): TestDesignScenario[] {
 	const parsed = JSON.parse(requiredText(scenarioMatrixPath)) as {
 		schema_version: number;
-		scenarios: Scenario[];
+		scenarios: TestDesignScenario[];
 	};
 	expect(parsed.schema_version).toBe(2);
 	return parsed.scenarios;
@@ -119,9 +91,13 @@ describe("agent-native testing skill contract", () => {
 		expect(improveTestArchitecture.frontmatter.name).toBe(
 			basename(dirname(improveTestArchitecturePath)),
 		);
-		expect(
-			improveTestArchitecture.frontmatter["disable-model-invocation"],
-		).toBe(true);
+			expect(
+				improveTestArchitecture.frontmatter["disable-model-invocation"],
+			).toBe(true);
+			expect(improveTestArchitecture.frontmatter.description).toBeTypeOf("string");
+			expect(improveTestArchitecture.frontmatterSource).toMatch(
+				/^description:\s*(["']).*\1$/mu,
+			);
 		expect(requiredText(resolve(repositoryRoot, "AGENTS.md"))).toContain(
 			startupRule,
 		);
@@ -237,15 +213,18 @@ describe("agent-native testing skill contract", () => {
 			new Set(profiles),
 		);
 
-		const factors = [
-			["artifact", artifactTypes],
-			["handback", handbacks],
-			["profile", profiles],
-			["operation", ["create", "change", "read", "run"] as const],
-			["seam", ["existing", "new", "disputed"] as const],
-		] as const;
-		const factorValue = (scenario: Scenario, factor: (typeof factors)[number][0]) =>
-			factor === "profile" ? scenario.profiles[0] : scenario[factor];
+			const factors = [
+				["artifact", artifactTypes],
+				["handback", handbacks],
+				["profile", profiles],
+				["operation", operations],
+				["seam", seams],
+			] as const;
+			const factorValue = (
+				scenario: TestDesignScenario,
+				factor: (typeof factors)[number][0],
+			) =>
+				factor === "profile" ? scenario.profiles[0] : scenario[factor];
 		for (let left = 0; left < factors.length; left += 1) {
 			for (let right = left + 1; right < factors.length; right += 1) {
 				const [leftName, leftValues] = factors[left];
@@ -280,16 +259,20 @@ describe("agent-native testing skill contract", () => {
 			}
 		}
 
-		for (const operation of ["read", "run"] as const) {
-			const scenario = scenarios.find((candidate) => candidate.operation === operation);
-			expect(scenario).toBeDefined();
-			expect(scenario?.expected).toEqual({
-				invokeTestDesign: false,
-				briefBeforeEdit: false,
-				activeWorkflowRemainsDriver: true,
-				continuation: "return",
-			});
-		}
+			for (const operation of ["read", "run"] as const) {
+				const negativeScenarios = scenarios.filter(
+					(candidate) => candidate.operation === operation,
+				);
+				expect(negativeScenarios.length).toBeGreaterThan(0);
+				for (const scenario of negativeScenarios) {
+					expect(scenario.expected).toEqual({
+						invokeTestDesign: false,
+						briefBeforeEdit: false,
+						activeWorkflowRemainsDriver: true,
+						continuation: "return",
+					});
+				}
+			}
 
 		expect(scenarios.some((scenario) => scenario.seam === "new")).toBe(true);
 		expect(scenarios.some((scenario) => scenario.seam === "disputed")).toBe(

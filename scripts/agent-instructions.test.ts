@@ -184,6 +184,7 @@ function expectDeliveredRoute(
 	agents: string,
 	route: string,
 	staleReplacement: string,
+	qualificationSource?: string,
 ): void {
 	writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
 	expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
@@ -193,6 +194,18 @@ function expectDeliveredRoute(
 		route,
 	);
 	expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	if (qualificationSource) {
+		const sourcePath = join(fixture.repository, qualificationSource);
+		const source = readFileSync(sourcePath, "utf8");
+		writeFileSync(sourcePath, `${source}\nqualification drift\n`);
+		const staleQualification = runScript(fixture, ["check", "--json"]);
+		expect(staleQualification.exitCode).toBe(1);
+		expect(parseReport(staleQualification).failures).toContain(
+			"test-design Startup Surface route lacks current qualification",
+		);
+		writeFileSync(sourcePath, source);
+		expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	}
 
 	unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
 	writeFileSync(
@@ -232,6 +245,7 @@ describe("agent instruction staged health", () => {
 				agents,
 				testDesignStartupRule,
 				"stale startup without the test-design route",
+				"skills/test-design/references/pattern-library.md",
 			);
 		});
 	});
