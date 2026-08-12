@@ -483,6 +483,12 @@ validator_wave_completed:
   `tests/task-store.test.ts`, proves the exact durability operation order,
   injects failure at each boundary, and leaves U1-002/U1-003 untouched.
 
+implementation_attempt_checkpoint:
+  batch_id: "durable-task-admission"
+  implementation_commit: "7a3994b878a1e15d9f8cbf4c9258329e36fafb74"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-12T22:21:58+10:00"
+
 ## Workflow Learnings
 
 ```yaml
