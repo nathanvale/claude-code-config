@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: "sha256:c49c34e22a651ba140640d6b3584d1abb4f5937a3213d626c5ec9d78d9ed21a4"
+plan_digest: "sha256:aab2966d1a778145bc1f8d6a9b6f3a666787866780180623ae7667d3c45e56a6"
 batch_contract_digest: null
 ac_digest: "sha256:8a9e593395a488783ec3e4fda7a5083e30a28a16da74f38909e833ead169f3dd"
 ---

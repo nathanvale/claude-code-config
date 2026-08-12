@@ -126,7 +126,7 @@ stateDiagram-v2
 
 ### U1. Durable task admission
 
-Create the private task aggregate and atomically claim one opaque task before launch. Use one stable receipt-scoped claim slot, immutable revision history, and CAS updates so random task IDs cannot let concurrent callers each win. This unit establishes deterministic fingerprint inputs, path validation, permissions, durability ordering, and terminal-only retention. It does not invoke the transaction engine.
+Create the private task aggregate and atomically claim one opaque task before launch. Use one stable receipt-scoped claim slot, immutable revision history, and CAS updates so random task IDs cannot let concurrent callers each win. This unit establishes deterministic fingerprint inputs, path validation, permissions, durability ordering, and terminal-only retention. It does not invoke the transaction engine; its RED/GREEN boundary is the task-store seam.
 
 ```yaml
 id: durable-task-admission
@@ -142,7 +142,7 @@ files:
 depends_on: []
 execution_mode: tdd
 acceptance_tests:
-  - "AC 1 holds: a real complete process observes one receipt-scoped exclusive claim, immutable CAS-backed task state, and matching durable worker acknowledgement before returning one opaque task ID in under two seconds."
+  - "AC 1 holds at the U1 seam: twenty concurrent task-store admissions create one receipt-scoped claim and one opaque task ID, with immutable CAS-backed state and no capability bytes persisted. The later U6 public-process test completes AC 1's acknowledgement and latency proof."
 ac_mapping:
   - 1
 rationale: null
@@ -150,7 +150,7 @@ rationale: null
 
 ### U2. Single-flight join and refusal
 
-Add atomic claim-or-join semantics. Identical calls share the stable task. Every changed fingerprint dimension fails closed. The existing twenty-caller RED row becomes the owning integration test.
+Add atomic claim-or-join semantics. Identical calls share the stable task. Every changed fingerprint dimension fails closed. This unit proves the task-store decision under concurrency; the later U6/U10 public-process rows prove one actual worker.
 
 ```yaml
 id: single-flight-join-refusal
@@ -167,7 +167,7 @@ depends_on:
   - durable-task-admission
 execution_mode: tdd
 acceptance_tests:
-  - "AC 2 holds: twenty identical public completions return one task ID and cause one worker, while changed transaction, generation, capability, and summary fingerprints refuse."
+  - "AC 2 holds at the U2 seam: twenty concurrent claim-or-join calls select one task and one launch winner, while changed transaction, receipt, remote, generation, capability digest, and normalized input refuse. The later U10 real-process proof completes the one-worker criterion."
 ac_mapping:
   - 2
 rationale: null
@@ -277,7 +277,7 @@ rationale: null
 
 ### U7. Cause-true failure classification
 
-Give launcher, acknowledgement, worker-loss, remote, repair, and unknown paths distinct internal causes and public outcomes. Reconcile worker failure against current receipt and Doctor evidence instead of mapping every catch to `repair_needed`. Keep one Doctor-owned continuation for known repair and no unsafe continuation for unknown publication.
+Give launcher, acknowledgement, worker-loss, remote, repair, and unknown paths distinct internal causes and public outcomes. Add one task-reconciliation adapter around existing Doctor/repair results: after Doctor or repair proves the same transaction closed, CAS-advance the same task to `closed` without spawning or granting worker authority. If remote publication remains unknown, retain `unknown`. Reconcile worker failure against current receipt and Doctor evidence instead of mapping every catch to `repair_needed`.
 
 ```yaml
 id: cause-true-failure-classification
@@ -287,8 +287,12 @@ files:
   - runtime/vault-git-transaction-manager/src/model.ts
   - runtime/vault-git-transaction-manager/src/task-state.ts
   - runtime/vault-git-transaction-manager/src/task-worker.ts
+  - runtime/vault-git-transaction-manager/src/task-reconciliation.ts
+  - runtime/vault-git-transaction-manager/src/doctor.ts
+  - runtime/vault-git-transaction-manager/src/repair.ts
   - runtime/vault-git-transaction-manager/src/cli.ts
   - runtime/vault-git-transaction-manager/tests/task-state.test.ts
+  - runtime/vault-git-transaction-manager/tests/task-reconciliation.test.ts
   - runtime/vault-git-transaction-manager/tests/cli.test.ts
   - runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts
   - runtime/vault-git-transaction-manager/tests/process-cli.ts
@@ -296,7 +300,7 @@ depends_on:
   - acknowledged-detached-launch
 execution_mode: tdd
 acceptance_tests:
-  - "AC 7 holds: malformed and missing acknowledgement, spawn failure, lost worker, genuine remote failure, repair_needed, and unknown each retain cause-true status and exactly one safe continuation where one exists."
+  - "AC 7 holds: malformed and missing acknowledgement, spawn failure, lost worker, genuine remote failure, repair_needed, and unknown retain cause-true status; Doctor-proven or repair-proven closure CAS-advances the same task to closed without a second worker, while unknown publication remains fail closed."
 ac_mapping:
   - 7
 rationale: null
@@ -435,7 +439,7 @@ rationale: null
 - **Foreground callers:** regain control after proved admission and may continue non-vault work while inspecting by task ID.
 - **Transaction engine:** remains the sole mutation owner; receives work only from an acknowledged matching launch generation.
 - **Private state:** adds one owner-only task aggregate. Receipt and remote ledger formats remain focused on transaction truth.
-- **CLI consumers:** receive additive task fields and one new task selector. Compatibility is characterized before the schema-version decision.
+- **CLI consumers:** retain lifecycle schema 1 and receive additive optional task fields plus one new task selector.
 - **Doctor:** retains repair ownership and gains task checkpoint evidence, not a second repair implementation.
 
 ## Risks and Mitigations
