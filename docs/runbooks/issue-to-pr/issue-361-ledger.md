@@ -173,10 +173,27 @@ batches:
       - 3
     rationale: null
     status: in-progress
-    builder_commits: []
-    builder_attempts: []
+    builder_commits:
+      - cc5f9195dcefe4676a43754ed3417290844beda2
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: cc5f9195dcefe4676a43754ed3417290844beda2
+        files_touched:
+          - "runtime/vault-git-transaction-manager/src/cli.ts"
+          - "runtime/vault-git-transaction-manager/src/task-state.ts"
+          - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+          - "runtime/vault-git-transaction-manager/tests/task-worker.test.ts"
+        route_hint: "validator"
+        blockers: []
+        probe_results:
+          - "RED proved the worker seam absent: task-worker test failed because src/task-worker.ts did not exist"
+          - "GREEN proved matching durable acknowledgement precedes capability custody and engine completion"
+          - "GREEN proved malformed or mismatched task and launch generations refuse before capability custody"
+          - "109 focused fence tests and package TypeScript check passed"
+        notes: "Builder added exact worker acknowledgement validation, inherited-FD capability custody, existing-engine delegation, and production executable-source identity."
     orchestrator_inline_attempts: []
-    iterations: 0
+    iterations: 1
     final_verdict: null
   - id: "task-selected-status"
     name: "Task-selected public status"
@@ -693,6 +710,23 @@ validator_wave_completed:
   one-commit return, and structured-envelope capture are available. The next
   action is one TDD Builder implementation attempt inside the confirmed U3
   file boundary.
+
+- 2026-08-13T04:55:48+10:00: U3 Builder implementation returned valid,
+  reachable commit `cc5f9195dcefe4676a43754ed3417290844beda2`. It touches only
+  `src/cli.ts`, `src/task-state.ts`, new `src/task-worker.ts`, and new
+  `tests/task-worker.test.ts` inside the confirmed six-file authority. RED
+  proved the worker seam absent. GREEN proved matching acknowledgement before
+  capability custody and existing-engine entry, plus fail-closed malformed and
+  mismatched launch generations. Focused fence tests and package typecheck pass.
+
+<!-- implementation-attempt-checkpoint -->
+```yaml
+implementation_attempt_checkpoint:
+  batch_id: "fenced-worker-composition"
+  implementation_commit: "cc5f9195dcefe4676a43754ed3417290844beda2"
+  attempt_lane: "builder_attempts"
+  timestamp: "2026-08-13T04:55:48+10:00"
+```
 
 ## Workflow Learnings
 
