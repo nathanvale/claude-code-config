@@ -452,6 +452,14 @@ findings:
     status: deferred-P2
     summary: "Corrupt and unsafe private claims lack fail-closed tests."
     resolution: deferred-P2
+  - id: U3-001
+    batch_id: fenced-worker-composition
+    signature: acknowledgement-result-cannot-prove-fresh-launch-transition
+    persona: adversarial-claude
+    severity: P0
+    status: open
+    summary: "The acknowledgement result cannot prove this invocation won a fresh exact-generation durable transition before capability custody."
+    resolution: null
 ```
 
 ## Findings
@@ -461,6 +469,7 @@ findings:
 | U1-001 | durable-task-admission | durable-publish-failure-paths-unproved | compound-engineering:ce-code-review | P1 | fixed | The EEXIST join path lacks injected ordering and interruption proof for its directory-sync boundary. | commit 9ab4458b4f51704a667c61ca055ad137883b2998 |
 | U1-002 | durable-task-admission | orphaned-task-claim-temporaries | adversarial-claude | P2 | deferred-P2 | A process crash can strand task-claim temporary files without a hygiene owner. | deferred-P2 |
 | U1-003 | durable-task-admission | corrupt-private-claims-unproved | compound-engineering:ce-code-review | P2 | deferred-P2 | Corrupt and unsafe private claims lack fail-closed tests. | deferred-P2 |
+| U3-001 | fenced-worker-composition | acknowledgement-result-cannot-prove-fresh-launch-transition | adversarial-claude | P0 | open | The acknowledgement result cannot prove this invocation won a fresh exact-generation durable transition before capability custody. |  |
 
 ## Notes
 
@@ -726,6 +735,48 @@ implementation_attempt_checkpoint:
   implementation_commit: "cc5f9195dcefe4676a43754ed3417290844beda2"
   attempt_lane: "builder_attempts"
   timestamp: "2026-08-13T04:55:48+10:00"
+```
+
+- 2026-08-13T05:09:23+10:00: U3 Validator wave completed for
+  `cc5f9195dcefe4676a43754ed3417290844beda2`. Local security/reliability
+  review and the independent Anthropic adversarial pass agree that the
+  acknowledgement return shape proves identity equality but not that this
+  invocation won a fresh durable transition. A replayed same-generation
+  acknowledgement can therefore reach capability custody unless the port
+  independently enforces an unstated CAS outcome. U3-001 records this as the
+  canonical P0 blocker. Independent validation rejected three narrower local
+  candidates: runtime `launch` is a typed internal witness rather than the
+  authority fence; `acknowledgedAt` is metadata that a durable owner may assign;
+  and the unused CLI wrapper is deliberate U3 composition/source-closure wiring
+  pending U6 invocation. The adversarial stale-generation test finding merges
+  into U3-001's repair proof. One malformed-input P2 was demoted to residual
+  risk. Cross-model receipt: route `claude`; requested Opus/high; actual
+  `claude-opus-5`; effort actual unverified; receipt supported; independence
+  verified. Run artifacts:
+  `/tmp/compound-engineering-501/ce-code-review/20260813-045820-411346b1/`.
+
+<!-- validator-wave-completed -->
+```yaml
+validator_wave_completed:
+  batch_id: "fenced-worker-composition"
+  implementation_commit: "cc5f9195dcefe4676a43754ed3417290844beda2"
+  attempt_lane: "builder_attempts"
+  personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
+    - "compound-engineering:ce-code-review"
+    - "adversarial-claude"
+    - "independent-finding-validator"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "fenced-worker-composition@cc5f9195dcefe4676a43754ed3417290844beda2"
+    cli_route_id: "packet.validator"
+  outcome: "findings-recorded"
+  findings:
+    - U3-001
 ```
 
 ## Workflow Learnings
