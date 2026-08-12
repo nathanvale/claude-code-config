@@ -139,16 +139,16 @@
         "typescript": "catalog:",
       },
     },
-    "skills/bitbucket": {
-      "name": "bitbucket-scripts",
+    "skills/bft-booking": {
+      "name": "bft-booking-skill",
+      "version": "0.1.0",
       "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
     },
-    "skills/bft-booking": {
-      "name": "bft-booking-skill",
-      "version": "0.1.0",
+    "skills/bitbucket": {
+      "name": "bitbucket-scripts",
       "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
@@ -165,6 +165,13 @@
         "@side-quest/browser-use-security": "0.1.0",
         "@side-quest/cli-command-facade": "0.1.0",
         "@side-quest/mcporter-transport": "0.1.0",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "skills/browser-use-support-ticket": {
+      "name": "browser-use-support-ticket-scripts",
+      "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
@@ -351,11 +358,13 @@
 
     "ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
-    "bitbucket-scripts": ["bitbucket-scripts@workspace:skills/bitbucket"],
-
     "bft-booking-skill": ["bft-booking-skill@workspace:skills/bft-booking"],
 
+    "bitbucket-scripts": ["bitbucket-scripts@workspace:skills/bitbucket"],
+
     "browser-use-scripts": ["browser-use-scripts@workspace:skills/browser-use"],
+
+    "browser-use-support-ticket-scripts": ["browser-use-support-ticket-scripts@workspace:skills/browser-use-support-ticket"],
 
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
