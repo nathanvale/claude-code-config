@@ -11,13 +11,13 @@ ac_source: "drafted"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-08-12T18:35:16+10:00"
 batch_contract_confirmation_status: "confirmed"
-batch_contract_confirmed_at: "2026-08-12T21:07:42+10:00"
+batch_contract_confirmed_at: "2026-08-13T05:53:07+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: "sha256:aab2966d1a778145bc1f8d6a9b6f3a666787866780180623ae7667d3c45e56a6"
-batch_contract_digest: "sha256:51ec15084b7e24d292eb45acce52bf99caa6e6917acf812b9167d0495872ca75"
+batch_contract_digest: "sha256:de7a8490b1f34991665aff1cd533d505ef3abf2a489c82ea77bb282754a68457"
 ac_digest: "sha256:8a9e593395a488783ec3e4fda7a5083e30a28a16da74f38909e833ead169f3dd"
 ---
 
@@ -247,6 +247,37 @@ batches:
     orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
+  - id: "task-lifecycle-selected-status"
+    name: "Task lifecycle selected status"
+    goal: "Expose task-selected status with state, phase, heartbeat, checkpoint, elapsed time, terminal result, and one next action."
+    files:
+      - "runtime/vault-git-transaction-manager/src/model.ts"
+      - "runtime/vault-git-transaction-manager/src/task-state.ts"
+      - "runtime/vault-git-transaction-manager/src/task-store.ts"
+      - "runtime/vault-git-transaction-manager/src/task-worker.ts"
+      - "runtime/vault-git-transaction-manager/src/command-contract.ts"
+      - "runtime/vault-git-transaction-manager/src/cli.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-state.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-store.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/task-worker.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/command-contract.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
+      - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
+    depends_on:
+      - "fenced-worker-composition"
+    supersedes: "task-selected-status"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 4 holds: the existing task lifecycle owners durably record and select the returned task ID, and public status reports state, phase, heartbeat, checkpoint, elapsed time, terminal result, foreground continuation signal, and exactly one next action without changing unselected status."
+    ac_mapping:
+      - 4
+    rationale: "replacement-contract: Builder preflight proved truthful task-selected status requires the existing task state, store, and worker owners plus their focused tests."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
   - id: "safe-task-projection"
     name: "Safe public task projection"
     goal: "Keep public task output free of credentials, capabilities, private paths, auth URLs, raw Git output, and child output."
@@ -258,7 +289,7 @@ batches:
       - "runtime/vault-git-transaction-manager/tests/live-acceptance.integration.test.ts"
       - "runtime/vault-git-transaction-manager/tests/process-cli.ts"
     depends_on:
-      - "task-selected-status"
+      - "task-lifecycle-selected-status"
     execution_mode: tdd
     acceptance_tests:
       - "AC 5 holds: combined complete and task-status stdout and stderr disclose none of the injected credential, capability, private-path, auth-URL, raw-Git, child-output, or process diagnostic canaries."
@@ -364,7 +395,7 @@ batches:
       - "runtime/vault-git-transaction-manager/tests/cli.test.ts"
       - "runtime/vault-git-transaction-manager/README.md"
     depends_on:
-      - "task-selected-status"
+      - "task-lifecycle-selected-status"
       - "cause-true-failure-classification"
     execution_mode: tdd
     acceptance_tests:
@@ -895,6 +926,13 @@ validator_wave_completed:
   replacement batch. Resume condition: validate and explicitly confirm a
   replacement contract that includes `src/task-state.ts`, `src/task-store.ts`,
   `src/task-worker.ts`, their focused tests, and the original public CLI files.
+
+- 2026-08-13T05:53:07+10:00: Nathan approved the exact replacement DAG.
+  Confirmed `task-lifecycle-selected-status` supersedes the blocked
+  `task-selected-status` batch, preserves AC 4, and rewrites the pending
+  `safe-task-projection` and `aligned-cli-contract` dependencies. Reconfirmed
+  the unchanged plan and AC digests and bound the 13-batch contract to
+  `sha256:de7a8490b1f34991665aff1cd533d505ef3abf2a489c82ea77bb282754a68457`.
 
 ## Workflow Learnings
 
