@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { VaultGitEngineResult } from "../src/engine.ts";
+import type { VaultGitTaskWorkerAcknowledgementResult } from "../src/task-state.ts";
 import { createVaultGitTaskWorker } from "../src/task-worker.ts";
 
 describe("fenced task worker", () => {
@@ -32,9 +33,13 @@ describe("fenced task worker", () => {
 				events.push("acknowledged-durably");
 				return {
 					schemaVersion: 1,
-					taskId: input.taskId,
-					launchGeneration: input.launchGeneration,
-					acknowledgedAt: "2026-08-12T13:29:00.000Z",
+					status: "transitioned",
+					acknowledgement: {
+						schemaVersion: 1,
+						taskId: input.taskId,
+						launchGeneration: input.launchGeneration,
+						acknowledgedAt: "2026-08-12T13:29:00.000Z",
+					},
 				};
 			},
 			async readCapability(descriptor) {
@@ -87,15 +92,19 @@ describe("fenced task worker", () => {
 					events.push("acknowledged-durably");
 					return {
 						schemaVersion: 1,
-						taskId:
-							mismatch === "taskId"
-								? "task_55555555555555555555555555555555"
-								: input.taskId,
-						launchGeneration:
-							mismatch === "launchGeneration"
-								? "launch_66666666666666666666666666666666"
-								: input.launchGeneration,
-						acknowledgedAt: input.acknowledgedAt,
+						status: "transitioned",
+						acknowledgement: {
+							schemaVersion: 1,
+							taskId:
+								mismatch === "taskId"
+									? "task_55555555555555555555555555555555"
+									: input.taskId,
+							launchGeneration:
+								mismatch === "launchGeneration"
+									? "launch_66666666666666666666666666666666"
+									: input.launchGeneration,
+							acknowledgedAt: input.acknowledgedAt,
+						},
 					};
 				},
 				async readCapability() {
@@ -119,6 +128,112 @@ describe("fenced task worker", () => {
 		});
 	}
 
+	test("refuses a replayed same-generation acknowledgement before capability custody", async () => {
+		const events: string[] = [];
+		const worker = createVaultGitTaskWorker({
+			engine: {
+				async complete() {
+					events.push("engine-complete");
+					throw new Error("engine must not run");
+				},
+			},
+			async acknowledge() {
+				events.push("acknowledgement-existing");
+				return {
+					schemaVersion: 1,
+					status: "existing",
+				};
+			},
+			async readCapability() {
+				events.push("capability-read");
+				return Uint8Array.from([1]);
+			},
+		});
+
+		await expect(
+			worker.run({
+				launch: "winner",
+				taskId: "task_11111111111111111111111111111111",
+				launchGeneration: "launch_44444444444444444444444444444444",
+				capabilityDescriptor: 7,
+				transactionId: "txn_22222222222222222222222222222222",
+				remote: "origin",
+			}),
+		).rejects.toThrow("task worker acknowledgement not transitioned: existing");
+		expect(events).toEqual(["acknowledgement-existing"]);
+	});
+
+	for (const status of ["stale", "uncertain"] as const) {
+		test(`refuses a ${status} acknowledgement outcome before capability custody`, async () => {
+			const events: string[] = [];
+			const worker = createVaultGitTaskWorker({
+				engine: {
+					async complete() {
+						events.push("engine-complete");
+						throw new Error("engine must not run");
+					},
+				},
+				async acknowledge() {
+					events.push(`acknowledgement-${status}`);
+					return { schemaVersion: 1, status };
+				},
+				async readCapability() {
+					events.push("capability-read");
+					return Uint8Array.from([1]);
+				},
+			});
+
+			await expect(
+				worker.run({
+					launch: "winner",
+					taskId: "task_11111111111111111111111111111111",
+					launchGeneration: "launch_44444444444444444444444444444444",
+					capabilityDescriptor: 7,
+					transactionId: "txn_22222222222222222222222222222222",
+					remote: "origin",
+				}),
+			).rejects.toThrow(
+				`task worker acknowledgement not transitioned: ${status}`,
+			);
+			expect(events).toEqual([`acknowledgement-${status}`]);
+		});
+	}
+
+	test("refuses a malformed transition result before capability custody", async () => {
+		const events: string[] = [];
+		const worker = createVaultGitTaskWorker({
+			engine: {
+				async complete() {
+					events.push("engine-complete");
+					throw new Error("engine must not run");
+				},
+			},
+			async acknowledge() {
+				events.push("acknowledgement-malformed");
+				return {
+					schemaVersion: 1,
+					status: "transitioned",
+				} as unknown as VaultGitTaskWorkerAcknowledgementResult;
+			},
+			async readCapability() {
+				events.push("capability-read");
+				return Uint8Array.from([1]);
+			},
+		});
+
+		await expect(
+			worker.run({
+				launch: "winner",
+				taskId: "task_11111111111111111111111111111111",
+				launchGeneration: "launch_44444444444444444444444444444444",
+				capabilityDescriptor: 7,
+				transactionId: "txn_22222222222222222222222222222222",
+				remote: "origin",
+			}),
+		).rejects.toThrow("task worker acknowledgement result invalid");
+		expect(events).toEqual(["acknowledgement-malformed"]);
+	});
+
 	test("refuses malformed launch identity before durable acknowledgement", async () => {
 		const events: string[] = [];
 		const worker = createVaultGitTaskWorker({
@@ -130,7 +245,11 @@ describe("fenced task worker", () => {
 			},
 			async acknowledge(input) {
 				events.push("acknowledged-durably");
-				return { schemaVersion: 1, ...input };
+				return {
+					schemaVersion: 1,
+					status: "transitioned",
+					acknowledgement: { schemaVersion: 1, ...input },
+				};
 			},
 			async readCapability() {
 				events.push("capability-read");

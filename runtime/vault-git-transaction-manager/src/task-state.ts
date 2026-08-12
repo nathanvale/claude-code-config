@@ -41,6 +41,24 @@ export type VaultGitTaskWorkerAcknowledgementInput = Omit<
 	"schemaVersion"
 >;
 
+/** Proof that this acknowledgement call won its exact durable CAS transition. */
+export interface VaultGitTaskWorkerAcknowledgementTransitioned {
+	readonly schemaVersion: 1;
+	readonly status: "transitioned";
+	readonly acknowledgement: VaultGitTaskWorkerAcknowledgement;
+}
+
+/** Capability-free refusal when this call did not win a fresh durable transition. */
+export interface VaultGitTaskWorkerAcknowledgementNotTransitioned {
+	readonly schemaVersion: 1;
+	readonly status: "existing" | "stale" | "uncertain";
+}
+
+/** Exact durable CAS result returned by the acknowledgement owner. */
+export type VaultGitTaskWorkerAcknowledgementResult =
+	| VaultGitTaskWorkerAcknowledgementTransitioned
+	| VaultGitTaskWorkerAcknowledgementNotTransitioned;
+
 /**
  * Create the first immutable state for a receipt-scoped background task.
  *
@@ -167,6 +185,62 @@ export function parseVaultGitTaskWorkerAcknowledgement(
 		launchGeneration: record.launchGeneration,
 		acknowledgedAt: record.acknowledgedAt,
 	});
+}
+
+/**
+ * Parse the acknowledgement owner's exact durable CAS outcome.
+ *
+ * Only `transitioned` carries proof that this invocation wrote the exact
+ * task-generation acknowledgement. Every other outcome remains capability-free.
+ *
+ * @param value - Unknown result returned by the durable acknowledgement owner
+ * @returns Frozen transitioned proof or a frozen non-transition outcome
+ * @throws {Error} When the result is malformed or contains additional fields
+ */
+export function parseVaultGitTaskWorkerAcknowledgementResult(
+	value: unknown,
+): VaultGitTaskWorkerAcknowledgementResult {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("task worker acknowledgement result invalid");
+	}
+	const record = value as Record<string, unknown>;
+	if (record.schemaVersion !== 1 || typeof record.status !== "string") {
+		throw new Error("task worker acknowledgement result invalid");
+	}
+	if (record.status === "transitioned") {
+		const expectedKeys = [
+			"schemaVersion",
+			"status",
+			"acknowledgement",
+		] as const;
+		if (
+			Object.keys(record).length !== expectedKeys.length ||
+			!expectedKeys.every((key) => Object.hasOwn(record, key))
+		) {
+			throw new Error("task worker acknowledgement result invalid");
+		}
+		return Object.freeze({
+			schemaVersion: 1,
+			status: "transitioned",
+			acknowledgement: parseVaultGitTaskWorkerAcknowledgement(
+				record.acknowledgement,
+			),
+		});
+	}
+	if (
+		(record.status === "existing" ||
+			record.status === "stale" ||
+			record.status === "uncertain") &&
+		Object.keys(record).length === 2 &&
+		Object.hasOwn(record, "schemaVersion") &&
+		Object.hasOwn(record, "status")
+	) {
+		return Object.freeze({
+			schemaVersion: 1,
+			status: record.status,
+		});
+	}
+	throw new Error("task worker acknowledgement result invalid");
 }
 
 /** Produce the canonical one-way binding for claim comparison. */

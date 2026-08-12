@@ -5,7 +5,9 @@ import type {
 } from "./engine.ts";
 import {
 	parseVaultGitTaskWorkerAcknowledgement,
+	parseVaultGitTaskWorkerAcknowledgementResult,
 	type VaultGitTaskWorkerAcknowledgementInput,
+	type VaultGitTaskWorkerAcknowledgementResult,
 } from "./task-state.ts";
 
 /** Launch-winner input for one acknowledged engine completion. */
@@ -30,10 +32,10 @@ export interface VaultGitTaskWorkerResult {
 export interface VaultGitTaskWorkerOptions {
 	/** Existing transaction engine, the sole canonical mutation owner. */
 	readonly engine: Pick<VaultGitTransactionEngine, "complete">;
-	/** Persist acknowledgement durably before resolving with its exact record. */
+	/** Return `transitioned` only when this call wins the exact durable CAS. */
 	readonly acknowledge: (
 		input: VaultGitTaskWorkerAcknowledgementInput,
-	) => Promise<unknown>;
+	) => Promise<VaultGitTaskWorkerAcknowledgementResult>;
 	/** Existing inherited-descriptor capability custody adapter. */
 	readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 	/** Injected acknowledgement clock. */
@@ -67,12 +69,21 @@ export function createVaultGitTaskWorker(
 				launchGeneration: input.launchGeneration,
 				acknowledgedAt: now().toISOString(),
 			});
-			const acknowledgement = parseVaultGitTaskWorkerAcknowledgement(
+			const acknowledgementResult =
+				parseVaultGitTaskWorkerAcknowledgementResult(
 				await options.acknowledge({
 					taskId: expected.taskId,
 					launchGeneration: expected.launchGeneration,
 					acknowledgedAt: expected.acknowledgedAt,
 				}),
+			);
+			if (acknowledgementResult.status !== "transitioned") {
+				throw new Error(
+					`task worker acknowledgement not transitioned: ${acknowledgementResult.status}`,
+				);
+			}
+			const acknowledgement = parseVaultGitTaskWorkerAcknowledgement(
+				acknowledgementResult.acknowledgement,
 			);
 			if (
 				acknowledgement.taskId !== expected.taskId ||
