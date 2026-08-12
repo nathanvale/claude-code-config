@@ -132,7 +132,7 @@ batches:
     ac_mapping:
       - 2
     rationale: null
-    status: in-progress
+    status: converged
     builder_commits:
       - 2104894cabb436a3c3660af7b9ae03c860acb32d
     builder_attempts:
@@ -153,7 +153,7 @@ batches:
         notes: "Builder added immutable one-way binding plus receipt-scoped claim-or-join CAS; twenty identical callers select one launch winner and six changed bindings refuse."
     orchestrator_inline_attempts: []
     iterations: 1
-    final_verdict: null
+    final_verdict: converged
   - id: "fenced-worker-composition"
     name: "Fenced worker composition"
     goal: "Keep the existing engine as sole mutation owner and preserve every exact-path, head, lease, activation, capability, and generation fence."
@@ -680,6 +680,12 @@ validator_wave_completed:
   outcome: "clean"
   findings: []
 ```
+
+- 2026-08-12T23:29:00+10:00: `single-flight-join-refusal` converged after
+  one recorded implementation attempt and a clean terminal Validator wave.
+  Reviewed Builder commit `2104894cabb436a3c3660af7b9ae03c860acb32d`
+  proves the U2 task-store seam. Real-process one-worker behavior remains
+  assigned to the confirmed U10 batch.
 
 ## Workflow Learnings
 
