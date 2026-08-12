@@ -1,6 +1,7 @@
-import type {
-	VaultGitPreparedCheckerClosure,
-	VaultGitPreparedEvidenceV2,
+import {
+	evaluateVaultGitPreparedEvidence,
+	type VaultGitPreparedCheckerClosure,
+	type VaultGitPreparedEvidenceV2,
 } from "./activation-contract.ts";
 import {
 	VAULT_GIT_ACTIVATION_BINDINGS,
@@ -81,6 +82,76 @@ export interface VaultGitActivationAuthority
 	): Promise<VaultGitActivationAuthorityResult>;
 }
 
+/** Current private activation state shared by inspection and write validation. */
+export type VaultGitActivationState =
+	| { readonly status: "unprepared" }
+	| { readonly status: "unavailable" }
+	| {
+			readonly status:
+				| "prepared"
+				| "stale"
+				| "activated"
+				| "invalidated"
+				| "revoked";
+			readonly evidence: VaultGitPreparedEvidenceV2;
+	  };
+
+/**
+ * Classify current evidence, markers, and admission in one deterministic order.
+ *
+ * @param store - Private activation record owner
+ * @param now - Canonical observation time used for prepared evidence freshness
+ * @returns One current state consumed by public inspection and write validation
+ */
+export async function inspectVaultGitActivationState(
+	store: VaultGitReceiptStore,
+	now: string,
+): Promise<VaultGitActivationState> {
+	let evidence: VaultGitPreparedEvidenceV2 | null;
+	try {
+		evidence = await store.readPreparedEvidence();
+	} catch {
+		return { status: "unavailable" };
+	}
+	if (evidence === null) return { status: "unprepared" };
+	let activation: Awaited<ReturnType<VaultGitReceiptStore["readActivation"]>>;
+	let invalidation: Awaited<
+		ReturnType<VaultGitReceiptStore["readActivationInvalidation"]>
+	>;
+	let revocation: Awaited<
+		ReturnType<VaultGitReceiptStore["readActivationRevocation"]>
+	>;
+	try {
+		[activation, invalidation, revocation] = await Promise.all([
+			readCurrentActivation(store),
+			store.readActivationInvalidation(evidence.evidenceId),
+			store.readActivationRevocation(evidence.evidenceId),
+		]);
+	} catch {
+		return { status: "unavailable" };
+	}
+	if (revocation?.evidenceId === evidence.evidenceId) {
+		return { status: "revoked", evidence };
+	}
+	if (invalidation?.evidenceId === evidence.evidenceId) {
+		return { status: "invalidated", evidence };
+	}
+	if (activation?.evidenceId === evidence.evidenceId) {
+		return { status: "activated", evidence };
+	}
+	const projected = evaluateVaultGitPreparedEvidence(evidence, now);
+	return { status: projected.status, evidence };
+}
+
+async function readCurrentActivation(store: VaultGitReceiptStore) {
+	try {
+		return await store.readActivation();
+	} catch (error) {
+		if (error instanceof VaultGitLegacyActivationRecordError) return null;
+		throw error;
+	}
+}
+
 /**
  * Create the sole deterministic authority for activation state changes.
  *
@@ -144,12 +215,23 @@ async function validateAuthorized(
 	options: VaultGitActivationAuthorityOptions,
 	scope: VaultGitActivationValidationScope,
 ): Promise<VaultGitActivationAuthorityResult> {
-	const activation = await requireActivation(options.store);
-	const evidence = await requirePreparedEvidence(
+	const current = await inspectVaultGitActivationState(
 		options.store,
-		activation.evidenceId,
+		options.clock(),
 	);
-	await assertNoActiveMarker(options.store, evidence.evidenceId);
+	if (current.status === "unavailable") {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	if (current.status === "unprepared" || current.status === "stale") {
+		throw new AuthorityDenial("evidence_changed");
+	}
+	if (current.status === "prepared") {
+		throw new AuthorityDenial("admission_missing");
+	}
+	if (current.status === "invalidated" || current.status === "revoked") {
+		throw new AuthorityDenial(current.status);
+	}
+	const evidence = current.evidence;
 	await revalidateEvidence(options, evidence, scope);
 	await assertNoActiveMarker(options.store, evidence.evidenceId);
 	await assertCurrentActivation(options.store, evidence.evidenceId);

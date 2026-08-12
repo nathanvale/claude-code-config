@@ -13,6 +13,7 @@ import type {
 	VaultGitActivationAuthority,
 	VaultGitActivationAuthorityResult,
 } from "./activation-authority.ts";
+import { inspectVaultGitActivationState } from "./activation-authority.ts";
 import type {
 	VaultGitActivationPreparationResult,
 	VaultGitActivationPreparer,
@@ -97,7 +98,7 @@ export function createVaultGitActivationFrontDoor(
 		sameCapability(humanCapability, candidate),
 	);
 	return {
-		inspect: () => inspectActivation(options),
+		inspect: () => inspectActivation(options, authority),
 		prepare: async () =>
 			projectPreparationResult(await options.preparer.prepare()),
 		review: (request) =>
@@ -165,38 +166,32 @@ async function revokeActivation(
 
 async function inspectActivation(
 	options: VaultGitActivationFrontDoorOptions,
+	authority: VaultGitActivationAuthority,
 ): Promise<VaultGitActivationFrontDoorResult> {
-	let evidence: Awaited<ReturnType<VaultGitReceiptStore["readPreparedEvidence"]>>;
-	let activation: Awaited<ReturnType<VaultGitReceiptStore["readActivation"]>>;
-	let invalidation: Awaited<
-		ReturnType<VaultGitReceiptStore["readActivationInvalidation"]>
-	>;
-	let revocation: Awaited<
-		ReturnType<VaultGitReceiptStore["readActivationRevocation"]>
-	>;
-	try {
-		evidence = await options.store.readPreparedEvidence();
-		if (evidence === null) {
-			return evaluateVaultGitPreparedEvidence(null, options.clock());
-		}
-		[activation, invalidation, revocation] = await Promise.all([
-			options.store.readActivation(),
-			options.store.readActivationInvalidation(evidence.evidenceId),
-			options.store.readActivationRevocation(evidence.evidenceId),
-		]);
-	} catch {
+	const current = await inspectVaultGitActivationState(
+		options.store,
+		options.clock(),
+	);
+	if (current.status === "unavailable") {
 		return restriction("revalidation_unavailable", "activation_admission");
 	}
-	if (revocation?.evidenceId === evidence.evidenceId) {
-		return restriction("revoked", "activation_admission");
+	if (current.status === "unprepared") {
+		return evaluateVaultGitPreparedEvidence(null, options.clock());
 	}
-	if (invalidation?.evidenceId === evidence.evidenceId) {
-		return restriction("invalidated", "activation_admission");
+	if (current.status === "revoked" || current.status === "invalidated") {
+		return restriction(current.status, "activation_admission");
 	}
-	if (activation?.evidenceId === evidence.evidenceId) {
-		return projectVaultGitActivatedResult(evidence, "none");
+	if (current.status === "activated") {
+		const validation = await authority.validate("continuation");
+		if (validation.status === "denied") {
+			return restriction(validation.reason, "activation_admission");
+		}
+		if (validation.status !== "admitted") {
+			return restriction("revoked", "activation_admission");
+		}
+		return projectVaultGitActivatedResult(current.evidence, "none");
 	}
-	return evaluateVaultGitPreparedEvidence(evidence, options.clock());
+	return evaluateVaultGitPreparedEvidence(current.evidence, options.clock());
 }
 
 function projectPreparationResult(

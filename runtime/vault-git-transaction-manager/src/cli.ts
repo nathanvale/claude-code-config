@@ -176,6 +176,26 @@ const DEFAULT_TIMEOUTS = {
 	pushMs: 30_000,
 	localMs: 15_000,
 } as const;
+const LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"optionalDependencies",
+	"peerDependencies",
+	"peerDependenciesMeta",
+	"trustedDependencies",
+	"bundledDependencies",
+	"bundleDependencies",
+	"patchedDependencies",
+	"overrides",
+	"resolutions",
+	"catalog",
+	"catalogs",
+	"workspaces",
+] as const;
+const DEPENDENCY_FREE_LOCKFILE_ABSENCE_BINDING = Buffer.from(
+	"vault-git:dependency-free-lockfile-absence:v1",
+	"utf8",
+);
 
 /** Complete live CLI composition over the U2-U5 owners. */
 export interface VaultGitCliComposition {
@@ -1023,9 +1043,9 @@ function resolveDefaultActivationIdentity():
  * @param repositoryPath - Canonical configured vault root
  * @param processPort - Bounded scrubbed subprocess boundary
  * @returns Fingerprint, check, registry, and exact repair operations
- * @throws When fingerprint source files are missing or unreadable, bun.lock is
- * absent, or the package.json check script does not name exactly one
- * repository-relative entrypoint file
+ * @throws When fingerprint source files are missing or unreadable, dependency
+ * or workspace metadata has no valid bun.lock, or the package.json check
+ * script does not name exactly one repository-relative entrypoint file
  *
  * @example
  * ```typescript
@@ -1054,18 +1074,19 @@ export function createVaultCheckerPort(
 		async fingerprint() {
 			// KTD10 admission covers the executed surface: the entrypoint is the
 			// file the package.json check script actually names, and the
-			// dependency bundle spans package.json, bun.lock (required — a
-			// missing lock refuses admission), bunfig.toml when present, and
-			// every TypeScript module under scripts/ the checker could import.
+			// dependency bundle spans package.json, the exact valid bun.lock or a
+			// classified dependency-free absence binding, bunfig.toml when present,
+			// and every TypeScript module under scripts/ the checker could import.
 			const manifestBytes = await readFile(join(repositoryPath, "package.json"));
 			const entrypointPath = resolveCheckEntrypoint(manifestBytes);
 			const entrypoint = await readFile(join(repositoryPath, entrypointPath));
+			const lockfile = await readCheckerLockfileBinding(
+				repositoryPath,
+				manifestBytes,
+			);
 			const bundle: Array<{ readonly path: string; readonly bytes: Buffer }> = [
 				{ path: "package.json", bytes: manifestBytes },
-				{
-					path: "bun.lock",
-					bytes: await readFile(join(repositoryPath, "bun.lock")),
-				},
+				lockfile,
 			];
 			// The checker reads this deterministic contract as runtime input. Bind it
 			// with code and lock bytes so schema drift always invalidates admission.
@@ -1127,6 +1148,93 @@ export function createVaultCheckerPort(
 			]);
 		},
 	};
+}
+
+async function readCheckerLockfileBinding(
+	repositoryPath: string,
+	manifestBytes: Buffer,
+): Promise<{ readonly path: string; readonly bytes: Buffer }> {
+	const lockfileBytes = await readFile(join(repositoryPath, "bun.lock")).catch(
+		(error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return null;
+			throw error;
+		},
+	);
+	if (lockfileBytes !== null) {
+		assertValidBunLockfile(lockfileBytes, manifestBytes);
+		return { path: "bun.lock:present", bytes: lockfileBytes };
+	}
+	assertDependencyFreeManifest(manifestBytes);
+	return {
+		path: "bun.lock:absent",
+		bytes: DEPENDENCY_FREE_LOCKFILE_ABSENCE_BINDING,
+	};
+}
+
+function assertDependencyFreeManifest(manifestBytes: Uint8Array): void {
+	const manifest = parseManifest(manifestBytes);
+	const dependencySurface = LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
+		Object.hasOwn(manifest, field),
+	);
+	if (dependencySurface !== undefined) {
+		throw new Error(
+			`bun.lock is required when package.json declares ${dependencySurface}`,
+		);
+	}
+}
+
+function parseManifest(manifestBytes: Uint8Array): Record<string, unknown> {
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
+	} catch {
+		throw new Error("vault package manifest is not valid JSON");
+	}
+	if (
+		typeof manifest !== "object" ||
+		manifest === null ||
+		Array.isArray(manifest)
+	) {
+		throw new Error("vault package manifest is not an object");
+	}
+	return manifest as Record<string, unknown>;
+}
+
+function assertValidBunLockfile(
+	lockfileBytes: Uint8Array,
+	manifestBytes: Uint8Array,
+): void {
+	let lockfile: unknown;
+	try {
+		lockfile = Bun.JSONC.parse(Buffer.from(lockfileBytes).toString("utf8"));
+	} catch {
+		throw new Error("bun.lock is not valid JSONC");
+	}
+	if (typeof lockfile !== "object" || lockfile === null || Array.isArray(lockfile)) {
+		throw new Error("bun.lock contract is invalid");
+	}
+	const record = lockfile as Record<string, unknown>;
+	if (
+		record.lockfileVersion !== 1 ||
+		record.configVersion !== 1 ||
+		typeof record.workspaces !== "object" ||
+		record.workspaces === null ||
+		Array.isArray(record.workspaces)
+	) {
+		throw new Error("bun.lock contract is invalid");
+	}
+	const manifest = parseManifest(manifestBytes);
+	const dependencySurface = LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
+		Object.hasOwn(manifest, field),
+	);
+	if (
+		dependencySurface !== undefined &&
+		(typeof record.packages !== "object" ||
+			record.packages === null ||
+			Array.isArray(record.packages))
+	) {
+		throw new Error("bun.lock dependency contract is invalid");
+	}
 }
 
 /**

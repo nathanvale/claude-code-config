@@ -94,6 +94,217 @@ describe("isolated activation preparation", () => {
 	);
 
 	test(
+		"production activation prepares a dependency-free vault without bun.lock",
+		async () => {
+			const fixture = await preparationFixture({
+				includeLockfile: false,
+				seedLedger: false,
+			});
+			const before = await canonicalSnapshot(fixture.repositoryPath);
+			const result = await runCliProcess({
+				label: "production dependency-free activation preparation",
+				argv: [
+					"bun",
+					"run",
+					join(import.meta.dir, "../src/cli.ts"),
+					"activation",
+					"prepare",
+					"--no-input",
+					"--json",
+					"--run-id",
+					"dependency-free-lockfile-absence",
+				],
+				cwd: fixture.repositoryPath,
+				env: configuredProductionActivationEnvironment(fixture),
+				timeoutMs: 30_000,
+			});
+
+			expect({
+				exitCode: result.exitCode,
+				envelope: parseCliProcessJson(result),
+			}).toMatchObject({
+				exitCode: 0,
+				envelope: {
+					status: "ok",
+					data: {
+						status: "prepared",
+						authority: "evidence_only",
+						write_permission: "denied",
+						changed_state: "none",
+						next_action: { id: "review_prepared" },
+					},
+					continuation: { next_action_id: "review_prepared" },
+				},
+			});
+			expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+		},
+		120_000,
+	);
+
+	test(
+		"production activation, status, and Doctor agree after prepared evidence is invalidated",
+		async () => {
+			const fixture = await preparationFixture({ seedLedger: false });
+			const prepared = await fixture.preparer.prepare();
+			if (prepared.status !== "prepared") throw new Error("expected prepared");
+			await fixture.store.recordActivationInvalidation({
+				schemaVersion: 1,
+				evidenceId: prepared.evidence.evidenceId,
+				binding: "checkerClosure",
+				invalidatedAt: "2026-08-11T00:00:01.000Z",
+			});
+			const before = await canonicalSnapshot(fixture.repositoryPath);
+			await expectProductionContinuationParity(fixture, "prepare_fresh");
+			expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+		},
+		120_000,
+	);
+
+	for (const scenario of [
+		{
+			name: "unprepared",
+			nextAction: "prepare_fresh",
+			setup: async () => preparationFixture({ seedLedger: false }),
+		},
+		{
+			name: "prepared",
+			nextAction: "review_prepared",
+			setup: async () => {
+				const fixture = await preparationFixture({
+					clock: () => new Date().toISOString(),
+					seedLedger: false,
+				});
+				if ((await fixture.preparer.prepare()).status !== "prepared") {
+					throw new Error("expected prepared");
+				}
+				return fixture;
+			},
+		},
+		{
+			name: "stale",
+			nextAction: "prepare_fresh",
+			setup: async () => {
+				const fixture = await preparationFixture({ seedLedger: false });
+				if ((await fixture.preparer.prepare()).status !== "prepared") {
+					throw new Error("expected prepared");
+				}
+				return fixture;
+			},
+		},
+		{
+			name: "revoked",
+			nextAction: "prepare_fresh",
+			setup: async () => {
+				const fixture = await preparationFixture({ seedLedger: false });
+				const prepared = await fixture.preparer.prepare();
+				if (prepared.status !== "prepared") throw new Error("expected prepared");
+				await fixture.store.admitActivation({
+					schemaVersion: 2,
+					evidenceId: prepared.evidence.evidenceId,
+					admittedAt: "2026-08-11T00:00:01.000Z",
+					note: "fixture human review",
+				});
+				await fixture.store.recordActivationRevocation({
+					schemaVersion: 1,
+					evidenceId: prepared.evidence.evidenceId,
+					revokedAt: "2026-08-11T00:00:02.000Z",
+					note: "fixture human revocation",
+				});
+				return fixture;
+			},
+		},
+		{
+			name: "admitted",
+			nextAction: "begin_transaction",
+			setup: async () => {
+				const fixture = await preparationFixture({
+					clock: () => new Date().toISOString(),
+					seedLedger: false,
+				});
+				const prepared = await fixture.preparer.prepare();
+				if (prepared.status !== "prepared") throw new Error("expected prepared");
+				await fixture.store.admitActivation({
+					schemaVersion: 2,
+					evidenceId: prepared.evidence.evidenceId,
+					admittedAt: new Date().toISOString(),
+					note: "fixture human review",
+				});
+				return fixture;
+			},
+		},
+		{
+			name: "admitted with live binding drift",
+			nextAction: "prepare_fresh",
+			setup: async () => {
+				const fixture = await preparationFixture({
+					clock: () => new Date().toISOString(),
+					seedLedger: false,
+				});
+				const prepared = await fixture.preparer.prepare();
+				if (prepared.status !== "prepared") throw new Error("expected prepared");
+				await fixture.store.admitActivation({
+					schemaVersion: 2,
+					evidenceId: prepared.evidence.evidenceId,
+					admittedAt: new Date().toISOString(),
+					note: "fixture human review",
+				});
+				await writeFile(fixture.publicKeyPath, "ssh-ed25519 changed-key\n");
+				return fixture;
+			},
+		},
+		{
+			name: "fresh V2 evidence after a legacy admission",
+			nextAction: "review_prepared",
+			setup: async () => {
+				const fixture = await preparationFixture({
+					clock: () => new Date().toISOString(),
+					seedLedger: false,
+				});
+				if ((await fixture.preparer.prepare()).status !== "prepared") {
+					throw new Error("expected prepared");
+				}
+				await writeFile(
+					fixture.store.paths.activation,
+					JSON.stringify({
+						schemaVersion: 1,
+						admittedAt: new Date().toISOString(),
+						note: "legacy fixture admission",
+					}),
+					{ mode: 0o600 },
+				);
+				return fixture;
+			},
+		},
+		{
+			name: "unavailable",
+			nextAction: "inspect_configured_vault",
+			setup: async () => {
+				const fixture = await preparationFixture({ seedLedger: false });
+				if ((await fixture.preparer.prepare()).status !== "prepared") {
+					throw new Error("expected prepared");
+				}
+				await writeFile(fixture.store.paths.preparedEvidence, "{}\n");
+				return fixture;
+			},
+		},
+	] as const) {
+		test(
+			`production activation, status, and Doctor share the ${scenario.name} continuation`,
+			async () => {
+				const fixture = await scenario.setup();
+				const before = await canonicalSnapshot(fixture.repositoryPath);
+
+				await expectProductionContinuationParity(
+					fixture,
+					scenario.nextAction,
+				);
+				expect(await canonicalSnapshot(fixture.repositoryPath)).toEqual(before);
+			},
+			120_000,
+		);
+	}
+
+	test(
 		"production CLI refuses, revalidates admitted V2 evidence, and opens the write gate",
 		async () => {
 			const fixture = await preparationFixture({ seedLedger: false });
@@ -123,7 +334,7 @@ describe("isolated activation preparation", () => {
 			expect(parseCliProcessJson(missing)).toMatchObject({
 				status: "error",
 				error: { code: "activation_blocked" },
-				data: { activation_restriction: { cause: { id: "admission_missing" } } },
+				data: { activation_restriction: { cause: { id: "evidence_changed" } } },
 			});
 
 			const prepared = await fixture.preparer.prepare();
@@ -603,9 +814,28 @@ function productionActivationEnvironment(input: {
 	};
 }
 
+function configuredProductionActivationEnvironment(input: {
+	readonly repositoryPath: string;
+	readonly stateRoot: string;
+	readonly privateKeyPath: string;
+	readonly publicKeyPath: string;
+	readonly knownHostsPath: string;
+}): NodeJS.ProcessEnv {
+	return {
+		...productionActivationEnvironment(input),
+		VAULT_GIT_GIT_BINARY_PATH: "/usr/bin/git",
+		VAULT_GIT_SSH_BINARY_PATH: "/usr/bin/ssh",
+		VAULT_GIT_SSH_IDENTITY_FILE_PATH: input.privateKeyPath,
+		VAULT_GIT_SSH_PUBLIC_KEY_PATH: input.publicKeyPath,
+		VAULT_GIT_SSH_KNOWN_HOSTS_PATH: input.knownHostsPath,
+	};
+}
+
 async function preparationFixture(overrides: {
 	readonly createChecker?: (repositoryPath: string) => VaultGitCheckerPort;
 	readonly cancelled?: () => boolean;
+	readonly clock?: () => string;
+	readonly includeLockfile?: boolean;
 	readonly admittedGitEnvironment?: Readonly<Record<string, string>>;
 	readonly observeProcess?: (request: VaultGitProcessRequest) => void;
 	readonly removeWorkspace?: (workspace: string) => Promise<void>;
@@ -648,7 +878,16 @@ async function preparationFixture(overrides: {
 			scripts: { check: "bun run scripts/check.ts" },
 		}),
 	);
-	await writeFile(join(repositoryPath, "bun.lock"), "");
+	if (overrides.includeLockfile !== false) {
+		await writeFile(
+			join(repositoryPath, "bun.lock"),
+			JSON.stringify({
+				lockfileVersion: 1,
+				configVersion: 1,
+				workspaces: { "": { name: "activation-fixture" } },
+			}),
+		);
+	}
 	await writeFile(
 		join(repositoryPath, "scripts", "check.ts"),
 		'await Bun.write(".activation-checker-ran", "ran\\n");\nprocess.stdout.write(JSON.stringify({ schema_version: 1, findings: [] }) + "\\n");\n',
@@ -660,7 +899,7 @@ async function preparationFixture(overrides: {
 	git(repositoryPath, [
 		"add",
 		"package.json",
-		"bun.lock",
+		...(overrides.includeLockfile === false ? [] : ["bun.lock"]),
 		"scripts/check.ts",
 		"schemas/frontmatter-contract.json",
 	]);
@@ -762,12 +1001,44 @@ async function preparationFixture(overrides: {
 			createChecker:
 				overrides.createChecker ??
 				((isolatedPath) => createVaultCheckerPort(isolatedPath, processPort)),
-			clock: () => "2026-08-11T00:00:00.000Z",
+			clock: overrides.clock ?? (() => "2026-08-11T00:00:00.000Z"),
 			cancelled: overrides.cancelled,
 			removeWorkspace: overrides.removeWorkspace,
 			timeouts: { localMs: 5_000, fetchMs: 5_000 },
 		}),
 	};
+}
+
+async function expectProductionContinuationParity(
+	fixture: Awaited<ReturnType<typeof preparationFixture>>,
+	nextAction: "begin_transaction" | "inspect_configured_vault" | "prepare_fresh" | "review_prepared",
+): Promise<void> {
+	const env = configuredProductionActivationEnvironment(fixture);
+	for (const [index, args] of [
+		["activation", "--json"],
+		["status", "--json"],
+		["doctor", "--json"],
+	].entries()) {
+		const result = await runCliProcess({
+			label: `production ${nextAction} continuation ${args[0]}`,
+			argv: [
+				"bun",
+				"run",
+				join(import.meta.dir, "../src/cli.ts"),
+				...args,
+				"--run-id",
+				`${nextAction}-continuation-${index}`,
+			],
+			cwd: fixture.repositoryPath,
+			env,
+			timeoutMs: 30_000,
+		});
+		const envelope = parseCliProcessJson(result);
+		expect(envelope, args[0]).toMatchObject({
+			data: { next_action: { id: nextAction } },
+			continuation: { next_action_id: nextAction },
+		});
+	}
 }
 
 function checkerFailure(): VaultGitCheckerPort {

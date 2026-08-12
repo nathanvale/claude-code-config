@@ -955,7 +955,10 @@ async function createFixture(
 	);
 	// The checker admission fingerprint requires a real bun.lock; a missing
 	// lock file refuses admission by design.
-	await writeFile(join(clone, "bun.lock"), "{}\n");
+	await writeFile(
+		join(clone, "bun.lock"),
+		'{"lockfileVersion":1,"configVersion":1,"workspaces":{}}\n',
+	);
 	await writeFile(
 		join(clone, "schemas", "frontmatter-contract.json"),
 		'{"type":"object"}\n',

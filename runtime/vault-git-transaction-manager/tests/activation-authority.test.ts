@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
 	createVaultGitActivationAuthority,
+	inspectVaultGitActivationState,
 	type VaultGitLiveActivationBindings,
 } from "../src/index.ts";
 import {
@@ -22,7 +23,9 @@ afterEach(tempDirectories.cleanup);
 
 describe("activation authority", () => {
 	test("prepared evidence alone never grants write authority", async () => {
-		const fixture = await authorityFixture();
+		const fixture = await authorityFixture({
+			clock: "2026-08-09T00:00:01.000Z",
+		});
 		await fixture.store.publishPreparedEvidence(fixture.evidence);
 
 		expect(await fixture.authority.validate()).toEqual({
@@ -51,6 +54,33 @@ describe("activation authority", () => {
 		expect(await fixture.authority.validate()).toEqual({
 			status: "denied",
 			reason: "evidence_changed",
+		});
+	});
+
+	test("fresh V2 evidence supersedes a legacy V1 admission", async () => {
+		const fixture = await authorityFixture({
+			clock: "2026-08-09T00:00:01.000Z",
+		});
+		await fixture.store.publishPreparedEvidence(fixture.evidence);
+		await writeFile(
+			fixture.store.paths.activation,
+			JSON.stringify({
+				schemaVersion: 1,
+				admittedAt: "2026-08-09T00:00:00.000Z",
+				note: "legacy admission",
+			}),
+			{ mode: 0o600 },
+		);
+
+		expect(
+			await inspectVaultGitActivationState(
+				fixture.store,
+				"2026-08-09T00:00:01.000Z",
+			),
+		).toMatchObject({ status: "prepared" });
+		expect(await fixture.authority.validate()).toEqual({
+			status: "denied",
+			reason: "admission_missing",
 		});
 	});
 
@@ -429,6 +459,35 @@ describe("activation authority", () => {
 		expect(
 			await fixture.store.readActivationRevocation(other.evidenceId),
 		).toMatchObject({ note: "second" });
+	});
+
+	test("fresh evidence remains independent from a prior evidence revocation", async () => {
+		const fixture = await authorityFixture({
+			clock: "2026-08-09T00:00:01.000Z",
+		});
+		const next = preparedEvidenceForTest({
+			hostIdentity: identity("host", "e"),
+		});
+		await fixture.store.publishPreparedEvidence(fixture.evidence);
+		await fixture.authority.admit({
+			evidenceId: fixture.evidence.evidenceId,
+			humanCapability,
+			note: "admit first evidence",
+		});
+		await fixture.authority.revoke({
+			evidenceId: fixture.evidence.evidenceId,
+			humanCapability,
+			note: "revoke first evidence",
+		});
+		await fixture.store.publishPreparedEvidence(next);
+
+		expect(await fixture.authority.validate()).toEqual({
+			status: "denied",
+			reason: "admission_missing",
+		});
+		expect(
+			await fixture.store.readActivationRevocation(next.evidenceId),
+		).toBeNull();
 	});
 
 	test("human-only revocation immediately denies an in-flight validation", async () => {
