@@ -94,6 +94,11 @@ import {
 import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitRepairResult } from "./repair.ts";
 import {
+	createVaultGitTaskWorker,
+	type VaultGitTaskWorker,
+	type VaultGitTaskWorkerOptions,
+} from "./task-worker.ts";
+import {
 	createReceiptStore,
 	launchCapabilityProcess,
 	launchDoctorTokenProcess,
@@ -130,6 +135,8 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"repair.ts",
 	"repository-identity.ts",
 	"store.ts",
+	"task-state.ts",
+	"task-worker.ts",
 	"worker-policy.ts",
 ] as const;
 const CLI_FACADE_EXECUTABLE_SOURCE_NAMES = [
@@ -168,6 +175,19 @@ export const VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS = Object.freeze([
 	join(CLI_FACADE_PACKAGE_ROOT, "package.json"),
 	join(REPOSITORY_ROOT, "bun.lock"),
 ].sort());
+
+/**
+ * Compose the internal acknowledged task worker from production CLI owners.
+ *
+ * @param options - Existing engine, durable acknowledgement, and FD custody
+ * @returns Bounded worker that delegates canonical mutation to the engine
+ * @internal
+ */
+export function createVaultGitCliTaskWorker(
+	options: VaultGitTaskWorkerOptions,
+): VaultGitTaskWorker {
+	return createVaultGitTaskWorker(options);
+}
 const DEFAULT_REMOTE = "origin";
 const DEFAULT_LEGACY_STATE_IDENTITY = "configured-super-vault";
 const DEFAULT_LEASE_DURATION_MS = 15 * 60_000;

@@ -27,6 +27,20 @@ export type VaultGitTaskClaim = Readonly<
 	VaultGitTaskState & { readonly bindingDigest: string }
 >;
 
+/** Exact durable acknowledgement required before one task-worker launch. */
+export interface VaultGitTaskWorkerAcknowledgement {
+	readonly schemaVersion: 1;
+	readonly taskId: string;
+	readonly launchGeneration: string;
+	readonly acknowledgedAt: string;
+}
+
+/** Fields supplied to the durable worker-acknowledgement owner. */
+export type VaultGitTaskWorkerAcknowledgementInput = Omit<
+	VaultGitTaskWorkerAcknowledgement,
+	"schemaVersion"
+>;
+
 /**
  * Create the first immutable state for a receipt-scoped background task.
  *
@@ -114,6 +128,47 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 	return Object.freeze({ ...state, bindingDigest: record.bindingDigest });
 }
 
+/**
+ * Parse one exact durable worker acknowledgement.
+ *
+ * @param value - Unknown acknowledgement returned by its persistence owner
+ * @returns Frozen acknowledgement with an exact task and launch generation
+ * @throws {Error} When the record is malformed or contains additional fields
+ */
+export function parseVaultGitTaskWorkerAcknowledgement(
+	value: unknown,
+): VaultGitTaskWorkerAcknowledgement {
+	const expectedKeys = [
+		"schemaVersion",
+		"taskId",
+		"launchGeneration",
+		"acknowledgedAt",
+	] as const;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("task worker acknowledgement invalid");
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).length !== expectedKeys.length ||
+		!expectedKeys.every((key) => Object.hasOwn(record, key)) ||
+		record.schemaVersion !== 1 ||
+		typeof record.taskId !== "string" ||
+		!/^task_[0-9a-f]{32}$/.test(record.taskId) ||
+		typeof record.launchGeneration !== "string" ||
+		!/^launch_[0-9a-f]{32}$/.test(record.launchGeneration) ||
+		typeof record.acknowledgedAt !== "string" ||
+		!isExactIsoTimestamp(record.acknowledgedAt)
+	) {
+		throw new Error("task worker acknowledgement invalid");
+	}
+	return Object.freeze({
+		schemaVersion: 1,
+		taskId: record.taskId,
+		launchGeneration: record.launchGeneration,
+		acknowledgedAt: record.acknowledgedAt,
+	});
+}
+
 /** Produce the canonical one-way binding for claim comparison. */
 export function digestVaultGitTaskBinding(
 	input: VaultGitTaskBindingInput,
@@ -184,8 +239,7 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		record.revision !== 1 ||
 		!VAULT_GIT_TASK_PHASES.includes(record.phase as never) ||
 		typeof record.recordedAt !== "string" ||
-		Number.isNaN(Date.parse(record.recordedAt)) ||
-		new Date(record.recordedAt).toISOString() !== record.recordedAt
+		!isExactIsoTimestamp(record.recordedAt)
 	) {
 		throw new Error("task state invalid");
 	}
@@ -197,4 +251,8 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		phase: "admitted",
 		recordedAt: record.recordedAt,
 	});
+}
+
+function isExactIsoTimestamp(value: string): boolean {
+	return !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
