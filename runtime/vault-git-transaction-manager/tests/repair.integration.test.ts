@@ -344,6 +344,60 @@ describe("deterministic push_pending repair", () => {
 		});
 	});
 
+	test("refuses a takeover when the prior writer is not stopped", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		// priorWriterStopped is the sole flipped variable from the valid takeover
+		// baseline; every other guard clause stays satisfied so the refusal proves
+		// this clause alone fences the supersede.
+		const result = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: false,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "doctor_token_invalid",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(await fixture.store.readQuarantine()).toBeNull();
+	});
+
+	test("refuses a takeover when priorWriterStopped is omitted", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const result = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "doctor_token_invalid",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(await fixture.store.readQuarantine()).toBeNull();
+	});
+
 	test("reconcile-quarantine refuses a tampered owned path, then clears after baseline restoration", async () => {
 		const fixture = await repairFixture("host-a", "stale");
 		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
