@@ -212,6 +212,10 @@ const DEFAULT_TIMEOUTS = {
 	pushMs: 30_000,
 	localMs: 15_000,
 } as const;
+// Stale takeover performs repeated Doctor proof, ledger validation, one push,
+// and outcome reconciliation inside the private child. Its process budget must
+// span the whole ceremony rather than reuse one Git push deadline.
+const STALE_TAKEOVER_PRIVATE_LAUNCH_TIMEOUT_MS = 120_000;
 const LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
 	"dependencies",
 	"devDependencies",
@@ -1583,7 +1587,7 @@ async function launchPrivateInvocation(
 				command: process.execPath,
 				args: childArgs,
 				cwd: composition.repositoryPath,
-				timeoutMs: DEFAULT_TIMEOUTS.pushMs,
+				timeoutMs: STALE_TAKEOVER_PRIVATE_LAUNCH_TIMEOUT_MS,
 			}),
 		};
 	}
