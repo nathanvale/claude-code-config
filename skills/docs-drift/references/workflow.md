@@ -32,7 +32,11 @@ const FINDINGS = {
         type: 'object',
         properties: {
           doc: { type: 'string', description: 'file:line of the doc making the claim' },
-          code: { type: 'string', description: 'file:line in the named target artifact, or empty when the finding is an absence' },
+          code: {
+            type: 'string',
+            description:
+              'file:line in the artifact holding the CORRECT value — the line that shows what the doc should have said. Not a line you think needs changing: the artifact is the source of truth, the doc is what is wrong. Empty when the finding is an absence.',
+          },
           claim: { type: 'string', description: 'what the doc states, quoted verbatim' },
           observation: {
             type: 'string',
@@ -286,6 +290,7 @@ Three tiers:
 - **Too slow / too many agents** — trim `targets` to the workflow-coupled docs; they carry the highest claim density.
 - **Deterministic lens only** — omit `manifest`.
 - **Scanner skimming instead of reading** — raise `effort` on the scan agent for docs whose target is a long workflow file.
+- **Scanner blaming the artifact** — observed: a `haiku` scanner set `code` to a similarly-named artifact and framed the workflow as needing the change, despite the prompt saying otherwise. The `misfiled` verdict recovers it, at the cost of a verifier turn. If it recurs often, raise scan `effort` rather than adding more prompt text — the instruction is already stated twice, in the prompt and in the `code` field description.
 - **Verifier refuting real drift** — refute-by-default is deliberate. Loosen the last paragraph of STEP 2 before touching anything else.
 
 ## Resume
