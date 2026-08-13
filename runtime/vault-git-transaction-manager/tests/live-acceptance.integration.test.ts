@@ -21,6 +21,7 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
+import { readVaultGitProcessIdentity } from "../src/cli.ts";
 import { VAULT_GIT_LEDGER_REF } from "../src/model.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
@@ -1556,6 +1557,7 @@ async function readLatestTaskRevision(history: string): Promise<{
 	readonly state: string;
 	readonly phase: string;
 	readonly workerPid: number | null;
+	readonly workerProcessIdentity: string | null;
 } | null> {
 	const latest = (await readdir(history).catch(() => []))
 		.filter((name) => /^\d{12}\.json$/.test(name))
@@ -1573,7 +1575,11 @@ async function readLatestTaskRevision(history: string): Promise<{
 			(record.workerPid !== null &&
 				(typeof record.workerPid !== "number" ||
 					!Number.isSafeInteger(record.workerPid) ||
-					record.workerPid <= 0))
+					record.workerPid <= 0)) ||
+			(record.workerProcessIdentity !== null &&
+				(typeof record.workerProcessIdentity !== "string" ||
+					!/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity))) ||
+			(record.workerPid === null) !== (record.workerProcessIdentity === null)
 		) {
 			return null;
 		}
@@ -1582,6 +1588,7 @@ async function readLatestTaskRevision(history: string): Promise<{
 			state: record.state,
 			phase: record.phase,
 			workerPid: record.workerPid as number | null,
+			workerProcessIdentity: record.workerProcessIdentity as string | null,
 		};
 	} catch {
 		return null;
@@ -1596,22 +1603,32 @@ async function killWorkerForTask(
 	if (!/^task_[0-9a-f]{32}$/.test(taskId)) throw new Error("invalid task id");
 	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
 	const deadline = Date.now() + timeoutMs;
-	let workerPid: number | null = null;
-	while (Date.now() < deadline && workerPid === null) {
+	let worker: { readonly pid: number; readonly identity: string } | null = null;
+	while (Date.now() < deadline && worker === null) {
 		for (const repository of await readdir(managerRoot).catch(() => [])) {
 			const record = await readLatestTaskRevision(
 				join(managerRoot, repository, "tasks", taskId, "history"),
 			);
-			if (record?.taskId === taskId && record.workerPid !== null) {
-				workerPid = record.workerPid;
+			if (
+				record?.taskId === taskId &&
+				record.workerPid !== null &&
+				record.workerProcessIdentity !== null
+			) {
+				worker = {
+					pid: record.workerPid,
+					identity: record.workerProcessIdentity,
+				};
 				break;
 			}
 		}
-		if (workerPid === null) await Bun.sleep(10);
+		if (worker === null) await Bun.sleep(10);
 	}
-	if (workerPid === null) throw new Error("durable task omitted worker pid");
+	if (worker === null) throw new Error("durable task omitted worker identity");
+	if (observeWorkerProcess(worker.pid, worker.identity) !== "matching") {
+		throw new Error("durable worker process identity did not match");
+	}
 	try {
-		process.kill(workerPid, "SIGKILL");
+		process.kill(worker.pid, "SIGKILL");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ESRCH") {
 			throw new Error("durable worker pid was already absent", { cause: error });
@@ -1620,15 +1637,38 @@ async function killWorkerForTask(
 	}
 	const exitDeadline = Date.now() + timeoutMs;
 	while (Date.now() < exitDeadline) {
-		try {
-			process.kill(workerPid, 0);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-			throw error;
+		const observed = observeWorkerProcess(worker.pid, worker.identity);
+		if (observed === "absent") return;
+		if (observed === "mismatch") {
+			throw new Error("durable worker process identity changed after SIGKILL");
 		}
 		await Bun.sleep(10);
 	}
 	throw new Error("durable worker pid survived SIGKILL");
+}
+
+function observeWorkerProcess(
+	pid: number,
+	expectedIdentity: string,
+): "matching" | "absent" | "mismatch" {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		throw error;
+	}
+	try {
+		return readVaultGitProcessIdentity(pid) === expectedIdentity
+			? "matching"
+			: "mismatch";
+	} catch (error) {
+		try {
+			process.kill(pid, 0);
+		} catch (probeError) {
+			if ((probeError as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		}
+		throw error;
+	}
 }
 
 async function waitForTaskState(
