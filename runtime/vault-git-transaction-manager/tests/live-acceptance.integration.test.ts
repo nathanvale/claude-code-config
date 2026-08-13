@@ -576,6 +576,46 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		60_000,
 	);
 
+	test(
+		"stale takeover private launch budget exceeds one Git push timeout",
+		async () => {
+			const fixture = await createFixture({
+				leaseDurationMs: 1,
+				privateLegacyRepairLaunchTimeoutMs: 50,
+				privateRepairLaunchTimeoutMs: 500,
+				privateChildDelayMs: 100,
+				privateChildMode: "delayed_repair_result",
+			});
+			const transactionId = await fixture.begin("notes/event.md");
+			await Bun.sleep(20);
+
+			const repaired = await fixture.run([
+				"repair",
+				"stale-lease-takeover",
+				"--transaction-id",
+				transactionId,
+				"--prior-writer-stopped",
+				"--json",
+			]);
+
+			expect({
+				exitCode: repaired.exitCode,
+				envelope: parseCliProcessJson(repaired),
+			}).toMatchObject({
+				exitCode: 0,
+				envelope: {
+					status: "ok",
+					data: {
+						command: "repair",
+						outcome: "repaired",
+						transaction_state: "superseded",
+					},
+				},
+			});
+		},
+		60_000,
+	);
+
 	test("malformed worker acknowledgement fails closed without claiming a remote outage", async () => {
 		const fixture = await createFixture({ privateChildMode: "malformed_ack" });
 		const transactionId = await fixture.begin("notes/event.md");
@@ -1072,7 +1112,11 @@ async function createFixture(
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
 		readonly privateLaunchTimeoutMs?: number;
-		readonly privateChildMode?: "malformed_ack";
+		readonly privateRepairLaunchTimeoutMs?: number;
+		readonly privateLegacyRepairLaunchTimeoutMs?: number;
+		readonly privateChildDelayMs?: number;
+		readonly privateChildMode?: "malformed_ack" | "delayed_repair_result";
+		readonly leaseDurationMs?: number;
 		readonly profile?: string;
 		readonly shimMode?: string;
 	} = {},
@@ -1098,7 +1142,11 @@ async function createCloneFixture(
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
 		readonly privateLaunchTimeoutMs?: number;
-		readonly privateChildMode?: "malformed_ack";
+		readonly privateRepairLaunchTimeoutMs?: number;
+		readonly privateLegacyRepairLaunchTimeoutMs?: number;
+		readonly privateChildDelayMs?: number;
+		readonly privateChildMode?: "malformed_ack" | "delayed_repair_result";
+		readonly leaseDurationMs?: number;
 		readonly profile?: string;
 		readonly shimMode?: string;
 	},
@@ -1192,10 +1240,36 @@ async function createCloneFixture(
 					VAULT_GIT_TEST_PRIVATE_LAUNCH_TIMEOUT_MS: String(
 						options.privateLaunchTimeoutMs,
 					),
+			}),
+		...(options.privateRepairLaunchTimeoutMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_PRIVATE_REPAIR_LAUNCH_TIMEOUT_MS: String(
+						options.privateRepairLaunchTimeoutMs,
+					),
+				}),
+		...(options.privateLegacyRepairLaunchTimeoutMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_PRIVATE_LEGACY_REPAIR_LAUNCH_TIMEOUT_MS: String(
+						options.privateLegacyRepairLaunchTimeoutMs,
+					),
+				}),
+		...(options.privateChildDelayMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_PRIVATE_CHILD_DELAY_MS: String(
+						options.privateChildDelayMs,
+					),
 				}),
 		...(options.privateChildMode === undefined
 			? {}
 			: { VAULT_GIT_TEST_PRIVATE_CHILD_MODE: options.privateChildMode }),
+		...(options.leaseDurationMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_LEASE_DURATION_MS: String(options.leaseDurationMs),
+				}),
 	};
 	const repositoryIdentity = (
 		await resolveVaultRepositoryIdentity({
