@@ -250,7 +250,7 @@ const manifest = Bun.YAML.parse(await Bun.file(`${root}/docs/agents/doc-targets.
 Workflow({ script, args: { root, manifest } })
 ```
 
-No manifest means `targets` is empty and only the deterministic lens runs. That is a valid cheap mode, not an error — but say so in the report rather than presenting it as a full audit.
+No manifest means `targets` is empty and only the deterministic lens runs. Do not reach for that silently: when the repo has no manifest the skill stops and offers to build one first ([bootstrap.md](bootstrap.md)). Run it lens-only when the user has declined discovery, and name it for what it is in the report.
 
 ## `resolveReferences(root, opts?)`
 

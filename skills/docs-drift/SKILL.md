@@ -33,7 +33,9 @@ Nathan must have opted into orchestration — the ask itself counts.
 - [references/manifest.md](references/manifest.md) — schema, worked example, how to build one
 - [references/workflow.md](references/workflow.md) — the script and schemas
 
-No manifest? Only the deterministic lens runs. Cheap and valid, but say so — it is not a full audit.
+**No manifest? Stop.** Do not run a partial audit. Report the gap, offer to scan the doc surface and propose one, and write nothing until the user approves. [references/bootstrap.md](references/bootstrap.md) has the lane.
+
+Without a manifest the skill reads the filesystem and nothing else — no doc is checked against the artifact that settles its claims, and nothing is declared unverifiable. That run finds little and looks like it worked.
 
 ## Shape
 
@@ -81,4 +83,6 @@ Nathan decides what to fix. Offer to route confirmed vocabulary gaps to `domain-
 
 ## Next safe action
 
-No opt-in yet: describe the run and its rough agent count, then stop.
+No manifest: report the gap and offer to scan ([references/bootstrap.md](references/bootstrap.md)), then stop.
+
+Manifest present, no opt-in yet: describe the run and its rough agent count, then stop.
