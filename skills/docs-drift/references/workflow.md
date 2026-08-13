@@ -1,37 +1,21 @@
 # Workflow
 
-The script. Pass `args: { root, lenses? }` — `lenses` defaults to all four.
+The script. Pass `args: { root, manifest? }` — `manifest` defaults to `docs/agents/doc-targets.yml`, read by the caller and passed in parsed.
 
-`reference` resolves in-process (no agent), so agent count is `3 scanners + N verifiers + 1 synthesiser` where N counts judged findings only. A clean repo costs 3 agents.
+`reference` resolves in-process (no agent). Each `targets` entry gets one agent with its artifacts named. `unverifiable` and `frozen` cost nothing. Agent count is `T scanners + N verifiers + 1 synthesiser`, where T is the number of `targets` entries.
 
 ```js
 export const meta = {
   name: 'docs-drift',
   description: 'Check whether ADRs, CONTEXT.md, AGENTS.md, and docs/ still describe the code',
   phases: [
-    { title: 'Scan', detail: 'resolve references deterministically; one scanner per judged lens' },
+    { title: 'Scan', detail: 'one agent per doc, with its verification target named' },
     { title: 'Verify', detail: 'read both sides first, then compare against the claim' },
-    { title: 'Synthesise', detail: 'dedup across lenses and report by confidence' },
+    { title: 'Synthesise', detail: 'report by confidence, including what was not checkable' },
   ],
 }
 
-const MAX_PER_LENS = 12
-
-// `reference` is absent: it resolves in-process below, never as an agent.
-const LENSES = {
-  claim: {
-    hunt: 'A doc asserts behaviour the code contradicts.',
-    evidence: 'Read the doc claim and the implementing code. Quote both.',
-  },
-  vocabulary: {
-    hunt: 'A domain term is used in code or ADRs but missing from the glossary, or the glossary defines a term nothing uses.',
-    evidence: 'Name the term and where it appears (or fails to).',
-  },
-  decision: {
-    hunt: 'A hard-to-reverse, non-obvious architectural choice is visible in the code with no ADR recording it.',
-    evidence: 'Name the choice, where it lives, and why a future reader would ask "why is this like this".',
-  },
-}
+const MAX_PER_DOC = 8
 
 // Judges anchor on confident assertion language, scoring assertive trajectories
 // 0.27-0.36 higher regardless of outcome (arXiv 2606.09863). `observation` is
@@ -48,12 +32,12 @@ const FINDINGS = {
         type: 'object',
         properties: {
           doc: { type: 'string', description: 'file:line of the doc making the claim' },
-          code: { type: 'string', description: 'file:line of the relevant code, or "" when the finding is an absence' },
+          code: { type: 'string', description: 'file:line in the named target artifact, or empty when the finding is an absence' },
           claim: { type: 'string', description: 'what the doc states, quoted verbatim' },
           observation: {
             type: 'string',
             description:
-              'Neutral two-part statement: what the doc states, and what the code does. No verdict words, no emphasis, no conclusion. Write "doc says X; code does Y" — not "the doc is clearly wrong".',
+              'Neutral two-part statement: what the doc states, and what the artifact does. No verdict words, no emphasis, no conclusion. Write "doc says X; workflow does Y" — not "the doc is wrong".',
           },
         },
         required: ['doc', 'claim', 'observation'],
@@ -73,146 +57,153 @@ const VERDICT = {
 }
 
 const root = args?.root ?? '.'
-const requested = args?.lenses ?? ['reference', ...Object.keys(LENSES)]
-const judgedLenses = requested.filter((l) => LENSES[l])
-const wantReference = requested.includes('reference')
+const manifest = args?.manifest ?? {}
+const targets = Object.entries(manifest.targets ?? {})
+const unverifiable = Object.entries(manifest.unverifiable ?? {})
 
 // ---------------------------------------------------------------------------
 // reference lens — deterministic, in-process, no agent.
-//
 // Resolving a path is `test -e`, not a judgement call. LLM judges run ~0.65
-// AUROC on this class of verification while mechanical detectors reach
-// 0.83-0.95 (arXiv 2606.09863), so this lens never reaches the verify stage
-// and its findings ship as confidence:'deterministic'.
-//
-// resolveReferences() is supplied by the caller (see SKILL.md "Run"): it greps
-// the doc surface for backticked paths/scripts/flags, resolves each against
-// the repo, and returns the non-resolvers.
+// AUROC on this class of check while mechanical detectors reach 0.83-0.95
+// (arXiv 2606.09863), so this never reaches the verify stage.
+// resolveReferences() ships at scripts/resolve-references.mjs.
 // ---------------------------------------------------------------------------
-const referenceFindings = wantReference
-  ? (await resolveReferences(root)).slice(0, MAX_PER_LENS).map((f) => ({
-      ...f,
-      lens: 'reference',
-      confidence: 'deterministic',
-      verdict: { refuted: false, why: 'path does not resolve on disk' },
-    }))
-  : []
+const referenceFindings = (await resolveReferences(root)).map((f) => ({
+  ...f,
+  target: 'filesystem',
+  confidence: 'deterministic',
+  verdict: { refuted: false, why: 'path does not resolve on disk' },
+}))
 
 const results = await pipeline(
-  judgedLenses,
+  targets,
 
-  // Scan — mechanical. Cheap model, low effort.
-  (lens) =>
+  // Scan — one doc, its artifacts named. The naming is the whole point: a
+  // scanner told to "find drift in the repo" will not open a 1000-line
+  // workflow file, so the ~130 claims those docs make go unread.
+  ([doc, artifacts]) =>
     agent(
       `Repo: ${root}
 
-Find DRIFT of one kind: ${LENSES[lens].hunt}
+Check ONE document against its verification target.
 
-Doc surface: AGENTS.md, CLAUDE.md, CONTEXT.md, CONTEXT-MAP.md, README.md, docs/**.
-Evidence required: ${LENSES[lens].evidence}
+  Document: ${doc}
+  Verify against: ${artifacts.join(', ')}
 
-Write every \`observation\` as a neutral two-part statement — what the doc states,
-what the code does — and stop there. Do not add a verdict, and do not use these
-words: ${BANNED_VOCAB.join(', ')}. A later step decides whether it is drift.
+Read the document. Read every artifact listed above — in full, not by grep.
+For each factual assertion the document makes about those artifacts, decide
+whether the artifact still does what the document says.
 
-An ADR marked superseded or deprecated is NOT drift — it correctly records history.
-Report at most ${MAX_PER_LENS} findings, strongest first. Report zero if the docs hold.`,
-      { label: `scan:${lens}`, phase: 'Scan', schema: FINDINGS, model: 'haiku', effort: 'low' },
+Write every observation as a neutral two-part statement — what the doc states,
+what the artifact does — and stop there. Do not add a verdict, and do not use
+these words: ${BANNED_VOCAB.join(', ')}. A later step decides whether it is drift.
+
+Ignore prose, rationale, and stated intent. A claim is checkable only if the
+named artifacts can settle it. Skip anything needing external CLI behaviour,
+a hosted CI run, or a human receipt — those are handled separately.
+
+Report at most ${MAX_PER_DOC} findings, strongest first. Report zero if the
+document holds.`,
+      { label: `scan:${doc.split('/').pop()}`, phase: 'Scan', schema: FINDINGS, model: 'haiku', effort: 'low' },
     ),
 
   // Verify — commit-first. The verifier forms its own reading of both sides
   // BEFORE the finding is revealed, then compares. Anchored judges score
   // plausibility over correctness; committing first drops false positives
-  // sharply on exact-match tasks (arXiv 2607.05904). For `vocabulary` and
-  // `decision` there is no ground truth to commit to, so this reduces the
-  // anchoring bias without eliminating it — hence confidence:'judged'.
-  (scan, lens) =>
+  // sharply where ground truth exists (arXiv 2607.05904).
+  (scan, [doc, artifacts]) =>
     parallel(
-      (scan?.findings ?? []).slice(0, MAX_PER_LENS).map((f) => () =>
+      (scan?.findings ?? []).slice(0, MAX_PER_DOC).map((f) => () =>
         agent(
           `Two steps, in order. Do not skip step 1.
 
-STEP 1 — commit first. Read these two locations and write down, in your own
-words, what each one actually says. Do this before reading step 2.
-  Doc:  ${f.doc}
-  Code: ${f.code || '(absence — nothing to point at)'}
+STEP 1 — commit first. Read these two locations in ${root} and write down, in
+your own words, what each one actually says. Do this before reading step 2.
+  Doc:      ${f.doc}
+  Artifact: ${f.code || artifacts.join(', ')}
 
 STEP 2 — compare. Another process reported:
   Doc states: ${f.claim}
   Observation: ${f.observation}
 
 Does YOUR step-1 reading match that observation? Refute it when your own reading
-disagrees, the doc is correct, the ADR is marked superseded, the claim is
-aspirational rather than factual, or the wording is awkward without asserting
-anything false.
+disagrees, the doc is correct, the claim is aspirational rather than factual, or
+the wording is awkward without asserting anything false.
 
 Default to refuted=true when uncertain. A survivor must be a doc stating
-something the code contradicts today, confirmed by your own reading.`,
-          { label: `verify:${lens}`, phase: 'Verify', schema: VERDICT },
-        ).then((v) => ({ ...f, lens, confidence: 'judged', verdict: v })),
+something the artifact contradicts today, confirmed by your own reading.`,
+          { label: `verify:${doc.split('/').pop()}`, phase: 'Verify', schema: VERDICT },
+        ).then((v) => ({ ...f, target: artifacts.join(', '), confidence: 'judged', verdict: v })),
       ),
     ),
 )
 
-// Barrier earned: dedup needs every lens at once.
+// Barrier earned: dedup needs every doc at once.
 const judged = results
   .flat()
   .filter(Boolean)
   .filter((f) => f.verdict && !f.verdict.refuted)
 
 const confirmed = [...referenceFindings, ...judged]
-const lenses = [...(wantReference ? ['reference'] : []), ...judgedLenses]
 
 log(
-  `${confirmed.length} confirmed (${referenceFindings.length} deterministic, ${judged.length} judged) across ${lenses.length} lenses`,
+  `${confirmed.length} confirmed (${referenceFindings.length} deterministic, ${judged.length} judged) across ${targets.length} docs; ${unverifiable.length} not checkable from this repo`,
 )
-
-if (confirmed.length === 0) {
-  return { confirmed: [], lenses, summary: 'No drift found.' }
-}
 
 phase('Synthesise')
 const report = await agent(
-  `Write a docs-drift report from these verified findings.
+  `Write a docs-drift report.
 
+CONFIRMED FINDINGS:
 ${JSON.stringify(confirmed, null, 2)}
 
-Group by confidence, deterministic first:
+NOT CHECKABLE FROM THIS REPO:
+${JSON.stringify(unverifiable, null, 2)}
 
-  1. "Broken references" — confidence:'deterministic'. These resolved on disk and
-     are objectively wrong. State them plainly.
+DOCS CHECKED: ${targets.map(([d]) => d).join(', ') || '(none — no manifest)'}
+
+Three sections, in this order:
+
+  1. "Broken references" — confidence:'deterministic'. Resolved on disk, so
+     objectively wrong. State them plainly. Omit the section if empty.
   2. "Judged findings" — confidence:'judged'. These passed an LLM verifier that
-     runs near 0.65 AUROC on this class of check. Introduce the group with one
-     line saying they need human confirmation, then list them.
+     runs near 0.65 AUROC on this class of check. Introduce with one line saying
+     they need human confirmation. Omit the section if empty.
+  3. "Not checkable from this repo" — list each doc and its reason verbatim.
+     Say plainly that these were NOT scanned and that zero findings for them
+     means nothing. Never omit this section when the list is non-empty.
 
-Within each group, order by lens: reference, claim, vocabulary, decision.
-Collapse findings that are the same underlying drift seen from two lenses.
-Each entry: the doc (file:line), the code (file:line), and the observation.
-State per-lens counts including zeros. Do not propose edits — this is report-only.`,
+Within sections, order by doc path. Collapse findings that are the same
+underlying drift. Each entry: the doc (file:line), the artifact (file:line),
+and the observation. State how many docs were checked and how many findings
+each produced, including zeros. Do not propose edits — this is report-only.`,
   { label: 'synthesise', phase: 'Synthesise' },
 )
 
-return { confirmed, lenses, report }
+return { confirmed, unverifiable, docsChecked: targets.map(([d]) => d), report }
 ```
+
+## Reading the manifest
+
+The caller parses `docs/agents/doc-targets.yml` and passes it as `args.manifest`. Schema and a worked example: [manifest.md](manifest.md).
+
+```js
+// Bun
+const manifest = Bun.YAML.parse(await Bun.file(`${root}/docs/agents/doc-targets.yml`).text())
+Workflow({ script, args: { root, manifest } })
+```
+
+No manifest means `targets` is empty and only the deterministic lens runs. That is a valid cheap mode, not an error — but say so in the report rather than presenting it as a full audit.
 
 ## `resolveReferences(root, opts?)`
 
-Ships with the skill: [`scripts/resolve-references.mjs`](../scripts/resolve-references.mjs). Import it, or run it standalone to see the deterministic lens alone:
+Ships at [`scripts/resolve-references.mjs`](../scripts/resolve-references.mjs). Run it standalone for the deterministic lens alone:
 
 ```sh
 node skills/docs-drift/scripts/resolve-references.mjs <repo-root>
 ```
 
-Returns `[{ doc, code: '', claim, observation }]` — one entry per non-resolving reference:
-
-```js
-{
-  doc: 'AGENTS.md:12',
-  code: '',
-  claim: 'runtime/skill-catalog.json',
-  observation: 'doc names runtime/skill-catalog.json; path does not exist in the repo',
-}
-```
+Returns `[{ doc, code: '', claim, observation }]` per non-resolving reference.
 
 **The filters are the hard part, and each one was earned.** Against a real repo the raw heuristic produced 39 findings, all false positives. What it must skip:
 
@@ -227,23 +218,22 @@ Returns `[{ doc, code: '', claim, observation }]` — one entry per non-resolvin
 | Absence assertions | "this repo has no `src/`" | the doc is *right* |
 | Historical plans | `docs/plans/**` | rationale, not current claims |
 
-`bun run <script>` resolves against `package.json` scripts rather than the filesystem. Fenced code blocks are skipped entirely.
-
-Pass `{ excludeDirs: [...] }` to override the `docs/plans/` default when a repo keeps historical material elsewhere.
+`bun run <script>` resolves against `package.json` scripts. Fenced code blocks are skipped. Pass `{ excludeDirs: [...] }` to override the `docs/plans/` default.
 
 ## Confidence
 
-Two tiers, and the distinction is the point:
+Three tiers:
 
-- **`deterministic`** — `reference` only. A path resolves or it does not. No verifier, no false positives.
-- **`judged`** — `claim`, `vocabulary`, `decision`. An LLM verifier decided. Best-in-class judges reach ~0.65 AUROC on completion-style verification (arXiv 2606.09863), so treat these as leads for a human, not conclusions. Adding more verifiers does not fix this: a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904).
+- **`deterministic`** — the reference lens. A path resolves or it does not.
+- **`judged`** — a doc×target agent found it and a commit-first verifier confirmed it. Best-in-class judges reach ~0.65 AUROC (arXiv 2606.09863), so these are leads for a human. Adding verifiers does not help: a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904).
+- **`unverifiable`** — declared in the manifest, never scanned, always named in the report. Zero findings for these docs is not a clean bill.
 
 ## Tuning
 
-- **Too noisy** — pass `lenses: ['reference']` for the deterministic lens alone.
-- **Too slow** — lower `MAX_PER_LENS`, or narrow `root` to a subdirectory.
-- **Verifier refuting real drift** — refute-by-default is deliberate. Loosen the last paragraph of the STEP 2 prompt before touching anything else.
-- **Scanner writing verdicts anyway** — extend `BANNED_VOCAB`. The neutral `observation` is what keeps the verifier comparing rather than rating.
+- **Too slow / too many agents** — trim `targets` to the workflow-coupled docs; they carry the highest claim density.
+- **Deterministic lens only** — omit `manifest`.
+- **Scanner skimming instead of reading** — raise `effort` on the scan agent for docs whose target is a long workflow file.
+- **Verifier refuting real drift** — refute-by-default is deliberate. Loosen the last paragraph of STEP 2 before touching anything else.
 
 ## Resume
 

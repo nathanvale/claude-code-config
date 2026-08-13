@@ -6,65 +6,74 @@ role: quality-gate
 
 # Docs Drift
 
-Resolve broken references mechanically, fan scanners across the rest, verify what remains, report by confidence. Report-only: this skill never edits docs.
+Resolve broken references mechanically, check each doc against the artifact that settles its claims, verify what survives, report by confidence. Report-only: this skill never edits docs.
 
-**Drift** is a doc making a claim the code contradicts. Four lenses find four kinds, and they do not carry equal weight.
+**Drift** is a doc making a claim the code contradicts. The useful question is not *what kind* of drift it is — it is **what would you have to read to check this?**
 
-| Lens | Claim shape | How it is checked | Confidence |
-|---|---|---|---|
-| `reference` | A named path or script exists | Resolved on disk, in-process | **Deterministic** |
-| `claim` | Behaviour works as described | LLM verifier | Judged |
-| `vocabulary` | Domain terms match the glossary | LLM verifier | Judged |
-| `decision` | Load-bearing choices are recorded | LLM verifier | Judged |
+| Tier | Source | Meaning |
+|---|---|---|
+| `deterministic` | Path resolved on disk, in-process | Objectively wrong |
+| `judged` | Doc read against its named artifact, then verified | Needs human confirmation |
+| `unverifiable` | Declared in the manifest | **Never scanned. Named in the report.** |
 
-**Deterministic is not the same as noise-free.** `test -e` is deterministic; deciding *which* backticked tokens are path claims is a heuristic, and that is where the false positives live. On a first run against a real repo the raw heuristic produced 39 findings and 0 true positives — slash commands, npm specifiers, git refs, superseded ADRs, and sentences asserting a path's *absence* all read as broken paths. The shipped filters cut that to 1. Expect to tune `excludeDirs` per repo.
-
-Superseded ADRs are not drift. An ADR marked superseded is correctly stale — it records history. Only an ADR presenting itself as current can drift.
+Superseded ADRs and historical plans are not drift — they correctly record history. The manifest freezes them.
 
 ## Run
 
-Author the workflow inline; pass the repo's doc surface as `args`. Nathan must have opted into orchestration — the ask itself counts.
+1. Read `docs/agents/doc-targets.yml` from the repo under audit.
+2. Author the workflow inline, passing the parsed manifest.
 
-```
-Workflow({ script: <the script>, args: { root: "<repo>" } })
+```js
+const manifest = Bun.YAML.parse(await Bun.file(`${root}/docs/agents/doc-targets.yml`).text())
+Workflow({ script: <the script>, args: { root, manifest } })
 ```
 
-Read [references/workflow.md](references/workflow.md) for the script, the schemas, and the `resolveReferences()` contract.
+Nathan must have opted into orchestration — the ask itself counts.
+
+- [references/manifest.md](references/manifest.md) — schema, worked example, how to build one
+- [references/workflow.md](references/workflow.md) — the script and schemas
+
+No manifest? Only the deterministic lens runs. Cheap and valid, but say so — it is not a full audit.
 
 ## Shape
 
-`pipeline()`, not `parallel()`. Each judged lens verifies its own findings the moment that lens returns. One barrier at the end, where synthesis genuinely needs every lens at once to dedup.
+`pipeline()`, not `parallel()`. Each doc verifies its own findings the moment its scan returns. One barrier at the end, where synthesis needs every doc at once to dedup.
 
 ```
-reference ─▶ resolve on disk (no agent) ──────────────────────┐
-claim ────▶ scan (haiku, low) ──▶ verify each (inherit) ──────┤
-vocabulary ▶ scan ──────────────▶ verify ─────────────────────┼──▶ synthesise
-decision ─▶ scan ───────────────▶ verify ─────────────────────┘   (barrier)
+reference ────────▶ resolve on disk (no agent) ──────────────┐
+publishing.md ────▶ read release.yml ──────▶ verify ─────────┤
+pull-requests ────▶ read 4 workflows ──────▶ verify ─────────┼──▶ synthesise
+capability-tour ──▶ read catalog+payload ──▶ verify ─────────┤   (barrier)
+installing.md ────▶ UNVERIFIABLE — not scanned ──────────────┘
 ```
 
-Scanners run `haiku` at `low` effort — finding candidates is mechanical. Verifiers inherit the session model. A clean repo costs 3 agents.
+Scanners run `haiku` at `low` effort. Verifiers inherit the session model.
+
+**Naming the artifact is the whole point.** A scanner told to "find drift in the repo" will not open a 1000-line workflow file. On one real repo that gap left ~130 workflow claims across four docs entirely unread, while the run reported clean.
 
 ## Verify by committing first
 
-Each verifier reads the doc and the code and forms **its own reading before the finding is revealed**, then compares. It defaults to refuted when uncertain.
+Each verifier reads the doc and the artifact and forms **its own reading before the finding is revealed**, then compares. It defaults to refuted when uncertain.
 
-This shape is deliberate. A judge that sees a claim and rates it scores plausibility rather than correctness; committing first drops false positives sharply where ground truth exists (arXiv 2607.05904). Scanners are also barred from verdict vocabulary — judges score confidently-worded findings 0.27-0.36 higher regardless of whether they are true (arXiv 2606.09863), so `observation` fields state what the doc says and what the code does, and stop there.
+This shape is deliberate. A judge that sees a claim and rates it scores plausibility rather than correctness; committing first drops false positives sharply where ground truth exists (arXiv 2607.05904). Scanners are also barred from verdict vocabulary — judges score confidently-worded findings 0.27-0.36 higher regardless of truth (arXiv 2606.09863), so `observation` fields state what the doc says and what the artifact does, and stop there.
 
 ## Report
 
-Deterministic findings first, judged findings second under an explicit caveat. Each finding names the doc, the code, and the observation. State the counts per lens, including zeros — a lens that found nothing is a result.
+Broken references first, judged findings second under an explicit caveat, then **what was not checkable and why**. Counts per doc, including zeros.
 
 Nathan decides what to fix. Offer to route confirmed vocabulary gaps to `domain-modeling` and undocumented decisions to `record-decision`.
 
 ## Limits
 
-Two, and both are worth stating rather than hiding:
+**Judged findings are leads, not conclusions.** Best-in-class LLM judges reach ~0.65 AUROC on this class of verification, while mechanical detectors reach 0.83-0.95 (arXiv 2606.09863). That gap is why the reference lens never touches an agent. More verifiers do not close it — a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904). Treat the judged group as a worklist.
 
-**Judged findings are leads, not conclusions.** Best-in-class LLM judges reach ~0.65 AUROC on this class of verification, while mechanical detectors reach 0.83-0.95 (arXiv 2606.09863). That gap is why `reference` never touches an agent. More verifiers do not close it — a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904). Treat the judged group as a human's worklist.
+**Deterministic is not noise-free.** `test -e` is deterministic; deciding *which* backticked tokens are path claims is a heuristic. On a first run the raw heuristic gave 39 findings and 0 true positives — slash commands, npm specifiers, git refs, and sentences asserting a path's *absence* all read as broken paths. The shipped filters cut that to 1. Expect per-repo tuning.
 
-**A quiet run is a real result.** The first repo this ran against returned zero true positives from 39 candidates. Well-maintained docs do not drift much, and a report saying so is worth more than one padded with heuristic noise.
+**Silence is only meaningful for what was actually checked.** A doc of external-CLI claims returns zero findings whether accurate or wildly wrong. That is why `unverifiable` is a reported tier rather than an omission — usually the docs a repo cannot self-check are the ones that rot first.
 
-**Detection is the weaker half of the problem.** The industry consensus is that preventing drift at merge time beats detecting it afterwards, via spec-driven generation or a docs check in the PR. That applies cleanly to generated artifacts — OpenAPI specs, typed signatures. It applies poorly to prose ADRs and a hand-written glossary, which is the surface this skill covers. Use it as an audit, and keep generated docs generated.
+**A quiet run is a real result.** One repo returned zero true positives from 39 candidates. Well-maintained docs do not drift much, and saying so beats padding a report with heuristic noise.
+
+**Detection is the weaker half.** Preventing drift at merge time beats detecting it after — via spec-driven generation, or a test that derives the doc's claim from the artifact. That applies cleanly to generated artifacts and to enumerations (a test can assert a prose list matches a directory). It applies poorly to prose ADRs and hand-written runbooks, which is the surface this skill covers.
 
 ## Next safe action
 
