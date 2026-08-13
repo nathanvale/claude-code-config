@@ -22,6 +22,7 @@ import type {
 import {
 	buildVaultGitDoctorProof,
 	diagnoseVaultGitTransaction,
+	isResumedLocalCommit,
 	type VaultGitDoctorOptions,
 } from "./doctor.ts";
 import {
@@ -296,14 +297,7 @@ export async function repairVaultGitTransaction(
 		const recoveredCommit = await options.repository.inspectLocalCommit(
 			identity.localMainHead,
 		);
-		if (
-			recoveredCommit.status !== "ok" ||
-			recoveredCommit.parents.length !== 1 ||
-			recoveredCommit.parents[0] !== receipt.localMainHead ||
-			!recoveredCommit.message
-				.split(/\r?\n/)
-				.some((line) => line === `Vault-Transaction: ${receipt.transactionId}`)
-		) {
+		if (!isResumedLocalCommit(recoveredCommit, receipt)) {
 			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 		}
 		receipt = nextVaultGitReceipt(receipt, {
