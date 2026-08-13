@@ -1188,6 +1188,77 @@ describe("transaction engine lifecycle", () => {
 		expect(fixture.remote.atomicCloseCalls).toBe(0);
 	});
 
+	test("recovers a crash after local commit by re-driving one publication to closed", async () => {
+		const fixture = await engineFixture("after_local_commit", {
+			check: { async run() { return { status: "passed" }; } },
+		});
+		Object.assign(fixture.repository, { inspectLocalCommit: localCommitProbe(fixture.repository) });
+		Object.assign(fixture.remote, { reconcileAtomicClose: reconcileProbe(fixture.remote) });
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		await expect(fixture.engine.complete({ transactionId: begun.transactionId, remote: "origin", capability: owner, summary: "docs(vault): record admitted note" })).rejects.toThrow("interrupt:after_local_commit");
+		expect(fixture.remote.atomicCloseCalls).toBe(0);
+
+		const recoveredStore = createReceiptStore({ stateRoot: fixture.root, repositoryIdentity: "canonical-vault" });
+		expect(await recoveredStore.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "push_pending", commitId: "c".repeat(40), expectedMainCommit: "c".repeat(40), ledgerReleaseId: null },
+		});
+
+		const recoveredEngine = createVaultGitTransactionEngine({
+			store: recoveredStore,
+			repository: fixture.repository,
+			ledger: { git: fixture.remote, clock: new FakeRuntime() },
+			runtime: new FakeRuntime(),
+			repositoryIdentity: "canonical-vault",
+			activationAuthority: persistedActivationAuthorityForTest(recoveredStore),
+			check: { async run() { return { status: "passed" }; } },
+		});
+		const diagnosed = await recoveredEngine.doctor({ transactionId: begun.transactionId });
+		expect(diagnosed).toMatchObject({ state: "push_pending", repairAction: "retry-push" });
+		expect(await recoveredEngine.repair({ action: "retry-push", transactionId: begun.transactionId, remote: "origin", capability: owner })).toMatchObject({ status: "repaired", state: "closed", phase: "closed" });
+		expect(fixture.remote.atomicCloseCalls).toBe(1);
+		expect(fixture.remote.remoteHead).toBe("c".repeat(40));
+		expect(await recoveredStore.load()).toMatchObject({ status: "loaded", receipt: { phase: "closed" } });
+	});
+
+	test("adopts an already-published release when a crash preempts the terminal receipt", async () => {
+		const fixture = await engineFixture("after_release_publication", {
+			check: { async run() { return { status: "passed" }; } },
+		});
+		Object.assign(fixture.repository, { inspectLocalCommit: localCommitProbe(fixture.repository) });
+		Object.assign(fixture.remote, { reconcileAtomicClose: reconcileProbe(fixture.remote) });
+		const begun = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) throw new Error("begin failed");
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		await expect(fixture.engine.complete({ transactionId: begun.transactionId, remote: "origin", capability: owner, summary: "docs(vault): record admitted note" })).rejects.toThrow("interrupt:after_release_publication");
+		expect(fixture.remote.atomicCloseCalls).toBe(1);
+		expect(fixture.remote.remoteHead).toBe("c".repeat(40));
+
+		const recoveredStore = createReceiptStore({ stateRoot: fixture.root, repositoryIdentity: "canonical-vault" });
+		expect(await recoveredStore.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "push_pending", commitId: "c".repeat(40), ledgerReleaseId: "f".repeat(40) },
+		});
+
+		const recoveredEngine = createVaultGitTransactionEngine({
+			store: recoveredStore,
+			repository: fixture.repository,
+			ledger: { git: fixture.remote, clock: new FakeRuntime() },
+			runtime: new FakeRuntime(),
+			repositoryIdentity: "canonical-vault",
+			activationAuthority: persistedActivationAuthorityForTest(recoveredStore),
+			check: { async run() { return { status: "passed" }; } },
+		});
+		const diagnosed = await recoveredEngine.doctor({ transactionId: begun.transactionId });
+		expect(diagnosed).toMatchObject({ state: "push_pending", repairAction: "close-verified" });
+		expect(await recoveredEngine.repair({ action: "close-verified", transactionId: begun.transactionId, remote: "origin", capability: owner })).toMatchObject({ status: "repaired", state: "closed", phase: "closed" });
+		expect(fixture.remote.atomicCloseCalls).toBe(1);
+		expect(fixture.remote.remoteHead).toBe("c".repeat(40));
+		expect(await recoveredStore.load()).toMatchObject({ status: "loaded", receipt: { phase: "closed" } });
+	});
+
 	test("revocation during the hygiene mutation fence prevents apply", async () => {
 		let admitted = true;
 		let applyCalls = 0;
@@ -1490,6 +1561,30 @@ function foreignLease(): RemoteLease {
 		leaseDurationMs: 60_000,
 		state: "held",
 	};
+}
+
+function localCommitProbe(repository: FakeRepository): VaultGitRepositoryPort["inspectLocalCommit"] {
+	const committed = repository.commitExact.bind(repository);
+	let message = "";
+	Object.assign(repository, {
+		async commitExact(request: Parameters<NonNullable<VaultGitRepositoryPort["commitExact"]>>[0]) {
+			message = request.message;
+			return committed(request);
+		},
+	});
+	return async (commitId: string) => ({
+		status: "ok" as const,
+		commitId,
+		parents: [HEAD],
+		message,
+	});
+}
+
+function reconcileProbe(remote: FakeRemote): VaultGitRemotePort["reconcileAtomicClose"] {
+	return async (request) =>
+		remote.remoteHead === request.mainCommit && remote.generation === request.ledgerCommit
+			? { status: "closed" as const }
+			: { status: "unchanged" as const };
 }
 
 function ledgerContent(lease: RemoteLease, parents: readonly string[] = []): string {
