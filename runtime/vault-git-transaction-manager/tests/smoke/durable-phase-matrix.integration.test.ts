@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { parseCliProcessJson } from "@side-quest/cli-command-facade/testing";
 
+import { VAULT_GIT_LEDGER_REF } from "../../src/model.ts";
 import { createReceiptStore } from "../../src/store.ts";
 import {
 	assertRefsUnchanged,
@@ -624,6 +625,19 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		expect(after.remoteMain).toBe(after.localMain);
 		expect(after.worktree).toBe(before.worktree);
 		assertLedgerState(fixture, "released");
+
+		// The atomic close probes capability with dry-run refspecs; a supported
+		// close must leave exactly main and the ledger on the remote and never
+		// materialize a probe- ref. remoteRefs is one `refname\0objectname` line
+		// per ref, so each refname is the head of a newline-split line.
+		const remoteRefNames = after.remoteRefs
+			.split("\n")
+			.map((line) => line.split("\0")[0])
+			.filter((name) => name.length > 0)
+			.sort();
+		expect(remoteRefNames).toEqual(
+			["refs/heads/main", VAULT_GIT_LEDGER_REF].sort(),
+		);
 
 		const doctor = await fixture.run([
 			"doctor",
