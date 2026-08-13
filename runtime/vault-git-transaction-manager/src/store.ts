@@ -1012,7 +1012,6 @@ export async function durablePublishExclusive(
 		return true;
 	} catch (error) {
 		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
 		if (error instanceof VaultGitReceiptExistsError) throw error;
 		throw wrapFailure(error);
 	} finally {

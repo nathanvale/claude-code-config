@@ -49,6 +49,12 @@ describe("isResumedLocalCommit", () => {
 		).toBe(false);
 	});
 
+	test("rejects a root commit with zero parents", () => {
+		expect(isResumedLocalCommit(okCommit({ parents: [] }), receipt)).toBe(
+			false,
+		);
+	});
+
 	test("rejects a commit missing the transaction trailer", () => {
 		expect(
 			isResumedLocalCommit(okCommit({ message: "body with no trailer" }), receipt),

@@ -455,10 +455,6 @@ function isMissing(error: unknown): boolean {
 	return isRecord(error) && error.code === "ENOENT";
 }
 
-function isExists(error: unknown): boolean {
-	return isRecord(error) && error.code === "EEXIST";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
