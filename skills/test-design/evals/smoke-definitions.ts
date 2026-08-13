@@ -139,6 +139,12 @@ export const testDesignV2QualificationCases = [
 
 const { artifacts, handbacks, profiles, operations, seams } =
 	testDesignScenarioFactors;
+const runnerSensitiveRelevantProfiles = new Set<(typeof profiles)[number]>([
+	"process-and-cli",
+	"state-concurrency-recovery",
+	"runtime-ci-platform",
+	"runner-execution",
+]);
 
 function objectSchema(properties: Record<string, unknown>): JsonSchema {
 	return {
@@ -439,7 +445,7 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 			profileRelativePath: "references/runner-execution.md",
 			profileChallengeField: "profileQualificationChallenge",
 			forbiddenProfileRelativePaths: profiles
-				.filter((profile) => profile !== "runner-execution")
+				.filter((profile) => !runnerSensitiveRelevantProfiles.has(profile))
 				.map((profile) => `references/${profile}.md`),
 		},
 	},

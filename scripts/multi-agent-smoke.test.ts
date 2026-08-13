@@ -155,6 +155,21 @@ describe("multi-agent smoke library", () => {
 		expect(runnerTrace?.profileRelativePath).toBe(
 			"references/runner-execution.md",
 		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/process-and-cli.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/state-concurrency-recovery.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/runtime-ci-platform.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/browser-and-ui.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/installation-host-hosted.md",
+		);
 		expect(simpleUnitTrace?.profileRelativePath).toBe(
 			"references/pattern-library.md",
 		);
