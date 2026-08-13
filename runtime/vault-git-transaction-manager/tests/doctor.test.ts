@@ -154,6 +154,83 @@ describe("vault-git doctor", () => {
 			});
 		},
 	);
+
+	test("drives the stale-lease takeover continuation without naming itself as its own continuation", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-doctor-"));
+		roots.push(stateRoot);
+		const store = createReceiptStore({
+			stateRoot,
+			repositoryIdentity: "canonical-vault",
+		});
+		const receipt = expiredStaleLeaseReceipt();
+		await store.initialize(receipt, {
+			ownerCapability: new Uint8Array([1]),
+			joinCapability: new Uint8Array([2]),
+		});
+		const localMainHead = "b".repeat(40);
+		const repository: VaultGitRepositoryPort = {
+			resolveCanonicalIdentity: () =>
+				Promise.resolve({ identity: "canonical-vault", localMainHead }),
+			inspectOwnedPaths: () => Promise.reject(new Error("not used")),
+			hashOwnedPaths: (paths) =>
+				Promise.resolve(
+					paths.map((path) => ({ path, contentHash: "d".repeat(40) })),
+				),
+			captureUnrelatedState: () =>
+				Promise.resolve({ statusHex: "", indexHex: "" }),
+		};
+		const remote: VaultGitRemotePort = {
+			inspectMain: () => Promise.reject(new Error("not used")),
+			readLedger: () =>
+				Promise.resolve({
+					status: "ok",
+					head: {
+						generation: receipt.leaseGeneration as string,
+						parents: [],
+						content: heldLeaseLedgerContent(receipt),
+					},
+				}),
+			appendLedgerCommit: () => Promise.reject(new Error("not used")),
+		};
+		// The clock must sit past leaseAcquiredAt + leaseDurationMs so the held
+		// lease reads expired; equal-to-the-deadline is the earliest expired instant.
+		const runtime: VaultGitRuntimePort = {
+			now: () => new Date("2026-08-09T00:01:00.000Z"),
+			actor: () => "agent-a",
+			host: () => "host-a",
+			newReceiptId: () => `receipt_${"2".repeat(32)}`,
+			interrupt() {},
+		};
+
+		const result = await createVaultGitDoctor({
+			store,
+			repository,
+			ledger: { git: remote, clock: runtime },
+			runtime,
+			repositoryIdentity: "canonical-vault",
+		}).diagnose({ transactionId: receipt.transactionId ?? undefined });
+
+		expect(result).toMatchObject({
+			finding: "lease_expired",
+			repairAction: "stale-lease-takeover",
+			changedState: "local",
+			takeoverTokenIssued: true,
+			nextAction: { id: "run_repair" },
+		});
+		expect(result.nextAction.id).not.toBe("run_doctor");
+
+		const independentReader = createReceiptStore({
+			stateRoot,
+			repositoryIdentity: "canonical-vault",
+		});
+		const token = await independentReader.readDoctorToken(
+			receipt.transactionId as string,
+			receipt.leaseGeneration as string,
+		);
+		expect(token.byteLength).toBeGreaterThan(0);
+
+		expect(JSON.stringify(result)).not.toContain(stateRoot);
+	});
 });
 
 function runtimeFixture(): VaultGitRuntimePort {
@@ -196,6 +273,35 @@ function receipt(): VaultGitReceipt {
 		nextSafeAction: "retry_remote",
 		diagnosticsReference: `receipt:receipt_${"1".repeat(32)}`,
 	};
+}
+
+function expiredStaleLeaseReceipt(): VaultGitReceipt {
+	return {
+		...receiptForRecoveryPhase("repairable"),
+		leaseAcquiredAt: "2026-08-09T00:00:00.000Z",
+		leaseDurationMs: 60_000,
+	};
+}
+
+function heldLeaseLedgerContent(receipt: VaultGitReceipt): string {
+	return `${JSON.stringify({
+		schema_version: 1,
+		operation: "acquire",
+		previous_generation: null,
+		transitioned_at: "2026-08-09T00:00:00.000Z",
+		lease: {
+			transaction_id: receipt.transactionId,
+			actor: receipt.actor,
+			host: receipt.host,
+			event: receipt.event,
+			owned_paths: receipt.ownedPaths.map((entry) => entry.path),
+			local_main_head: receipt.localMainHead,
+			remote_main_head: receipt.remoteMainHead,
+			acquired_at: receipt.leaseAcquiredAt,
+			lease_duration_ms: receipt.leaseDurationMs,
+			state: "held",
+		},
+	})}\n`;
 }
 
 function receiptForRecoveryPhase(
