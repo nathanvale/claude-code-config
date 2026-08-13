@@ -657,36 +657,44 @@ async function reconcileQuarantine(
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
 	const identity = await options.repository.resolveCanonicalIdentity().catch(() => null);
-	if (!identity || identity.localMainHead !== receipt.localMainHead) {
+	if (!identity) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
-	if (
-		!options.repository.hashOwnedPaths ||
-		!options.repository.captureUnrelatedState
-	) {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
-	}
-	try {
-		const [hashes, unrelated] = await Promise.all([
-			options.repository.hashOwnedPaths(
-				receipt.ownedPaths.map((entry) => entry.path),
-			),
-			options.repository.captureUnrelatedState(
-				receipt.ownedPaths.map((entry) => entry.path),
-			),
-		]);
+	const ownedPaths = receipt.ownedPaths.map((entry) => entry.path);
+	if (identity.localMainHead === receipt.localMainHead) {
 		if (
-			JSON.stringify(unrelated) !== JSON.stringify(receipt.unrelatedState) ||
-			hashes.some(
-				(hash) =>
-					receipt.ownedPaths.find((entry) => entry.path === hash.path)
-						?.baselineHash !== hash.contentHash,
-			)
+			!options.repository.hashOwnedPaths ||
+			!options.repository.captureUnrelatedState
 		) {
 			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 		}
-	} catch {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		try {
+			const [hashes, unrelated] = await Promise.all([
+				options.repository.hashOwnedPaths(ownedPaths),
+				options.repository.captureUnrelatedState(ownedPaths),
+			]);
+			if (
+				JSON.stringify(unrelated) !== JSON.stringify(receipt.unrelatedState) ||
+				hashes.some(
+					(hash) =>
+						receipt.ownedPaths.find((entry) => entry.path === hash.path)
+							?.baselineHash !== hash.contentHash,
+				)
+			) {
+				return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			}
+		} catch {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		}
+	} else {
+		const settled = await inspectSettledOwnedPaths(
+			options,
+			receipt,
+			identity.localMainHead,
+		).catch(() => false);
+		if (!settled) {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		}
 	}
 	try {
 		await options.store.recordQuarantine({
@@ -698,6 +706,34 @@ async function reconcileQuarantine(
 		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
 	}
 	return repaired(input.action, "closed", receipt.phase, "local", "none", summaries.none, diagnostics);
+}
+
+/** Prove a later canonical main has settled every formerly owned path. */
+async function inspectSettledOwnedPaths(
+	options: VaultGitDoctorOptions,
+	receipt: VaultGitReceipt,
+	currentMainHead: string,
+): Promise<boolean> {
+	if (!options.repository.inspectCommitAncestry) return false;
+	const ownedPaths = receipt.ownedPaths.map((entry) => entry.path);
+	const [main, ancestry, admission] = await Promise.all([
+		options.ledger.git.inspectMain(receipt.remote),
+		options.repository.inspectCommitAncestry(
+			receipt.localMainHead,
+			currentMainHead,
+		),
+		options.repository.inspectOwnedPaths(ownedPaths),
+	]);
+	return (
+		main.status === "ok" &&
+		main.alignment === "aligned" &&
+		main.localHead === currentMainHead &&
+		main.remoteHead === currentMainHead &&
+		ancestry === "ancestor" &&
+		admission.status === "admitted" &&
+		JSON.stringify(admission.paths.map((entry) => entry.path)) ===
+			JSON.stringify(ownedPaths)
+	);
 }
 
 async function authorizeOwner(
