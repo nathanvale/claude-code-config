@@ -195,21 +195,41 @@ State per-lens counts including zeros. Do not propose edits — this is report-o
 return { confirmed, lenses, report }
 ```
 
-## `resolveReferences(root)`
+## `resolveReferences(root, opts?)`
 
-Supply this before invoking. It returns `[{ doc, code: '', claim, observation }]` for every backticked path that does not resolve.
+Ships with the skill: [`scripts/resolve-references.mjs`](../scripts/resolve-references.mjs). Import it, or run it standalone to see the deterministic lens alone:
 
-```js
-// Shape it returns — one entry per non-resolving reference:
-// {
-//   doc: 'AGENTS.md:12',
-//   code: '',
-//   claim: 'runtime/skill-catalog.json',
-//   observation: 'doc names runtime/skill-catalog.json; path does not exist in the repo',
-// }
+```sh
+node skills/docs-drift/scripts/resolve-references.mjs <repo-root>
 ```
 
-Implementation notes: grep the doc surface for backticked tokens that look like paths (contain `/` or a known extension); skip URLs, globs, and anything inside a fenced code block marked as an example; resolve each against `root`. Bare commands (`bun run build`) resolve against `package.json` scripts rather than the filesystem.
+Returns `[{ doc, code: '', claim, observation }]` — one entry per non-resolving reference:
+
+```js
+{
+  doc: 'AGENTS.md:12',
+  code: '',
+  claim: 'runtime/skill-catalog.json',
+  observation: 'doc names runtime/skill-catalog.json; path does not exist in the repo',
+}
+```
+
+**The filters are the hard part, and each one was earned.** Against a real repo the raw heuristic produced 39 findings, all false positives. What it must skip:
+
+| Class | Example | Why |
+|---|---|---|
+| Slash commands | `/hooks`, `/triage` | CLI commands, not paths |
+| Module specifiers | `@rollup/plugin-node-resolve`, `fs/promises` | npm, not repo |
+| Git refs | `origin/main` | not a path |
+| Env / home paths | `$XDG_STATE_HOME/…`, `~/.local/state` | runtime, not repo |
+| Declared dependencies | `zod` | in `package.json` |
+| Superseded ADRs | whole file | records history correctly |
+| Absence assertions | "this repo has no `src/`" | the doc is *right* |
+| Historical plans | `docs/plans/**` | rationale, not current claims |
+
+`bun run <script>` resolves against `package.json` scripts rather than the filesystem. Fenced code blocks are skipped entirely.
+
+Pass `{ excludeDirs: [...] }` to override the `docs/plans/` default when a repo keeps historical material elsewhere.
 
 ## Confidence
 
