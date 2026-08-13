@@ -518,6 +518,11 @@ export interface VaultGitRepositoryPort {
 	readonly hashOwnedPaths?: (
 		ownedPaths: readonly string[],
 	) => Promise<readonly VaultGitOwnedPathContentHash[]>;
+	/** Prove one local commit is an ancestor of another without changing refs. */
+	readonly inspectCommitAncestry?: (
+		ancestor: string,
+		descendant: string,
+	) => Promise<"ancestor" | "not_ancestor" | "failed" | "timed_out">;
 	/** Build, verify, and install one exact local event commit. */
 	readonly commitExact?: (
 		request: VaultGitExactCommitRequest,

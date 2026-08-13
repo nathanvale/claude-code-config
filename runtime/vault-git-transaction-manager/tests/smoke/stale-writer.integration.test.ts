@@ -73,4 +73,62 @@ describe("row 10: takeover fences the prior writer", () => {
 		);
 		expect(await store.load()).toEqual(receiptAfterTakeover);
 	});
+
+	test("clears quarantine after a later aligned commit settles the owned path", async () => {
+		const fixture = await mkSmokeFixture({ leaseDurationMs: 1 });
+		const ownedPath = "notes/daily-driver-retro.md";
+		const transactionId = await fixture.begin(ownedPath);
+		await writeFile(join(fixture.clone, ownedPath), "settled later\n");
+
+		const takeover = await fixture.run([
+			"repair",
+			"stale-lease-takeover",
+			"--transaction-id",
+			transactionId,
+			"--prior-writer-stopped",
+			"--json",
+		]);
+		expect(takeover.exitCode).toBe(0);
+
+		fixture.git("add", "--", ownedPath);
+		fixture.git(
+			"commit",
+			"--only",
+			"-m",
+			"docs: settle stranded owned path",
+			"--",
+			ownedPath,
+		);
+		fixture.git("push", "origin", "HEAD:refs/heads/main");
+		const settled = fixture.snapshot();
+
+		const reconciled = await fixture.run([
+			"repair",
+			"reconcile-quarantine",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		]);
+		expect(reconciled.exitCode).toBe(0);
+		expect(parseCliProcessJson(reconciled)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "repaired",
+				transaction_state: "closed",
+				phase: "closed",
+				changed_state: "local",
+			},
+			continuation: { next_action_id: "none" },
+		});
+		assertRefsUnchanged(settled, fixture.snapshot());
+
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "smoke-vault",
+		});
+		expect(await store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+			transactionId,
+		});
+	});
 });
