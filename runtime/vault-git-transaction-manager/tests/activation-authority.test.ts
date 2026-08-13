@@ -355,39 +355,62 @@ describe("activation authority", () => {
 		});
 	});
 
-	test("fresh human activation supersedes an older closed receipt baseline", async () => {
-		const fixture = await authorityFixture({
-			wrapStore(store) {
-				const receipt = closedReceipt({
-					recordedAt: "2026-08-08T00:00:00.000Z",
-					expectedMainCommit: "d".repeat(40),
-					ledgerReleaseId: "e".repeat(40),
-				});
-				return {
-					...store,
-					async load() {
-						return {
-							status: "loaded" as const,
-							receipt,
-							history: [receipt],
-							historyPaths: ["fixture-receipt.json"],
-						};
-					},
-				};
+	for (const scenario of [
+		{
+			phase: "closed",
+			overrides: {
+				recordedAt: "2026-08-08T00:00:00.000Z",
+				expectedMainCommit: "d".repeat(40),
+				ledgerReleaseId: "e".repeat(40),
 			},
-		});
-		await fixture.store.publishPreparedEvidence(fixture.evidence);
-		await fixture.authority.admit({
-			evidenceId: fixture.evidence.evidenceId,
-			humanCapability,
-			note: "approve fresh baseline",
-		});
+		},
+		{
+			phase: "repairable",
+			overrides: {
+				phase: "repairable",
+				transition: "deterministic_repair_available",
+				recordedAt: "2026-08-08T00:00:00.000Z",
+				commitId: undefined,
+				expectedMainCommit: undefined,
+				ledgerReleaseId: undefined,
+				pushOutcome: undefined,
+				nextSafeAction: "run_doctor",
+			},
+		},
+	] satisfies ReadonlyArray<{
+		readonly phase: string;
+		readonly overrides: Partial<VaultGitReceipt>;
+	}>) {
+		test(`fresh human activation supersedes an older ${scenario.phase} receipt baseline`, async () => {
+			const fixture = await authorityFixture({
+				wrapStore(store) {
+					const receipt = closedReceipt(scenario.overrides);
+					return {
+						...store,
+						async load() {
+							return {
+								status: "loaded" as const,
+								receipt,
+								history: [receipt],
+								historyPaths: ["fixture-receipt.json"],
+							};
+						},
+					};
+				},
+			});
+			await fixture.store.publishPreparedEvidence(fixture.evidence);
+			await fixture.authority.admit({
+				evidenceId: fixture.evidence.evidenceId,
+				humanCapability,
+				note: `approve fresh baseline after ${scenario.phase}`,
+			});
 
-		expect(await fixture.authority.validate("continuation")).toEqual({
-			status: "admitted",
-			evidenceId: fixture.evidence.evidenceId,
+			expect(await fixture.authority.validate("continuation")).toEqual({
+				status: "admitted",
+				evidenceId: fixture.evidence.evidenceId,
+			});
 		});
-	});
+	}
 
 	for (const invalidField of ["recordedAt", "capturedAt"] as const) {
 		test(`continuation fails closed for invalid ${invalidField}`, async () => {
