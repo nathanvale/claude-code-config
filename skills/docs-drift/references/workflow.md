@@ -56,10 +56,21 @@ const VERDICT = {
   required: ['refuted', 'why'],
 }
 
-const root = args?.root ?? '.'
-const manifest = args?.manifest ?? {}
+// `args` can arrive as a real object or as a JSON string, depending on how the
+// host serialises it in transit. Normalise, because a string silently yields
+// `manifest === undefined`, zero targets, and a synthesis over nothing — a run
+// that looks complete having checked no document.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+
+const root = input.root ?? '.'
+const manifest = input.manifest ?? {}
 const targets = Object.entries(manifest.targets ?? {})
 const unverifiable = Object.entries(manifest.unverifiable ?? {})
+
+// A manifest that parsed to zero targets is a misconfiguration, not a clean repo.
+if (input.manifest && targets.length === 0) {
+  throw new Error('manifest supplied but targets is empty — check the manifest shape.')
+}
 
 // ---------------------------------------------------------------------------
 // reference lens — deterministic, in-process, no agent.
