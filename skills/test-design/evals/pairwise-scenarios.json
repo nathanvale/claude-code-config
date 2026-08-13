@@ -700,7 +700,7 @@
     },
     {
       "id": "p42-test-harness-improve-test-architecture-runner-execution",
-      "prompt": "While improve-test-architecture remains the active workflow, create a repository-owned test-harness concerning only one-shot runner termination, exact selector file and test counts, and a protocol-complete reporter receipt at the disputed seam. Runtime, CI, platform compatibility, public-process lifecycle, durable state, installation, browser, and hosted claims are explicitly outside this change.",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create a repository-owned test-harness concerning only one-shot runner termination, exact selector file and test counts, and a protocol-complete reporter receipt at the disputed seam. Runtime, CI, platform compatibility, public-process lifecycle, durable state, installation, browser, and hosted claims are explicitly outside this change.",
       "artifact": "test-harness",
       "handback": "improve-test-architecture",
       "profiles": [
