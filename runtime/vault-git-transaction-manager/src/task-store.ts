@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { VaultGitTaskState } from "./model.ts";
 import {
 	createNodeVaultGitDurabilityPort,
+	durablePublishExclusive,
 	type VaultGitDurabilityPort,
 } from "./store.ts";
 import {
@@ -406,29 +407,23 @@ async function publishExclusiveJson(
 	durability: VaultGitDurabilityPort,
 	target: "task_claim" | "task_state",
 ): Promise<boolean> {
-	const temporary = `${path}.tmp-${randomUUID()}`;
-	let handle: FileHandle | undefined;
-	try {
-		handle = await open(temporary, "wx", 0o600);
-		await durability.writeTemp(handle, new TextEncoder().encode(`${JSON.stringify(value)}\n`), target);
-		await durability.syncFile(handle, target);
-		await handle.close();
-		handle = undefined;
-		try {
-			await durability.linkExclusive(temporary, path, target);
-		} catch (error) {
-			if (!isExists(error)) throw error;
-			await durability.syncDirectory(join(path, ".."), target);
+	// A claim/state loser fences the directory and yields (returns false) rather
+	// than throwing: contention is the expected outcome of claimOrJoin, not an
+	// error. The shared core owns the durability order.
+	return await durablePublishExclusive(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(value)}\n`),
+		target,
+		durability,
+		async (syncParent) => {
+			await syncParent();
 			return false;
-		}
-		await durability.syncDirectory(join(path, ".."), target);
-		return true;
-	} catch (error) {
-		throw new Error(`${target.replace("_", " ")} durability unavailable`, { cause: error });
-	} finally {
-		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
-	}
+		},
+		(cause) =>
+			new Error(`${target.replace("_", " ")} durability unavailable`, {
+				cause,
+			}),
+	);
 }
 
 function revisionPath(history: string, revision: number): string {
