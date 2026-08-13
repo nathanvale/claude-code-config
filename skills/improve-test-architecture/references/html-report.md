@@ -10,6 +10,7 @@ Show:
 - Three to five candidate cards.
 - One clearly marked recommendation.
 - Cost, risk, owner, and next slice for each candidate.
+- Separate human and programmatic CLI contracts when both public surfaces apply: distinct output, exit-status, receipt, and failure semantics.
 
 When slowness, CI duration, isolation, concurrency, parallelism, projects, or shards motivate the review, add an execution topology backed by retained measurements:
 
@@ -26,7 +27,7 @@ When slowness, CI duration, isolation, concurrency, parallelism, projects, or sh
 - Name receipt merge ownership.
 - Distinguish proof value from elapsed cost for each stage or suite group.
 - Name each optimization candidate.
-- Link its supporting evidence.
+- Link its evidence to the source-linked reference or retained receipt that produced it.
 - State expected runtime impact and confidence risk.
 - Give its rollback signal and remaining blind spots.
 
