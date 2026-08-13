@@ -612,6 +612,108 @@
         "activeWorkflowRemainsDriver": true,
         "continuation": "return"
       }
+    },
+    {
+      "id": "p37-test-tdd-runner-execution",
+      "prompt": "While tdd remains the active workflow, change the repository-owned test so its Bun one-shot versus watch mode, exact selector count, and retained machine reporter prove the existing seam.",
+      "artifact": "test",
+      "handback": "tdd",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "change",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p38-fixture-diagnosing-bugs-runner-execution",
+      "prompt": "While diagnosing-bugs remains the active workflow, create a repository-owned fixture for runner file isolation, within-file concurrency, randomized-order seed replay, and module-mock restoration at a new seam.",
+      "artifact": "fixture",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p39-mock-ci-testbed-runner-execution",
+      "prompt": "While ci-testbed remains the active workflow, run the existing repository-owned mock test with its runtime version, transform path, module cache, and restoration owner unchanged at the disputed seam.",
+      "artifact": "mock",
+      "handback": "ci-testbed",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p40-snapshot-cli-author-runner-execution",
+      "prompt": "While cli-author remains the active workflow, read the existing repository-owned snapshot test reporter and application-output separation at the existing seam without changing an artifact.",
+      "artifact": "snapshot",
+      "handback": "cli-author",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "read",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p41-test-helper-test-runner-runner-execution",
+      "prompt": "While test-runner remains the active workflow, change the repository-owned test helper for within-file concurrency, timeout cancellation, and resource cleanup at a new seam.",
+      "artifact": "test-helper",
+      "handback": "test-runner",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "change",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p42-test-harness-improve-test-architecture-runner-execution",
+      "prompt": "While improve-test-architecture remains the active workflow, create a repository-owned test-harness concerning only one-shot runner termination, exact selector file and test counts, and a protocol-complete reporter receipt at the disputed seam. Runtime, CI, platform compatibility, public-process lifecycle, durable state, installation, browser, and hosted claims are explicitly outside this change.",
+      "artifact": "test-harness",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "create",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
     }
   ]
 }

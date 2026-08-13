@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	testDesignScenarioFactors,
 	type TestDesignScenario,
+	testDesignV2QualificationCases,
 } from "../evals/smoke-definitions.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "../../..");
@@ -20,6 +21,11 @@ const reportReferencePath = resolve(
 	import.meta.dir,
 	"../../improve-test-architecture/references/html-report.md",
 );
+const runnerExecutionPath = resolve(
+	import.meta.dir,
+	"../references/runner-execution.md",
+);
+const influencesPath = resolve(import.meta.dir, "../references/influences.md");
 const scenarioMatrixPath = resolve(
 	import.meta.dir,
 	"../evals/pairwise-scenarios.json",
@@ -146,7 +152,7 @@ describe("agent-native testing skill contract", () => {
 		expect(library).not.toContain("## Browser and UI");
 
 		for (const corePattern of [
-			"Name the external behaviour",
+			"Name the production consumer and workflow",
 			"Choose the seam and proof layer",
 			"Use an independent expected result or observable",
 			"Define how the test can go RED",
@@ -155,6 +161,69 @@ describe("agent-native testing skill contract", () => {
 		]) {
 			expect(library).toContain(corePattern);
 			expect(improveTestArchitecture).not.toContain(corePattern);
+		}
+	});
+
+	test("routes runner-sensitive work through one conditional execution profile", () => {
+		const library = requiredText(patternLibraryPath);
+		const runnerExecution = requiredText(runnerExecutionPath);
+
+		expect(profiles).toContain("runner-execution");
+		expect(library).toContain(
+			"skills/test-design/references/runner-execution.md",
+		);
+		expect(library).toContain("only when runner execution semantics");
+		for (const contract of [
+			"execution mode and termination",
+			"runtime and version",
+			"file isolation, file concurrency",
+			"expected file count",
+			"expected test count",
+			"timeout, cancellation, and cleanup",
+			"reporter output and exit status",
+			"type checking",
+			"production build or runtime path",
+			"project identity and shard identity",
+			"merge receipts mechanically",
+		]) {
+			expect(runnerExecution.toLowerCase()).toContain(contract);
+		}
+	});
+
+	test("grounds test design in production workflows without naming archetypes in skills", () => {
+		const library = requiredText(patternLibraryPath);
+		const influences = requiredText(influencesPath);
+		const testDesign = requiredText(testDesignPath);
+		const improveTestArchitecture = requiredText(improveTestArchitecturePath);
+
+		for (const field of [
+			"production consumer",
+			"starting condition",
+			"public actions",
+			"observable outcome",
+			"failure meaning",
+		]) {
+			expect(library.toLowerCase()).toContain(field);
+		}
+		for (const personalName of [
+			"Kent C. Dodds",
+			"Jarred Sumner",
+			"Isaac Z. Schlueter",
+			"Matteo Collina",
+			"James M. Snell",
+			"Anthony Fu",
+		]) {
+			expect(testDesign).not.toContain(personalName);
+			expect(improveTestArchitecture).not.toContain(personalName);
+			expect(influences).toContain(personalName);
+		}
+		expect(library).toContain("skills/test-design/references/influences.md");
+		const sourceLinks = [...influences.matchAll(/\]\((https:\/\/[^)]+)\)/gu)].map(
+			(match) => match[1],
+		);
+		expect(sourceLinks.length).toBeGreaterThanOrEqual(20);
+		for (const sourceLink of sourceLinks) {
+			expect(() => new URL(sourceLink)).not.toThrow();
 		}
 	});
 
@@ -195,11 +264,30 @@ describe("agent-native testing skill contract", () => {
 		expect(reportReference).toContain("self-contained HTML");
 		expect(reportReference).toContain("absolute path");
 		expect(reportReference).toContain("Create no repository or vault file");
+		expect(reportReference.toLowerCase()).toContain(
+			"production-consumer workflow",
+		);
+		expect(reportReference).toContain("execution topology");
+		expect(reportReference).toContain("measured duration");
+		expect(reportReference).toContain("proof value");
+		expect(reportReference).toContain("optimization candidate");
+		expect(reportReference).toContain("slowest-file");
+		for (const field of [
+			"open handles",
+			"resource contention",
+			"cold-start",
+			"steady-state",
+			"projects",
+			"shards",
+			"remaining blind spots",
+		]) {
+			expect(reportReference).toContain(field);
+		}
 	});
 
 	test("freezes all valid factor pairs across artifacts, owners, profiles, operations, and seams", () => {
 		const scenarios = parseScenarios();
-		expect(scenarios).toHaveLength(36);
+		expect(scenarios).toHaveLength(42);
 		expect(new Set(scenarios.map((scenario) => scenario.id)).size).toBe(
 			scenarios.length,
 		);
@@ -278,5 +366,35 @@ describe("agent-native testing skill contract", () => {
 		expect(scenarios.some((scenario) => scenario.seam === "disputed")).toBe(
 			true,
 		);
+	});
+
+	test("freezes the V2 runner and report anti-pattern decisions", () => {
+		expect(testDesignV2QualificationCases).toHaveLength(16);
+		expect(
+			new Set(testDesignV2QualificationCases.map((scenario) => scenario.id)),
+		).toEqual(
+			new Set([
+				"persistent-watch",
+				"concurrency-axes",
+				"runtime-portability",
+				"timeout-cleanup",
+				"human-reporter",
+				"compact-output",
+				"selector-count",
+				"random-seed",
+				"mock-leakage",
+				"execution-versus-typecheck",
+				"affected-only",
+				"coverage-meaning",
+				"cli-consumers",
+				"production-workflow",
+				"slow-suite-optimization",
+				"read-only-selection-gate",
+			]),
+		);
+		for (const scenario of testDesignV2QualificationCases) {
+			expect(scenario.prompt.length).toBeGreaterThan(30);
+			expect(scenario.reject).toBeTypeOf("boolean");
+		}
 	});
 });

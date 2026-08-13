@@ -6,3 +6,4 @@
 - Use retries to diagnose nondeterminism, never to turn intermittent failure into confidence.
 - For green-local and red-CI mismatch, reproduce the exact tested ref before changing the test.
 - Keep platform absence as an unproved boundary, not a pass.
+- Use the runner-execution profile when loaders, transforms, type checking, coverage, affected selection, or isolation changes the confidence claim.

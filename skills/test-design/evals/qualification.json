@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "skills/test-design/evals/qualification.ts",
-  "source_sha256": "862d1349b7f98b9c0630d9db2f802d7303a0bb7425e9fee686ea1ee463de6697",
+  "source_sha256": "78183a4066daa8dc646c1390141f1ecd8b1ec52991c0d3553bb23c501e3f15dd",
   "sources": [
     "AGENTS.md",
     ".github/workflows/ci.yml",
@@ -18,10 +18,12 @@
     "skills/test-design/evals/qualification.ts",
     "skills/test-design/evals/smoke-definitions.ts",
     "skills/test-design/references/browser-and-ui.md",
+    "skills/test-design/references/influences.md",
     "skills/test-design/references/installation-host-hosted.md",
     "skills/test-design/references/pattern-library.md",
     "skills/test-design/references/process-and-cli.md",
     "skills/test-design/references/runtime-ci-platform.md",
+    "skills/test-design/references/runner-execution.md",
     "skills/test-design/references/state-concurrency-recovery.md",
     "skills/test-design/tests/skill-contract.test.ts"
   ],
@@ -31,6 +33,10 @@
     "pairwise_codex_two_consecutive": true,
     "mutation_claude": true,
     "mutation_codex": true,
+    "runner_sensitive_claude": true,
+    "runner_sensitive_codex": true,
+    "simple_unit_claude": true,
+    "simple_unit_codex": true,
     "run_only_claude": true,
     "run_only_codex": true,
     "missing_skill_claude": true,

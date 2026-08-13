@@ -12,7 +12,7 @@ Review a selected test suite without changing it. Invocation must be explicit.
 
 1. Read the repository instructions, testing commands, relevant context, and accepted decisions.
 2. Read `skills/test-design/references/pattern-library.md`, then every profile reference relevant to the selected suite.
-3. Map behaviour claims, seams, proof layers, fixtures, helpers, harnesses, and expensive boundaries.
+3. Map production-consumer workflows, behaviour claims, seams, proof layers, fixtures, helpers, harnesses, and expensive boundaries.
 4. Check each claim against the shared patterns and relevant profiles.
 5. Produce three to five bounded improvement candidates and one recommendation.
 6. Build the visual report through `references/html-report.md`.

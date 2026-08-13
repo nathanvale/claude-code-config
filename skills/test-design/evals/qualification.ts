@@ -11,7 +11,8 @@ import {
 const repositoryRoot = resolve(import.meta.dir, "../../..");
 const receiptPath = resolve(import.meta.dir, "qualification.json");
 
-const QUALIFICATION_SOURCE_PATHS = [
+/** Sources whose contents define the qualified Startup Surface behaviour. @internal */
+export const QUALIFICATION_SOURCE_PATHS = [
 	"AGENTS.md",
 	".github/workflows/ci.yml",
 	"scripts/agent-instructions.sh",
@@ -27,10 +28,12 @@ const QUALIFICATION_SOURCE_PATHS = [
 	"skills/test-design/evals/qualification.ts",
 	"skills/test-design/evals/smoke-definitions.ts",
 	"skills/test-design/references/browser-and-ui.md",
+	"skills/test-design/references/influences.md",
 	"skills/test-design/references/installation-host-hosted.md",
 	"skills/test-design/references/pattern-library.md",
 	"skills/test-design/references/process-and-cli.md",
 	"skills/test-design/references/runtime-ci-platform.md",
+	"skills/test-design/references/runner-execution.md",
 	"skills/test-design/references/state-concurrency-recovery.md",
 	"skills/test-design/tests/skill-contract.test.ts",
 ] as const;
@@ -46,12 +49,53 @@ type QualificationReceipt = {
 		pairwise_codex_two_consecutive: true;
 		mutation_claude: true;
 		mutation_codex: true;
+		runner_sensitive_claude: true;
+		runner_sensitive_codex: true;
+		simple_unit_claude: true;
+		simple_unit_codex: true;
 		run_only_claude: true;
 		run_only_codex: true;
 		missing_skill_claude: true;
 		missing_skill_codex: true;
 	};
 };
+
+/**
+ * Build a current successful receipt after every qualification proof passes.
+ *
+ * Test fixtures use the same builder so adding a source or result cannot
+ * deadlock qualification behind its previously checked-in receipt.
+ *
+ * @param root - Repository root containing the registered sources.
+ * @returns A receipt bound to the current source inventory and contents.
+ * @throws When a registered source is missing.
+ * @internal
+ */
+export function createQualificationReceipt(
+	root = repositoryRoot,
+): QualificationReceipt {
+	return {
+		schema_version: 1,
+		generated_by: "skills/test-design/evals/qualification.ts",
+		source_sha256: qualificationSourceDigest(root),
+		sources: [...QUALIFICATION_SOURCE_PATHS],
+		results: {
+			deterministic: true,
+			pairwise_claude_two_consecutive: true,
+			pairwise_codex_two_consecutive: true,
+			mutation_claude: true,
+			mutation_codex: true,
+			runner_sensitive_claude: true,
+			runner_sensitive_codex: true,
+			simple_unit_claude: true,
+			simple_unit_codex: true,
+			run_only_claude: true,
+			run_only_codex: true,
+			missing_skill_claude: true,
+			missing_skill_codex: true,
+		},
+	};
+}
 
 /**
  * Hash every source that can change the qualified Startup Surface behaviour.
@@ -121,6 +165,10 @@ function verifyReceipt(): { ok: boolean; reason: string } {
 		"pairwise_codex_two_consecutive",
 		"mutation_claude",
 		"mutation_codex",
+		"runner_sensitive_claude",
+		"runner_sensitive_codex",
+		"simple_unit_claude",
+		"simple_unit_codex",
 		"run_only_claude",
 		"run_only_codex",
 		"missing_skill_claude",
@@ -185,26 +233,12 @@ async function qualify(): Promise<void> {
 			await requirePass("test-design-pairwise-frozen", harness);
 		}
 		await requirePass("test-design-mutation-route", harness);
+		await requirePass("test-design-runner-sensitive-route", harness);
+		await requirePass("test-design-simple-unit-route", harness);
 		await requirePass("test-design-run-only-negative", harness);
 		await requireMissingSkillRed(harness);
 	}
-	const receipt: QualificationReceipt = {
-		schema_version: 1,
-		generated_by: "skills/test-design/evals/qualification.ts",
-		source_sha256: qualificationSourceDigest(),
-		sources: [...QUALIFICATION_SOURCE_PATHS],
-		results: {
-			deterministic: true,
-			pairwise_claude_two_consecutive: true,
-			pairwise_codex_two_consecutive: true,
-			mutation_claude: true,
-			mutation_codex: true,
-			run_only_claude: true,
-			run_only_codex: true,
-			missing_skill_claude: true,
-			missing_skill_codex: true,
-		},
-	};
+	const receipt = createQualificationReceipt();
 	writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
 }
 

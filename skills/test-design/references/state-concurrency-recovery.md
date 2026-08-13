@@ -6,3 +6,4 @@
 - Prove recovery produces at most one owner and does not silently abandon accepted work.
 - Keep heartbeat, lease renewal, liveness, and write authority as separate concepts.
 - Use deterministic clocks and barriers first; add bounded real concurrency to catch scheduling assumptions.
+- Use the runner-execution profile when file or within-file concurrency, runner isolation, or test-double lifecycle changes the claim.
