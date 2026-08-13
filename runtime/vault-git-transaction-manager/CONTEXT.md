@@ -15,3 +15,15 @@ _Avoid_: activation error, generic blocker, permission failure
 **Doctor Continuation**:
 External state change, inspection, or terminal action selected by Doctor after read-only diagnosis. Doctor itself is never its own immediate continuation.
 _Avoid_: retry Doctor, diagnostic loop
+
+**Completion Task**:
+Stable receipt-scoped completion intent exposed by one Task ID. Explicit repair preserves the Task while creating a new Attempt.
+_Avoid_: worker process, retry job
+
+**Attempt**:
+One explicitly authorized completion execution within a Completion Task. Repair increments the Attempt number; bounded pre-ack process replacement only increments `launchAttempt`.
+_Avoid_: automatic retry, launch attempt
+
+**Repair Authorization**:
+Single-use private evidence created by an approved `repair resume`. It permits the next identical `complete` to create one fresh Attempt and never grants transaction authority itself.
+_Avoid_: retry token, capability, lease

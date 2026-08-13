@@ -340,7 +340,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		assertLedgerState(fixture, "released");
 	});
 
-	test("repairable resumes after a real checker failure", async () => {
+	test("repairable re-enters completion under the same task after a real checker failure", async () => {
 		const fixture = await mkSmokeFixture();
 		await writeFile(
 			join(fixture.clone, "package.json"),
@@ -362,6 +362,10 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			"--json",
 		]);
 		expect(accepted.exitCode).toBe(0);
+		const originalTaskId = parseCliProcessJson<{
+			data?: { task_id?: string };
+		}>(accepted).data?.task_id;
+		expect(originalTaskId).toMatch(/^task_[0-9a-f]{32}$/);
 		const repairableTask = await waitForTerminalTask(fixture, accepted);
 		expect(parseCliProcessJson(repairableTask)).toMatchObject({
 			status: "ok",
@@ -393,20 +397,93 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			},
 			continuation: { next_action_id: "run_repair" },
 		});
-		const resumed = await fixture.run([
-			"repair",
-			"resume",
+		const interruptedRepair = await fixture.prepareAtInterrupt(
+			[
+				"repair",
+				"resume",
+				"--transaction-id",
+				transactionId,
+				"--json",
+			],
+			"after_repair_receipt_before_task_authorization",
+		);
+		await interruptedRepair.kill();
+		expect(
+			await createReceiptStore({
+				stateRoot: fixture.stateRoot,
+				repositoryIdentity: "smoke-vault",
+			}).load(),
+		).toMatchObject({
+			status: "loaded",
+			receipt: { transactionId, phase: "writing" },
+		});
+		const recoveryDoctor = await fixture.run([
+			"doctor",
 			"--transaction-id",
 			transactionId,
 			"--json",
 		]);
-		expect(parseCliProcessJson(resumed)).toMatchObject({
+		expect(parseCliProcessJson(recoveryDoctor)).toMatchObject({
 			status: "ok",
-			data: { outcome: "repaired", phase: "writing" },
-			continuation: { next_action_id: "complete_transaction" },
+			data: { phase: "writing", repair_action: "resume" },
+			continuation: { next_action_id: "run_repair" },
 		});
 		assertLedgerState(fixture, "held");
 		assertWorktreeUnchanged(before, fixture.snapshot());
+
+		await installPassingCheck(fixture.clone);
+		const beforeReentry = fixture.snapshot();
+		const repairedCallers = await Promise.all(
+			Array.from({ length: 20 }, () =>
+				fixture.run([
+					"complete",
+					"--transaction-id",
+					transactionId,
+					"--summary",
+					"docs(vault): preserve failed check",
+					"--json",
+				]),
+			),
+		);
+		for (const caller of repairedCallers) {
+			expect(
+				caller.exitCode,
+				`repaired completion refused:\n${caller.stdout}${caller.stderr}`,
+			).toBe(0);
+			expect(parseCliProcessJson(caller)).toMatchObject({
+				status: "ok",
+				data: {
+					transaction_id: transactionId,
+					task_id: originalTaskId,
+					task_attempt_number: 2,
+					task_previous_failure: { blocker: "vault_check_failed" },
+				},
+			});
+		}
+
+		const closedTask = await waitForTerminalTask(fixture, repairedCallers[0]);
+		expect(parseCliProcessJson(closedTask)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "completed",
+				phase: "closed",
+				transaction_id: transactionId,
+				task_id: originalTaskId,
+				task_attempt_number: 2,
+				task_previous_failure: { blocker: "vault_check_failed" },
+				task_state: "closed",
+			},
+			continuation: { next_action_id: "none" },
+		});
+		const closed = fixture.snapshot();
+		expect(closed.localMain).not.toBe(beforeReentry.localMain);
+		expect(closed.remoteMain).toBe(closed.localMain);
+		expect(closed.worktree).toBe(beforeReentry.worktree);
+		assertLedgerState(fixture, "released");
+		const closes = (await fixture.recordedPushes()).filter(
+			(args) => args.includes("--atomic") && !args.includes("--dry-run"),
+		);
+		expect(closes).toHaveLength(1);
 	});
 
 	test("human_required preserves a one-ref publication for operator review", async () => {

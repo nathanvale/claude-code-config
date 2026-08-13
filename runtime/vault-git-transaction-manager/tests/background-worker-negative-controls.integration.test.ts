@@ -63,6 +63,17 @@ describe("background worker negative controls", () => {
 					["true;"],
 				),
 		},
+		{
+			name: "repaired-attempt-generation",
+			file: "src/task-repair.ts",
+			testFile: "tests/task-store.test.ts",
+			mutate: (source: string) =>
+				replaceRequired(
+					source,
+					["attemptNumber: previous.attemptNumber + 1,"],
+					["attemptNumber: previous.attemptNumber,"],
+				),
+		},
 	] as const) {
 		test(`the ${control.name} owning test fails when its guard is disabled`, async () => {
 			const root = await mkdtemp(

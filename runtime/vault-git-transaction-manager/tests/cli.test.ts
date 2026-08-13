@@ -655,6 +655,7 @@ describe("vault-git CLI composition", () => {
 				async load() { return { status: "loaded", state, history: [state] }; },
 				async loadByTaskId() { return { status: "loaded", state, history: [state] }; },
 				async materializeClaimState() { return { status: "loaded", state }; },
+				async authorizeRepair() { return { status: "refused" }; },
 				async transition(_taskId, expectedRevision, changes) {
 					expect(expectedRevision).toBe(state.revision);
 					state = {
@@ -728,6 +729,7 @@ describe("vault-git CLI composition", () => {
 				async load() { return { status: "loaded", state }; },
 				async loadByTaskId() { return { status: "loaded", state }; },
 				async materializeClaimState() { return { status: "loaded", state }; },
+				async authorizeRepair() { return { status: "refused" }; },
 				async transition(_taskId, expectedRevision, changes) {
 					expect(expectedRevision).toBe(state.revision);
 					state = {
@@ -778,8 +780,19 @@ describe("vault-git CLI composition", () => {
 		});
 	});
 
-	test("projects lease_generation verbatim in public task JSON", async () => {
-		const state = taskState({ state: "in_progress", phase: "running" });
+	test("projects exact attempt evidence in public task JSON and plain output", async () => {
+		const state = taskState({
+			state: "in_progress",
+			phase: "running",
+			attemptNumber: 2,
+			previousTerminalResult: {
+				outcome: "refused",
+				phase: "checking",
+				blocker: "vault_check_failed",
+				changedState: "local",
+				retrySafety: "operator_required",
+			},
+		});
 		const base = fakeComposition(fakeEngine());
 		const composition: VaultGitCliComposition = {
 			...base,
@@ -791,6 +804,7 @@ describe("vault-git CLI composition", () => {
 				async load() { return { status: "loaded", state, history: [state] }; },
 				async loadByTaskId() { return { status: "loaded", state, history: [state] }; },
 				async materializeClaimState() { return { status: "loaded", state }; },
+				async authorizeRepair() { return { status: "refused" }; },
 				async transition() { throw new Error("transition not expected"); },
 			},
 		};
@@ -803,7 +817,21 @@ describe("vault-git CLI composition", () => {
 		expect(JSON.parse(run.stdout).data.lease_generation).toBe(
 			state.leaseGeneration,
 		);
+		expect(JSON.parse(run.stdout).data.task_attempt_number).toBe(2);
+		expect(JSON.parse(run.stdout).data.task_previous_failure).toMatchObject({
+			blocker: "vault_check_failed",
+		});
 		expect(run.stdout).toContain(state.leaseGeneration);
+
+		const plain = await runVaultGitForTest(
+			["status", "--task-id", state.taskId],
+			{ composition, launchPrivate: false },
+		);
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout).toContain("task_attempt_number: 2");
+		expect(plain.stdout).toContain(
+			"task_previous_failure: vault_check_failed",
+		);
 	});
 
 	test("reports an unknown task locally with one cause-specific action", async () => {
@@ -818,6 +846,7 @@ describe("vault-git CLI composition", () => {
 				async load() { return { status: "absent" }; },
 				async loadByTaskId() { return { status: "absent" }; },
 				async materializeClaimState() { return { status: "absent" }; },
+				async authorizeRepair() { return { status: "absent" }; },
 				async transition() { throw new Error("transition not expected"); },
 			},
 		};
@@ -851,6 +880,7 @@ describe("vault-git CLI composition", () => {
 				async load() { return { status: "absent" }; },
 				async loadByTaskId() { return { status: "corrupt", reason: "malformed" }; },
 				async materializeClaimState() { return { status: "absent" }; },
+				async authorizeRepair() { return { status: "refused" }; },
 				async transition() { throw new Error("transition not expected"); },
 			},
 		};
@@ -1368,12 +1398,13 @@ function activeReceipt(): VaultGitReceipt {
 
 function taskState(overrides: Partial<VaultGitTaskState> = {}): VaultGitTaskState {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		taskId: "task_11111111111111111111111111111111",
 		receiptId: activeReceipt().receiptId,
 		transactionId: activeReceipt().transactionId ?? "missing",
 		leaseGeneration: activeReceipt().leaseGeneration ?? "missing",
 		revision: 1,
+		attemptNumber: 1,
 		state: "claimed",
 		phase: "admitted",
 		recordedAt: "1970-01-01T00:00:00.000Z",
@@ -1386,6 +1417,9 @@ function taskState(overrides: Partial<VaultGitTaskState> = {}): VaultGitTaskStat
 		workerProcessIdentity: null,
 		launchAttempt: 0,
 		terminalResult: null,
+		previousTerminalResult: null,
+		repairReentryBlocked: false,
+		repairAuthorization: null,
 		...overrides,
 	};
 }

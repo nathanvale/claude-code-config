@@ -10,6 +10,7 @@ import {
 	VAULT_GIT_TRANSACTION_PHASES,
 	type VaultGitTaskState,
 	type VaultGitTaskStateInput,
+	type VaultGitTaskRepairAuthorization,
 	type VaultGitTaskTerminalResult,
 } from "./model.ts";
 
@@ -56,6 +57,7 @@ const VAULT_GIT_TASK_STATE_KEYS = [
 	"transactionId",
 	"leaseGeneration",
 	"revision",
+	"attemptNumber",
 	"state",
 	"phase",
 	"recordedAt",
@@ -68,10 +70,26 @@ const VAULT_GIT_TASK_STATE_KEYS = [
 	"workerProcessIdentity",
 	"launchAttempt",
 	"terminalResult",
+	"previousTerminalResult",
+	"repairReentryBlocked",
+	"repairAuthorization",
 ] as const;
+
+const LEGACY_VAULT_GIT_TASK_STATE_KEYS = VAULT_GIT_TASK_STATE_KEYS.filter(
+	(key) =>
+		key !== "attemptNumber" &&
+		key !== "previousTerminalResult" &&
+		key !== "repairReentryBlocked" &&
+		key !== "repairAuthorization",
+);
 
 const VAULT_GIT_TASK_CLAIM_KEYS = [
 	...VAULT_GIT_TASK_STATE_KEYS,
+	"bindingDigest",
+] as const;
+
+const LEGACY_VAULT_GIT_TASK_CLAIM_KEYS = [
+	...LEGACY_VAULT_GIT_TASK_STATE_KEYS,
 	"bindingDigest",
 ] as const;
 
@@ -129,12 +147,13 @@ export function createVaultGitTaskState(
 	input: VaultGitTaskStateInput,
 ): VaultGitTaskState {
 	return parseVaultGitTaskState({
-		schemaVersion: 1,
+		schemaVersion: 2,
 		taskId: input.taskId,
 		receiptId: input.receiptId,
 		transactionId: input.transactionId,
 		leaseGeneration: input.leaseGeneration,
 		revision: 1,
+		attemptNumber: 1,
 		state: "claimed",
 		phase: "admitted",
 		recordedAt: input.recordedAt,
@@ -147,6 +166,9 @@ export function createVaultGitTaskState(
 		workerProcessIdentity: null,
 		launchAttempt: 0,
 		terminalResult: null,
+		previousTerminalResult: null,
+		repairReentryBlocked: false,
+		repairAuthorization: null,
 	});
 }
 
@@ -202,6 +224,13 @@ export function advanceVaultGitTaskState(
 			? previous.launchAttempt
 			: input.launchAttempt,
 		terminalResult: input.terminalResult ?? null,
+		previousTerminalResult: previous.previousTerminalResult,
+		repairReentryBlocked:
+			previous.repairReentryBlocked ||
+			previous.state === "unknown" ||
+			input.state === "unknown",
+		repairAuthorization:
+			input.state === "closed" ? null : previous.repairAuthorization,
 	});
 }
 
@@ -235,9 +264,14 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 		throw new Error("task claim invalid");
 	}
 	const record = value as Record<string, unknown>;
+	const exactCurrent =
+		Object.keys(record).length === VAULT_GIT_TASK_CLAIM_KEYS.length &&
+		VAULT_GIT_TASK_CLAIM_KEYS.every((key) => Object.hasOwn(record, key));
+	const exactLegacy =
+		Object.keys(record).length === LEGACY_VAULT_GIT_TASK_CLAIM_KEYS.length &&
+		LEGACY_VAULT_GIT_TASK_CLAIM_KEYS.every((key) => Object.hasOwn(record, key));
 	if (
-		Object.keys(record).length !== VAULT_GIT_TASK_CLAIM_KEYS.length ||
-		!VAULT_GIT_TASK_CLAIM_KEYS.every((key) => Object.hasOwn(record, key)) ||
+		(!exactCurrent && !exactLegacy) ||
 		typeof record.bindingDigest !== "string" ||
 		!/^[0-9a-f]{64}$/.test(record.bindingDigest)
 	) {
@@ -395,11 +429,25 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 	) {
 		throw new Error("task state invalid");
 	}
-	const record = value as Record<string, unknown>;
+	const source = value as Record<string, unknown>;
+	const exactLegacy =
+		Object.keys(source).length === LEGACY_VAULT_GIT_TASK_STATE_KEYS.length &&
+		LEGACY_VAULT_GIT_TASK_STATE_KEYS.every((key) => Object.hasOwn(source, key)) &&
+		source.schemaVersion === 1;
+	const record: Record<string, unknown> = exactLegacy
+		? {
+			...source,
+			schemaVersion: 2,
+			attemptNumber: 1,
+			previousTerminalResult: null,
+			repairReentryBlocked: source.state === "unknown",
+			repairAuthorization: null,
+		}
+		: source;
 	if (
 		Object.keys(record).length !== VAULT_GIT_TASK_STATE_KEYS.length ||
 		!VAULT_GIT_TASK_STATE_KEYS.every((key) => Object.hasOwn(record, key)) ||
-		record.schemaVersion !== 1 ||
+		record.schemaVersion !== 2 ||
 		typeof record.taskId !== "string" ||
 		!/^task_[0-9a-f]{32}$/.test(record.taskId) ||
 		typeof record.receiptId !== "string" ||
@@ -412,6 +460,9 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		typeof record.revision !== "number" ||
 		!Number.isSafeInteger(record.revision) ||
 		record.revision < 1 ||
+		typeof record.attemptNumber !== "number" ||
+		!Number.isSafeInteger(record.attemptNumber) ||
+		record.attemptNumber < 1 ||
 		!VAULT_GIT_TASK_STATES.includes(record.state as never) ||
 		!VAULT_GIT_TASK_PHASES.includes(record.phase as never) ||
 		typeof record.recordedAt !== "string" ||
@@ -442,6 +493,12 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		record.launchAttempt > 2 ||
 		(record.workerPid === null) !== (record.workerProcessIdentity === null) ||
 		!isTaskTerminalResult(record.terminalResult) ||
+		!isTaskTerminalResult(record.previousTerminalResult) ||
+		typeof record.repairReentryBlocked !== "boolean" ||
+		!isTaskRepairAuthorization(record.repairAuthorization) ||
+		(record.repairAuthorization !== null && record.repairReentryBlocked) ||
+		(record.repairAuthorization !== null &&
+			(record.state !== "repair_needed" || record.phase !== "terminal")) ||
 		(record.phase === "terminal") !== (record.terminalResult !== null) ||
 		(record.phase === "admitted" &&
 			record.state !== "claimed" &&
@@ -459,12 +516,13 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		throw new Error("task state invalid");
 	}
 	return Object.freeze({
-		schemaVersion: 1,
+		schemaVersion: 2,
 		taskId: record.taskId,
 		receiptId: record.receiptId,
 		transactionId: record.transactionId,
 		leaseGeneration: record.leaseGeneration,
 		revision: record.revision,
+		attemptNumber: record.attemptNumber as number,
 		state: record.state as VaultGitTaskState["state"],
 		phase: record.phase as VaultGitTaskState["phase"],
 		recordedAt: record.recordedAt,
@@ -478,7 +536,36 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		launchAttempt: record.launchAttempt as number,
 		terminalResult:
 			record.terminalResult as VaultGitTaskTerminalResult | null,
+		previousTerminalResult:
+			record.previousTerminalResult as VaultGitTaskTerminalResult | null,
+		repairReentryBlocked: record.repairReentryBlocked,
+		repairAuthorization:
+			record.repairAuthorization as VaultGitTaskRepairAuthorization | null,
 	});
+}
+
+function isTaskRepairAuthorization(value: unknown): boolean {
+	if (value === null) return true;
+	if (typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	return (
+		Object.keys(record).length === 7 &&
+		record.schemaVersion === 1 &&
+		record.action === "resume" &&
+		typeof record.failedAttemptNumber === "number" &&
+		Number.isSafeInteger(record.failedAttemptNumber) &&
+		record.failedAttemptNumber >= 1 &&
+		typeof record.failedTaskRevision === "number" &&
+		Number.isSafeInteger(record.failedTaskRevision) &&
+		record.failedTaskRevision >= 1 &&
+		typeof record.repairedReceiptRevision === "number" &&
+		Number.isSafeInteger(record.repairedReceiptRevision) &&
+		record.repairedReceiptRevision >= 1 &&
+		typeof record.bindingDigest === "string" &&
+		/^[0-9a-f]{64}$/u.test(record.bindingDigest) &&
+		typeof record.authorizedAt === "string" &&
+		isExactIsoTimestamp(record.authorizedAt)
+	);
 }
 
 function isTaskTerminalResult(value: unknown): boolean {
