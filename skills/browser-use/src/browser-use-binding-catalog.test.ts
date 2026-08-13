@@ -8,6 +8,7 @@ import {
 } from "./browser-use-auth-bindings";
 import { createBindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
 import { createBindingCatalog } from "./browser-use-binding-catalog";
+import type { BrowserUseBindingSelectionGrant } from "./browser-use-binding-selection";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 
 const roots: string[] = [];
@@ -52,7 +53,130 @@ function receipt(
 	};
 }
 
+function selectionGrant(): BrowserUseBindingSelectionGrant {
+	return {
+		grant_id: "selection-grant-1",
+		resolution_key: {
+			binding_ref: "github",
+			service_id: "github",
+			auth_context: "interactive-login",
+			environment: "agent-chrome",
+			profile: "default",
+		},
+		binding: {
+			service_id: "github",
+			auth_context: "interactive-login",
+			allowed_origins: ["https://github.com"],
+			allowed_login_paths: [],
+			vault_id: "vault-1",
+			item_id: "item-6",
+			allowed_auth_methods: ["password", "otp"],
+			binding_revision: 1,
+		},
+		facts: {
+			run_id: "run-selection",
+			service_id: "github",
+			origin: "https://github.com",
+			vault_id: "vault-1",
+			candidate_set_digest: "0123456789abcdef".repeat(4),
+		},
+		issued_at_epoch_ms: 1_000,
+		expires_at_epoch_ms: 91_000,
+		verifier_key_id: "verifier-1",
+		signature: "signed-selection",
+	};
+}
+
 describe("private Binding Catalog", () => {
+	test("commits one first-binding selection and rejects a replay write", async () => {
+		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
+		roots.push(base);
+		const grant = selectionGrant();
+		const catalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root: join(base, "bindings"),
+			now: () => grant.expires_at_epoch_ms - 1,
+			selectionGrantVerifier: {
+				verifyStored: async (value) =>
+					typeof value === "object" &&
+					value !== null &&
+					"grant_id" in value &&
+					value.grant_id === grant.grant_id
+						? { ok: true, grant }
+						: { ok: false, code: "grant_signature_invalid" },
+				verifyAndReserve: async () => ({
+					ok: false,
+					code: "not_used_by_catalog",
+				}),
+			},
+		});
+
+		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });
+		expect(await catalog.commitSelectionGrant(grant)).toMatchObject({
+			ok: false,
+			code: "binding_revision_conflict",
+		});
+		expect(await catalog.resolve(grant.resolution_key)).toMatchObject({
+			ok: true,
+			status: "active",
+			binding: { item_id: "item-6", binding_revision: 1 },
+		});
+		expect(await catalog.list()).toMatchObject({
+			ok: true,
+			bindings: [{ binding_ref: "github", revision: 1, status: "active" }],
+		});
+	});
+
+	test("rejects expiry before publication but keeps an admitted stored grant resolvable", async () => {
+		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
+		roots.push(base);
+		const grant = selectionGrant();
+		let now = grant.expires_at_epoch_ms - 1;
+		const root = join(base, "bindings");
+		const verifier = {
+			verifyStored: async () => ({ ok: true as const, grant }),
+			verifyAndReserve: async () => ({
+				ok: false as const,
+				code: "not_used_by_catalog",
+			}),
+		};
+		const catalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root,
+			now: () => now,
+			selectionGrantVerifier: verifier,
+		});
+
+		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });
+		now = grant.expires_at_epoch_ms;
+		expect(await catalog.resolve(grant.resolution_key)).toMatchObject({
+			ok: true,
+			status: "active",
+			binding: { item_id: "item-6" },
+		});
+
+		const expiredRoot = join(base, "expired-bindings");
+		const expiredCatalog = createBindingCatalog({
+			fs: createDefaultPlatformFs(),
+			root: expiredRoot,
+			now: () => grant.expires_at_epoch_ms,
+			selectionGrantVerifier: verifier,
+		});
+		expect(await expiredCatalog.commitSelectionGrant(grant)).toEqual({
+			ok: false,
+			code: "binding_receipt_invalid",
+			message: "the proposed binding selection grant expired before catalog commit.",
+		});
+		expect(
+			await createDefaultPlatformFs().lstat(
+				join(expiredRoot, "receipts", `${grant.grant_id}.json`),
+			),
+		).toBeUndefined();
+		expect(
+			await createDefaultPlatformFs().lstat(join(expiredRoot, "active.json")),
+		).toBeUndefined();
+	});
+
 	test("resolves an approved revision and stops after signed revocation", async () => {
 		const base = await mkdtemp(join(tmpdir(), "browser-use-binding-catalog-"));
 		roots.push(base);

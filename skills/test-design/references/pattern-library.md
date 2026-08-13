@@ -4,15 +4,17 @@ Use the Core Pattern Set for every repository-test artifact change. Add only pro
 
 ## Core Pattern Set
 
-### Name the external behaviour
+### Name the production consumer and workflow
 
 - State the promise visible outside the implementation.
-- Name the consumer, input, observable result, and failure meaning.
+- Name the production consumer, starting condition, public actions, observable outcome, and failure meaning.
+- Keep human, programmatic-agent, developer, integrator, and hosted-system contracts distinct when their public surfaces differ.
 - Avoid method names, private branches, and internal call counts unless they are the contract.
 
 ### Choose the seam and proof layer
 
 - Use the lowest layer that honestly reaches the claimed boundary.
+- Prefer the smallest production-like composition that crosses the collaborating units responsible for the workflow. Keep lower layers for pure edge cases and diagnosis.
 - Treat unit, integration, public process, browser or host, and hosted evidence as different claims.
 - Give one confidence claim one primary proof layer. Use lower layers as supporting evidence.
 
@@ -47,6 +49,11 @@ Use the Core Pattern Set for every repository-test artifact change. Add only pro
 - Durable state, concurrency, ownership, idempotency, crash injection, or recovery: `skills/test-design/references/state-concurrency-recovery.md`.
 - Packaging, installation, activation, host UI, live-host, or hosted delivery: `skills/test-design/references/installation-host-hosted.md`.
 - Bun, Node, CI, operating systems, shells, paths, permissions, or platform compatibility: `skills/test-design/references/runtime-ci-platform.md`.
+- Runner mode, isolation, concurrency, cancellation, cleanup, transforms, selectors, reporters, or test-double lifecycle: read `skills/test-design/references/runner-execution.md` only when runner execution semantics can change the confidence claim.
+
+## Provenance
+
+Read `skills/test-design/references/influences.md` only when reviewing rule provenance or refreshing research-backed guidance.
 
 ## Vocabulary
 

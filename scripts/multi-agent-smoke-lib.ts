@@ -50,6 +50,8 @@ export type SmokeTestId =
 	| "smoke-runner-executes"
 	| "heal-skill-reachable"
 	| "test-design-mutation-route"
+	| "test-design-runner-sensitive-route"
+	| "test-design-simple-unit-route"
 	| "test-design-run-only-negative"
 	| "test-design-pairwise-frozen";
 
