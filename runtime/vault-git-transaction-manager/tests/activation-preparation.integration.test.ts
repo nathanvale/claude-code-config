@@ -47,6 +47,47 @@ afterEach(tempDirectories.cleanup);
 
 describe("isolated activation preparation", () => {
 	test(
+		"production Doctor requires a stable host identity instead of trusting the OS hostname",
+		async () => {
+			const fixture = await preparationFixture({ seedLedger: false });
+			const env = configuredProductionActivationEnvironment(fixture);
+			delete env.VAULT_GIT_HOST;
+			const result = await runCliProcess({
+				label: "production stable host identity configuration",
+				argv: [
+					"bun",
+					"run",
+					join(import.meta.dir, "../src/cli.ts"),
+					"doctor",
+					"--json",
+					"--run-id",
+					"stable-host-identity-missing",
+				],
+				cwd: fixture.repositoryPath,
+				env,
+				timeoutMs: 30_000,
+			});
+
+			expect(result.exitCode).toBe(0);
+			expect(parseCliProcessJson(result)).toMatchObject({
+				status: "ok",
+				data: {
+					command: "doctor",
+					finding: "activation_configuration_missing",
+					write_permission: "denied",
+					activation_restriction: {
+						cause: { id: "configuration_missing" },
+						missing_configuration: ["host_identity"],
+						next_action: { id: "configure_activation_identity" },
+					},
+				},
+				continuation: { next_action_id: "configure_activation_identity" },
+			});
+		},
+		120_000,
+	);
+
+	test(
 		"production Doctor explains missing activation identity configuration without a self-loop",
 		async () => {
 			const fixture = await preparationFixture({ seedLedger: false });

@@ -91,6 +91,10 @@ Activation record owner: `runtime/vault-git-transaction-manager/src/store.ts`.
 
 ### Per-host Git identity admission
 
+- Configure one stable host handle through the operator rollout:
+  - `VAULT_GIT_HOST`
+- Keep that handle stable across hostname, network, and sharing-name changes.
+- Never derive activation trust from the OS hostname.
 - Configure these host-local path variables through the operator rollout:
   - `VAULT_GIT_SSH_IDENTITY_FILE_PATH`
   - `VAULT_GIT_SSH_PUBLIC_KEY_PATH`

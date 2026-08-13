@@ -1,14 +1,18 @@
 import {
+	cpSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { testDesignSmokeTests } from "../skills/test-design/evals/smoke-definitions.ts";
 
 export type HarnessName = "claude" | "codex";
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -44,17 +48,51 @@ export type SmokeTestId =
 	| "workflow-rule-claude-only"
 	| "contract-auditor-router-skill"
 	| "smoke-runner-executes"
-	| "heal-skill-reachable";
+	| "heal-skill-reachable"
+	| "test-design-mutation-route"
+	| "test-design-runner-sensitive-route"
+	| "test-design-simple-unit-route"
+	| "test-design-run-only-negative"
+	| "test-design-pairwise-frozen";
 
-type JsonPrimitive = boolean | number | string | null;
-type JsonSchema = {
+/** JSON scalar accepted by smoke schemas and assertion results. @internal */
+export type JsonPrimitive = boolean | number | string | null;
+
+/** Minimal object-schema contract consumed by both runtime harnesses. @internal */
+export type JsonSchema = {
 	type: "object";
 	properties: Record<string, unknown>;
 	required: string[];
 	additionalProperties: boolean;
 };
 
-type ExpectedResult = Record<string, JsonPrimitive>;
+/** Exact structured output expected from one smoke runtime. @internal */
+export type ExpectedResult = Record<string, JsonPrimitive>;
+
+/** Optional runtime controls and qualification proofs for a smoke definition. @internal */
+export type SmokeRuntimeSpec = {
+	projectSkills?: { id: string; sourceRelativePath: string }[];
+	challengeField?: string;
+	missingSkillPrompt?: string;
+	claudeModel?: string;
+	claudeEffort?: "low" | "medium" | "high";
+	claudeTools?: string;
+	claudePermissionMode?: "acceptEdits" | "auto" | "manual";
+	codexSandbox?: "read-only" | "workspace-write";
+	codexModel?: string;
+	mutationProof?: {
+		fixtureRelativePath: string;
+		initialFixture: string;
+		expectedFixture: string;
+		requiredBriefFields: string[];
+	};
+	traceProof?: {
+		skillId: string;
+		profileRelativePath: string;
+		profileChallengeField: string;
+		forbiddenProfileRelativePaths: string[];
+	};
+};
 
 export type SmokeTestDefinition = {
 	id: SmokeTestId;
@@ -62,6 +100,7 @@ export type SmokeTestDefinition = {
 	schema: JsonSchema;
 	prompt: string;
 	expectations: Record<HarnessName, ExpectedResult>;
+	runtime?: SmokeRuntimeSpec;
 };
 
 export type AssertionResult = {
@@ -92,6 +131,7 @@ export type RunResult = {
 
 type HarnessAdapter = {
 	buildCommand: (input: {
+		test: SmokeTestDefinition;
 		prompt: string;
 		schemaPath: string;
 		outputPath: string;
@@ -100,6 +140,7 @@ type HarnessAdapter = {
 	parseOutput: (
 		stdout: string,
 		outputPath: string,
+		test: SmokeTestDefinition,
 	) => Promise<Record<string, JsonPrimitive>>;
 };
 
@@ -179,7 +220,163 @@ function prepareCodexSmokeHome(tempRoot: string, sourceCwd: string): string {
 	return codexHome;
 }
 
+function copySkillProjection(
+	root: string,
+	sourceCwd: string,
+	projectionRoot: ".agents/skills" | ".claude/skills",
+	skill: { id: string; sourceRelativePath: string },
+): void {
+	const source = join(sourceCwd, skill.sourceRelativePath);
+	if (!existsSync(source) || !statSync(source).isDirectory()) {
+		throw new Error(`smoke skill source missing: ${skill.sourceRelativePath}`);
+	}
+	const destination = join(root, projectionRoot, skill.id);
+	mkdirSync(join(root, projectionRoot), { recursive: true });
+	cpSync(source, destination, { recursive: true });
+}
+
+class MissingSmokeProfileError extends Error {
+	constructor(projectedPath: string, skillId: string, relativePath: string) {
+		super(
+			`Missing projected smoke profile: ${projectedPath}. Restore ${relativePath} under skills/${skillId}, run setup sync, then retry qualification.`,
+		);
+		this.name = "MissingSmokeProfileError";
+	}
+}
+
+function prepareRuntimeProject(
+	tempRoot: string,
+	sourceCwd: string,
+	test: SmokeTestDefinition,
+	challenge: string,
+	omitProjectSkills = false,
+): string {
+	const project = join(tempRoot, "project");
+	mkdirSync(project, { recursive: true });
+	for (const name of ["AGENTS.md", "CLAUDE.md"] as const) {
+		const source = join(sourceCwd, name);
+		if (existsSync(source)) copyFileSync(source, join(project, name));
+	}
+	for (const skill of omitProjectSkills
+		? []
+		: (test.runtime?.projectSkills ?? [])) {
+		copySkillProjection(project, sourceCwd, ".agents/skills", skill);
+		copySkillProjection(project, sourceCwd, ".claude/skills", skill);
+		const skillPath = join(project, ".claude/skills", skill.id, "SKILL.md");
+		const source = readFileSync(skillPath, "utf8");
+		writeFileSync(
+			skillPath,
+			`${source}\nRuntime qualification challenge: \`${challenge}\`. Return it only when this skill was loaded for an authorized qualification canary.\n`,
+		);
+		copyFileSync(skillPath, join(project, ".agents/skills", skill.id, "SKILL.md"));
+	}
+	const traceProof = test.runtime?.traceProof;
+	if (traceProof && !omitProjectSkills) {
+		const profilePaths = [
+			traceProof.profileRelativePath,
+			...traceProof.forbiddenProfileRelativePaths,
+		];
+		for (const relativePath of profilePaths) {
+			const profileChallenge = createProfileQualificationChallenge(
+				challenge,
+				relativePath,
+			);
+			for (const projectionRoot of [".claude/skills", ".agents/skills"] as const) {
+				const profilePath = join(
+					project,
+					projectionRoot,
+					traceProof.skillId,
+					relativePath,
+				);
+				if (!existsSync(profilePath)) {
+					throw new MissingSmokeProfileError(
+						profilePath,
+						traceProof.skillId,
+						relativePath,
+					);
+				}
+				const source = readFileSync(profilePath, "utf8");
+				writeFileSync(
+					profilePath,
+					`${source}\nRuntime profile qualification challenge: \`${profileChallenge}\`. Return it only after reading this profile for an authorized qualification canary.\n`,
+				);
+			}
+		}
+	}
+	const proof = test.runtime?.mutationProof;
+	if (proof) {
+		const fixturePath = join(project, proof.fixtureRelativePath);
+		mkdirSync(dirname(fixturePath), { recursive: true });
+		writeFileSync(fixturePath, proof.initialFixture);
+	}
+	return project;
+}
+
+function expectedForRun(
+	test: SmokeTestDefinition,
+	harness: HarnessName,
+	challenge: string,
+): ExpectedResult {
+	const expected = { ...test.expectations[harness] };
+	if (test.runtime?.challengeField) {
+		expected[test.runtime.challengeField] = challenge;
+	}
+	const traceProof = test.runtime?.traceProof;
+	if (traceProof) {
+		expected[traceProof.profileChallengeField] =
+			createProfileQualificationChallenge(
+				challenge,
+				traceProof.profileRelativePath,
+			);
+	}
+	return expected;
+}
+
+/**
+ * Bind one runtime challenge to the profile path whose contents must be observed.
+ *
+ * @param challenge - Random challenge injected into the projected skill.
+ * @param relativePath - Profile path relative to the projected skill root.
+ * @returns Stable path-bound challenge for trace and structured-output checks.
+ * @internal
+ */
+export function createProfileQualificationChallenge(
+	challenge: string,
+	relativePath: string,
+): string {
+	return createHash("sha256")
+		.update(`profile\0${relativePath}\0${challenge}`)
+		.digest("hex");
+}
+
+function prepareSmokeCommandCwd(input: {
+	tempRoot: string;
+	sourceCwd: string;
+	test: SmokeTestDefinition;
+	harness: HarnessName;
+	challenge: string;
+	omitProjectSkills?: boolean;
+}): string {
+	if (
+		input.test.runtime?.projectSkills ||
+		input.test.runtime?.mutationProof ||
+		input.test.runtime?.traceProof
+	) {
+		return prepareRuntimeProject(
+			input.tempRoot,
+			input.sourceCwd,
+			input.test,
+			input.challenge,
+			input.omitProjectSkills,
+		);
+	}
+	return input.harness === "codex"
+		? prepareCodexSmokeCwd(input.tempRoot, input.sourceCwd)
+		: input.sourceCwd;
+}
+
 export const SMOKE_TESTS: readonly SmokeTestDefinition[] = [
+	...testDesignSmokeTests,
 	{
 		id: "boundary",
 		title: "Boundary alignment",
@@ -1073,25 +1270,44 @@ Return a JSON object with these meanings:
 
 const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 	claude: {
-		buildCommand: ({ prompt, schemaPath }) => [
+		buildCommand: ({ test, prompt, schemaPath }) => [
 			"claude",
 			"-p",
 			"--output-format",
-			"json",
+			test.runtime?.traceProof ? "stream-json" : "json",
+			...(test.runtime?.traceProof ? ["--verbose"] : []),
 			"--json-schema",
 			readFileSync(schemaPath, "utf8"),
 			"--no-session-persistence",
+			...(test.runtime?.claudeModel
+				? ["--model", test.runtime.claudeModel]
+				: []),
+			...(test.runtime?.projectSkills
+				? ["--setting-sources", "project"]
+				: []),
+			...(test.runtime?.claudeEffort
+				? ["--effort", test.runtime.claudeEffort]
+				: []),
+			...(test.runtime?.claudePermissionMode
+				? ["--permission-mode", test.runtime.claudePermissionMode]
+				: []),
 			"--tools",
-			"",
+			test.runtime?.claudeTools ?? "",
 			"--",
 			prompt,
 		],
-		parseOutput: async (stdout) => {
-			const parsed = JSON.parse(stdout) as {
+		parseOutput: async (stdout, _outputPath, test) => {
+			const parsed = test.runtime?.traceProof
+				? parseJsonLines(stdout).findLast(
+						(event) => event.type === "result",
+					)
+				: (JSON.parse(stdout) as Record<string, unknown>);
+			if (!parsed) throw new Error("Claude result event missing");
+			const result = parsed as {
 				result?: unknown;
 				structured_output?: unknown;
 			};
-			const candidate = parsed.structured_output ?? parsed.result ?? parsed;
+			const candidate = result.structured_output ?? result.result ?? result;
 			if (typeof candidate === "string") {
 				return JSON.parse(candidate) as Record<string, JsonPrimitive>;
 			}
@@ -1099,17 +1315,19 @@ const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 		},
 	},
 	codex: {
-		buildCommand: ({ prompt, schemaPath, outputPath, cwd }) => [
+		buildCommand: ({ test, prompt, schemaPath, outputPath, cwd }) => [
 			"codex",
 			"exec",
+			...(test.runtime?.codexModel ? ["--model", test.runtime.codexModel] : []),
 			"--ignore-user-config",
 			"--ignore-rules",
 			"--skip-git-repo-check",
 			"--sandbox",
-			"read-only",
+			test.runtime?.codexSandbox ?? "read-only",
 			"--ephemeral",
 			"--color",
 			"never",
+			...(test.runtime?.traceProof ? ["--json"] : []),
 			"--output-schema",
 			schemaPath,
 			"-o",
@@ -1118,12 +1336,175 @@ const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 			cwd,
 			prompt,
 		],
-		parseOutput: async (_stdout, outputPath) => {
+		parseOutput: async (_stdout, outputPath, _test) => {
 			const text = readFileSync(outputPath, "utf8");
 			return JSON.parse(text) as Record<string, JsonPrimitive>;
 		},
 	},
 };
+
+function parseJsonLines(stdout: string): Record<string, unknown>[] {
+	return stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.flatMap((line) => {
+			try {
+				const value = JSON.parse(line) as unknown;
+				return typeof value === "object" && value !== null
+					? [value as Record<string, unknown>]
+					: [];
+			} catch {
+				return [];
+			}
+		});
+}
+
+type ClaudeToolUse = {
+	id: string;
+	name: string;
+	input: Record<string, unknown>;
+};
+
+function claudeTrace(stdout: string): {
+	toolUses: ClaudeToolUse[];
+	successfulToolUseIds: Set<string>;
+} {
+	const toolUses: ClaudeToolUse[] = [];
+	const successfulToolUseIds = new Set<string>();
+	for (const event of parseJsonLines(stdout)) {
+		const message = event.message as Record<string, unknown> | undefined;
+		const content = message?.content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content) {
+			if (typeof block !== "object" || block === null) continue;
+			const candidate = block as Record<string, unknown>;
+			if (
+				event.type === "assistant" &&
+				candidate.type === "tool_use" &&
+				typeof candidate.id === "string" &&
+				typeof candidate.name === "string" &&
+				typeof candidate.input === "object" &&
+				candidate.input !== null
+			) {
+				toolUses.push({
+					id: candidate.id,
+					name: candidate.name,
+					input: candidate.input as Record<string, unknown>,
+				});
+			}
+			if (
+				event.type === "user" &&
+				candidate.type === "tool_result" &&
+				typeof candidate.tool_use_id === "string" &&
+				candidate.is_error !== true
+			) {
+				successfulToolUseIds.add(candidate.tool_use_id);
+			}
+		}
+	}
+	return { toolUses, successfulToolUseIds };
+}
+
+function successfulCodexCommandOutput(stdout: string): string[] {
+	return parseJsonLines(stdout).flatMap((event) => {
+		if (event.type !== "item.completed") return [];
+		const item = event.item as Record<string, unknown> | undefined;
+		if (
+			item?.type !== "command_execution" ||
+			item.status !== "completed" ||
+			item.exit_code !== 0 ||
+			typeof item.aggregated_output !== "string"
+		) {
+			return [];
+		}
+		return [item.aggregated_output];
+	});
+}
+
+/**
+ * Convert harness trace events into mechanical skill and profile-read assertions.
+ *
+ * @param input - Harness output plus the path-bound qualification challenge.
+ * @returns Trace assertions that distinguish native loading from self-report.
+ * @internal
+ */
+export function evaluateRuntimeTrace(input: {
+	harness: HarnessName;
+	stdout: string;
+	challenge: string;
+	traceProof: NonNullable<SmokeRuntimeSpec["traceProof"]>;
+}): AssertionResult[] {
+	const assertions: AssertionResult[] = [];
+	const selectedProfileChallenge = createProfileQualificationChallenge(
+		input.challenge,
+		input.traceProof.profileRelativePath,
+	);
+	const forbiddenProfileChallenges =
+		input.traceProof.forbiddenProfileRelativePaths.map((relativePath) =>
+			createProfileQualificationChallenge(input.challenge, relativePath),
+		);
+	let skillInvoked = false;
+	let selectedProfileRead = false;
+	let irrelevantProfileRead = false;
+	if (input.harness === "claude") {
+		const trace = claudeTrace(input.stdout);
+		const successfulUses = trace.toolUses.filter((tool) =>
+			trace.successfulToolUseIds.has(tool.id),
+		);
+		skillInvoked = successfulUses.some(
+			(tool) =>
+				tool.name === "Skill" && tool.input.skill === input.traceProof.skillId,
+		);
+		const selectedSuffix = `/.claude/skills/${input.traceProof.skillId}/${input.traceProof.profileRelativePath}`;
+		selectedProfileRead = successfulUses.some(
+			(tool) =>
+				tool.name === "Read" &&
+				typeof tool.input.file_path === "string" &&
+				tool.input.file_path.endsWith(selectedSuffix),
+		);
+		irrelevantProfileRead = successfulUses.some((tool) => {
+			const filePath = tool.input.file_path;
+			return (
+				tool.name === "Read" &&
+				typeof filePath === "string" &&
+				input.traceProof.forbiddenProfileRelativePaths.some((relativePath) =>
+					filePath.endsWith(
+						`/.claude/skills/${input.traceProof.skillId}/${relativePath}`,
+					),
+				)
+			);
+		});
+	} else {
+		const outputs = successfulCodexCommandOutput(input.stdout);
+		skillInvoked = outputs.some((output) => output.includes(input.challenge));
+		selectedProfileRead = outputs.some((output) =>
+			output.includes(selectedProfileChallenge),
+		);
+		irrelevantProfileRead = forbiddenProfileChallenges.some((challenge) =>
+			outputs.some((output) => output.includes(challenge)),
+		);
+	}
+	assertions.push({
+		key: "trace:skill-invoked",
+		expected: true,
+		actual: skillInvoked,
+		ok: skillInvoked,
+	});
+	assertions.push({
+		key: "trace:selected-profile-read",
+		expected: true,
+		actual: selectedProfileRead,
+		ok: selectedProfileRead,
+	});
+	assertions.push({
+		key: "trace:irrelevant-profile-not-read",
+		expected: false,
+		actual: irrelevantProfileRead,
+		ok: !irrelevantProfileRead,
+	});
+	return assertions;
+}
 
 /** Resolve a smoke test definition by id, or throw when the id is unknown. */
 export function getSmokeTest(testId: SmokeTestId): SmokeTestDefinition {
@@ -1139,8 +1520,9 @@ export function evaluateOutput(
 	test: SmokeTestDefinition,
 	harness: HarnessName,
 	output: Record<string, JsonPrimitive>,
+	expectedOverride?: ExpectedResult,
 ): AssertionResult[] {
-	const expected = test.expectations[harness];
+	const expected = expectedOverride ?? test.expectations[harness];
 	return Object.entries(expected).map(([key, value]) => ({
 		key,
 		expected: value,
@@ -1168,15 +1550,20 @@ export function buildSmokeCommand(input: {
 	);
 	const cleanup = () => rmSync(tempRoot, { recursive: true, force: true });
 	try {
+		const challenge = randomUUID();
+		const commandCwd = prepareSmokeCommandCwd({
+			tempRoot,
+			sourceCwd: input.cwd,
+			test,
+			harness: input.harness,
+			challenge,
+		});
 		const schemaPath = join(tempRoot, `${test.id}.schema.json`);
 		const outputPath = join(tempRoot, `${test.id}.output.json`);
 		writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
 
-		const commandCwd =
-			input.harness === "codex"
-				? prepareCodexSmokeCwd(tempRoot, input.cwd)
-				: input.cwd;
 		const command = HARNESS_ADAPTERS[input.harness].buildCommand({
+			test,
 			prompt: test.prompt,
 			schemaPath,
 			outputPath,
@@ -1247,6 +1634,8 @@ export async function runSmokeTest(input: {
 	dryRun?: boolean;
 	warnAfterMs?: number;
 	timeoutMs?: number;
+	/** Qualification-only negative control. Never exposed by the smoke CLI. */
+	omitProjectSkills?: boolean;
 }): Promise<RunResult> {
 	const test = getSmokeTest(input.testId);
 	const timeoutMs = input.timeoutMs ?? getDefaultTimeoutMs(input.harness);
@@ -1260,14 +1649,23 @@ export async function runSmokeTest(input: {
 	const schemaPath = join(tempRoot, `${test.id}.schema.json`);
 	const outputPath = join(tempRoot, `${test.id}.output.json`);
 	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
+	const challenge = randomUUID();
 
 	const adapter = HARNESS_ADAPTERS[input.harness];
-	const commandCwd =
-		input.harness === "codex"
-			? prepareCodexSmokeCwd(tempRoot, input.cwd)
-			: input.cwd;
+	const commandCwd = prepareSmokeCommandCwd({
+		tempRoot,
+		sourceCwd: input.cwd,
+		test,
+		harness: input.harness,
+		challenge,
+		omitProjectSkills: input.omitProjectSkills,
+	});
 	const command = adapter.buildCommand({
-		prompt: test.prompt,
+		test,
+		prompt:
+			input.omitProjectSkills && test.runtime?.missingSkillPrompt
+				? test.runtime.missingSkillPrompt
+				: test.prompt,
 		schemaPath,
 		outputPath,
 		cwd: commandCwd,
@@ -1278,7 +1676,7 @@ export async function runSmokeTest(input: {
 			: process.env;
 
 	if (input.dryRun) {
-		return {
+		const result: RunResult = {
 			harness: input.harness,
 			test: test.id,
 			status: "dry_run",
@@ -1293,6 +1691,8 @@ export async function runSmokeTest(input: {
 			warnAfterMs,
 			timeoutMs,
 		};
+		rmSync(tempRoot, { recursive: true, force: true });
+		return result;
 	}
 
 	const startedAt = performance.now();
@@ -1304,8 +1704,8 @@ export async function runSmokeTest(input: {
 		stderr: "pipe",
 	});
 
-	const stdoutPromise = proc.stdout.text();
-	const stderrPromise = proc.stderr.text();
+	const stdoutPromise = new Response(proc.stdout).text();
+	const stderrPromise = new Response(proc.stderr).text();
 	let didTimeout = false;
 	const timeoutId = setTimeout(() => {
 		didTimeout = true;
@@ -1368,8 +1768,41 @@ export async function runSmokeTest(input: {
 			};
 		}
 
-		const output = await adapter.parseOutput(stdout, outputPath);
-		const assertions = evaluateOutput(test, input.harness, output);
+		const output = await adapter.parseOutput(stdout, outputPath, test);
+		const expected = expectedForRun(test, input.harness, challenge);
+		const assertions = evaluateOutput(test, input.harness, output, expected);
+		if (test.runtime?.traceProof) {
+			assertions.push(
+				...evaluateRuntimeTrace({
+					harness: input.harness,
+					stdout,
+					challenge,
+					traceProof: test.runtime.traceProof,
+				}),
+			);
+		}
+		const proof = test.runtime?.mutationProof;
+		if (proof) {
+			for (const field of proof.requiredBriefFields) {
+				const actual = output[field];
+				assertions.push({
+					key: `brief:${field}`,
+					expected: "non-empty",
+					actual,
+					ok: typeof actual === "string" && actual.trim().length > 0,
+				});
+			}
+			const fixturePath = join(commandCwd, proof.fixtureRelativePath);
+			const fixture = existsSync(fixturePath)
+				? readFileSync(fixturePath, "utf8")
+				: null;
+			assertions.push({
+				key: "mutation:fixture-unchanged",
+				expected: proof.expectedFixture,
+				actual: fixture,
+				ok: fixture === proof.expectedFixture,
+			});
+		}
 		return {
 			harness: input.harness,
 			test: test.id,
