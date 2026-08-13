@@ -5,7 +5,7 @@ This context defines durable language for Vault Git activation and transaction r
 ## Language
 
 **Activation Configuration**:
-Non-secret host-local paths required to resolve the dedicated repository-scoped SSH identity and reviewed known-hosts evidence before live activation validation.
+One stable non-secret host handle plus host-local paths required to resolve the dedicated repository-scoped SSH identity and reviewed known-hosts evidence before live activation validation. The OS hostname is not durable identity.
 _Avoid_: activation admission, credentials, SSH secrets
 
 **Activation Restriction**:

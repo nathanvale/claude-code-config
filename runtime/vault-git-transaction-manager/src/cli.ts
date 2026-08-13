@@ -1109,34 +1109,45 @@ function resolveDefaultActivationIdentity():
 	| {
 			readonly status: "missing";
 			readonly missingConfiguration: readonly VaultGitActivationConfigurationField[];
-	  } {
+		  } {
+	const hostId = process.env.VAULT_GIT_HOST;
+	const sshIdentityFilePath = process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH;
+	const sshIdentityPublicKeyPath = process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
+	const sshKnownHostsPath = process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
 	const configured: Record<
 		VaultGitActivationConfigurationField,
 		string | undefined
 	> = {
-		ssh_identity_file: process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH,
-		ssh_public_key: process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH,
-		ssh_known_hosts: process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH,
+		host_identity: hostId,
+		ssh_identity_file: sshIdentityFilePath,
+		ssh_public_key: sshIdentityPublicKeyPath,
+		ssh_known_hosts: sshKnownHostsPath,
 	};
 	const missingConfiguration = VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS.filter(
 		(field) => !configured[field],
 	);
-	if (missingConfiguration.length > 0) {
+	if (
+		missingConfiguration.length > 0 ||
+		!hostId ||
+		!sshIdentityFilePath ||
+		!sshIdentityPublicKeyPath ||
+		!sshKnownHostsPath
+	) {
 		return { status: "missing", missingConfiguration };
 	}
 	return {
 		status: "configured",
 		value: {
-			hostId: process.env.VAULT_GIT_HOST ?? hostname(),
+			hostId,
 			runtimeBinaryPath: process.execPath,
 			runtimeVersion: Bun.version,
 			executablePath: CLI_PATH,
 			executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
 			gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
 			sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
-			sshIdentityFilePath: configured.ssh_identity_file!,
-			sshIdentityPublicKeyPath: configured.ssh_public_key!,
-			sshKnownHostsPath: configured.ssh_known_hosts!,
+			sshIdentityFilePath,
+			sshIdentityPublicKeyPath,
+			sshKnownHostsPath,
 		},
 	};
 }
