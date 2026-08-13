@@ -84,6 +84,16 @@ describe("background worker negative controls", () => {
 			await writeFile(path, control.mutate(source));
 
 			const result = runOwningTest(root, control.testFile);
+			// A spawn error or timeout also yields a non-zero-ish status, which
+			// would let a control "pass" without ever observing a real failure.
+			expect(
+				result.error,
+				`${control.name} mutated run did not execute`,
+			).toBeUndefined();
+			expect(
+				result.status,
+				`${control.name} mutated run did not exit on its own`,
+			).not.toBeNull();
 			expect(
 				result.status,
 				`${control.name} guard mutation unexpectedly survived`,

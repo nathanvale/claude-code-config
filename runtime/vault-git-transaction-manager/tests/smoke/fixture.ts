@@ -343,7 +343,14 @@ async function mkSmokeClone(
 			}
 			await waitForFile(`${gate}.ready`, 30_000);
 			const workerPid = await readWorkerPid(stateRoot, 10_000);
-			process.kill(workerPid, "SIGKILL");
+			try {
+				process.kill(workerPid, "SIGKILL");
+			} catch (error) {
+				// The worker can exit between reading its pid and signalling it.
+				// That is the state this helper wanted, not a failure.
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				return;
+			}
 			const deadline = Date.now() + 10_000;
 			while (Date.now() < deadline) {
 				try {

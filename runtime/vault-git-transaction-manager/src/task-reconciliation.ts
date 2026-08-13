@@ -63,12 +63,19 @@ export async function reconcileStaleVaultGitTaskFromDoctor(
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const loaded = await store.load(receiptId);
 		if (loaded.status !== "loaded") return;
+		// An unparsable timestamp yields NaN, and every NaN comparison is false.
+		// Without the finite check the staleness guard would fail open and
+		// terminalize a live worker as lost.
+		const observedAt = Date.parse(recordedAt);
+		const heartbeatAt =
+			loaded.state.heartbeatAt === null ? Number.NaN : Date.parse(loaded.state.heartbeatAt);
 		if (
 			loaded.state.transactionId !== evidence.transactionId ||
 			loaded.state.state !== "in_progress" ||
 			workerIsAlive(loaded.state.workerPid) ||
-			loaded.state.heartbeatAt === null ||
-			Date.parse(recordedAt) - Date.parse(loaded.state.heartbeatAt) <= 20_000
+			!Number.isFinite(observedAt) ||
+			!Number.isFinite(heartbeatAt) ||
+			observedAt - heartbeatAt <= 20_000
 		) return;
 		const unknown = evidence.state === "unknown" || evidence.phase === "push_pending";
 		const transitioned = await store.transition(loaded.state.taskId, loaded.state.revision, {

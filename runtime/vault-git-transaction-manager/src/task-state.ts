@@ -93,6 +93,8 @@ export type VaultGitTaskWorkerAcknowledgementResult =
  * const state = createVaultGitTaskState({
  *   taskId: "task_11111111111111111111111111111111",
  *   receiptId: "receipt_22222222222222222222222222222222",
+ *   transactionId: "txn_33333333333333333333333333333333",
+ *   leaseGeneration: "a".repeat(40),
  *   recordedAt: "2026-08-12T11:30:00.000Z",
  * })
  * ```

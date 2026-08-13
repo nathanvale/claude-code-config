@@ -2089,8 +2089,11 @@ async function executeInvocation(
 					transactionId: invocation.transactionId,
 					issueTakeoverToken: false,
 				});
-				await reconcileTaskClosure(composition, value);
-				await reconcileStaleTaskAfterDoctor(composition, value);
+				// Both reconciliations are advisory private bookkeeping: the worker
+				// and the next doctor run reach the same terminal state. Losing a
+				// CAS race must never discard the diagnosis the operator asked for.
+				await reconcileTaskClosure(composition, value).catch(() => undefined);
+				await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
 				return {
 				kind: "doctor",
 					value,
@@ -2131,7 +2134,7 @@ async function executeInvocation(
 					}
 					: { capability: privateBytes }),
 			});
-			await reconcileTaskClosure(composition, value);
+			await reconcileTaskClosure(composition, value).catch(() => undefined);
 			return {
 				kind: "repair",
 				value,
