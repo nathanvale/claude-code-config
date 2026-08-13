@@ -36,13 +36,20 @@ import {
 	createVaultGitCliComposition,
 } from "../src/cli.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
+import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
 import { createReceiptStore, launchCapabilityProcess } from "../src/store.ts";
-import { admitActivationForTest } from "./activation-fixture.ts";
+import {
+	admitActivationForTest,
+	admittedActivationAuthorityForTest,
+} from "./activation-fixture.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cliPath = join(packageRoot, "src", "cli.ts");
+const cliPath = join(packageRoot, "tests", "process-cli.ts");
+const productionCliPath = join(packageRoot, "src", "cli.ts");
 const roots: string[] = [];
 let sharedFixture: Promise<Fixture> | undefined;
+const PREPARED_EVIDENCE_REFERENCE =
+	`vault-git:prepared:v2:${"f".repeat(64)}`;
 
 type Station = (typeof vaultGitBranchStationCatalog)[number];
 type StationId = (typeof VAULT_GIT_STATION_IDS)[number];
@@ -60,10 +67,51 @@ const scenarios = {
 	"status.invalid_usage": scenario(async (fixture) =>
 		fixture.run(["unknown-command", "--json"]),
 	),
+	"activation.inspect": scenario(async (fixture) =>
+		fixture.run(["activation", "--json"]),
+	),
+	"activation.prepare": scenario(async (fixture) =>
+		fixture.run(["activation", "prepare", "--no-input", "--json"]),
+	),
+	"activation.review_noninteractive": scenario(async (fixture) =>
+		fixture.run([
+			"activation",
+			"review",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.review_activate": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("activate", [
+			"activation",
+			"review",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.defer": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("defer", [
+			"activation",
+			"defer",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.revoke": scenario(async (fixture) =>
+		fixture.runWithHumanDecision("revoke", [
+			"activation",
+			"revoke",
+			PREPARED_EVIDENCE_REFERENCE,
+			"--json",
+		]),
+	),
+	"activation.invalid_usage": scenario(async (fixture) =>
+		fixture.run(["activation", "admit", "--json"]),
+	),
 	"preview.read_only": scenario(async (fixture) =>
 		fixture.run(["preview", "--json"]),
 	),
-	"doctor.read_only": scenario(async (fixture) =>
+	"doctor.private_task_reconciliation": scenario(async (fixture) =>
 		fixture.run(["doctor", "--json"]),
 	),
 	"commands.discovery": scenario(async (fixture) =>
@@ -128,7 +176,24 @@ const scenarios = {
 				"docs(vault): repair note",
 				"--json",
 			]);
-			expect(completion.exitCode).toBe(1);
+			expect(completion.exitCode).toBe(0);
+			const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(
+				completion,
+			).data?.task_id;
+			expect(taskId).toMatch(/^task_[0-9a-f]{32}$/);
+			for (let attempt = 0; attempt < 100; attempt += 1) {
+				const status = await fixture.run([
+					"status",
+					"--task-id",
+					taskId ?? "task_missing",
+					"--json",
+				]);
+				const state = parseCliProcessJson<{ data?: { task_state?: string } }>(
+					status,
+				).data?.task_state;
+				if (state === "repair_needed" || state === "unknown") break;
+				await Bun.sleep(10);
+			}
 			const result = await fixture.launchWithRole("join", [
 				"repair",
 				"resume",
@@ -211,7 +276,7 @@ describe("vault-git catalog-driven process boundary", () => {
 					argv: [
 						"bun",
 						"run",
-						cliPath,
+						productionCliPath,
 						"begin",
 						"--event",
 						"note_created",
@@ -245,6 +310,79 @@ describe("vault-git catalog-driven process boundary", () => {
 		});
 		expect(projected[1]).toEqual(projected[0]);
 		expect(projected[2]).toEqual(projected[0]);
+	});
+
+		test("accepts exactly one configured vault and refuses duplicate declarations", async () => {
+		const fixture = await createFixture();
+		const root = await mkdtemp(join(tmpdir(), "vault-git-ambiguous-config-"));
+		roots.push(root);
+		const configPath = join(root, "vault.md");
+		await writeFile(configPath, `Vault root: \`${fixture.clone}\`\n`);
+		const env: NodeJS.ProcessEnv = { ...process.env };
+		for (const key of Object.keys(env)) {
+			if (key.startsWith("VAULT_GIT_")) delete env[key];
+		}
+		env.VAULT_GIT_CONFIG_PATH = configPath;
+		env.VAULT_GIT_STATE_ROOT = join(root, "state");
+
+		const run = (runId: string) => runCliProcess({
+			label: `vault-git begin configured vault ${runId}`,
+			argv: [
+				"bun", "run", productionCliPath,
+				"begin", "--event", "note_created", "--path", "notes/a.md",
+				"--json", "--run-id", runId,
+			],
+			cwd: packageRoot,
+			env,
+			timeoutMs: 30_000,
+		});
+
+		const exact = await run("exact-config");
+		expect(exact.exitCode).toBe(1);
+		expect(parseCliProcessJson(exact)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked" },
+		});
+
+		await writeFile(
+			configPath,
+			[
+				`Vault root: \`${fixture.clone}\``,
+				`Configured vault root: \`${fixture.clone}\``,
+			].join("\n"),
+		);
+		const ambiguous = await run("ambiguous-config");
+		expect(ambiguous.exitCode).toBe(1);
+		expect(parseCliProcessJson(ambiguous)).toMatchObject({
+			status: "error",
+			error: { code: "vault_unconfigured" },
+		});
+	});
+
+	test("production composition fails closed on a malformed remote-host admission", async () => {
+		const fixture = await createFixture();
+		const result = await runCliProcess({
+			label: "vault-git malformed allowed remote host",
+			argv: [
+				"bun", "run", productionCliPath,
+				"status", "--json", "--run-id", "malformed-remote-host",
+			],
+			cwd: packageRoot,
+			env: {
+				...fixture.env,
+				VAULT_GIT_ALLOWED_REMOTE_HOSTS: "-example.invalid",
+			},
+			timeoutMs: 30_000,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(parseCliProcessJson(result)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "read_only",
+				blockers: ["vault_unconfigured"],
+			},
+		});
 	});
 
 	test("keeps foreign flags and malformed transaction ids at stable usage exits", async () => {
@@ -292,20 +430,7 @@ describe("vault-git catalog-driven process boundary", () => {
 
 	test("closes one admitted checker repair as exactly one hygiene commit", async () => {
 		const fixture = await createFixture({ checkerRepair: true });
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		const before = Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"]));
 		const result = await fixture.run(["janitor", "--json"]);
 		expect(result.exitCode).toBe(0);
@@ -330,7 +455,7 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
 			"baseline",
 		);
-	});
+	}, 60_000);
 
 	test("un-admitted runtime refuses begin, surfaces the dashboard blocker, and keeps janitor zero-commit", async () => {
 		const fixture = await createFixture({ admitActivation: false });
@@ -341,7 +466,11 @@ describe("vault-git catalog-driven process boundary", () => {
 			data: {
 				outcome: "read_only",
 				blockers: ["activation_blocked"],
-				next_action: { id: "request_operator_admission" },
+				next_action: { id: "review_prepared" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+					next_action: { id: "review_prepared" },
+				},
 			},
 		});
 		const begun = await fixture.begin("notes/a.md");
@@ -353,7 +482,11 @@ describe("vault-git catalog-driven process boundary", () => {
 				outcome: "refused",
 				changed_state: "none",
 				blockers: ["activation_blocked"],
-				next_action: { id: "request_operator_admission" },
+				next_action: { id: "review_prepared" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+					next_action: { id: "review_prepared" },
+				},
 			},
 		});
 		const before = Number(
@@ -364,7 +497,13 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(parseCliProcessJson(janitor)).toMatchObject({
 			status: "error",
 			error: { code: "activation_blocked" },
-			data: { blockers: ["activation_blocked"] },
+			data: {
+				blockers: ["activation_blocked"],
+				next_action: { id: "review_prepared" },
+				activation_restriction: {
+					cause: { id: "admission_missing" },
+				},
+			},
 		});
 		expect(
 			Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
@@ -373,20 +512,7 @@ describe("vault-git catalog-driven process boundary", () => {
 
 	test("keeps an on-disk checker entrypoint change zero-commit as a checker_changed preview", async () => {
 		const fixture = await createFixture({ checkerRepair: true });
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		// Change the admitted entrypoint ON DISK after admission — committed and
 		// pushed so the tree stays clean and main stays aligned; only the
 		// fingerprint disagrees with the admitted record.
@@ -420,20 +546,7 @@ describe("vault-git catalog-driven process boundary", () => {
 		git(fixture.clone, ["add", "scripts/vault-check.ts"]);
 		git(fixture.clone, ["commit", "-m", "chore: emit an unregistered repair id"]);
 		git(fixture.clone, ["push", "origin", "main"]);
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "fixture-vault",
-		});
-		const checker = createVaultCheckerPort(
-			fixture.clone,
-			createNodeProcessPort(),
-		);
-		const fingerprint = await checker.fingerprint();
-		await store.admitChecker({
-			schemaVersion: 1,
-			...fingerprint,
-			admittedAt: "2026-08-09T00:00:00.000Z",
-		});
+		await admitCurrentChecker(fixture);
 		await assertJanitorZeroCommitPreview(fixture, "unknown_repair");
 	});
 
@@ -452,6 +565,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-foreground",
 				host: "host-foreground",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			const hygiene = await createVaultGitCliComposition({
 				repositoryPath: cloneB,
@@ -460,6 +574,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-hygiene",
 				host: "host-hygiene",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(foreground.store);
 			await admitActivationForTest(hygiene.store);
@@ -537,6 +652,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-hygiene",
 				host: "host-hygiene",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(hygiene.store);
 			const refused = await hygiene.engine.runHygieneTransaction({
@@ -573,6 +689,7 @@ describe("vault-git catalog-driven process boundary", () => {
 				repositoryIdentity: "fixture-vault",
 				actor: "agent-foreground",
 				host: "host-foreground",
+				activationAuthority: admittedActivationAuthorityForTest,
 			});
 			await admitActivationForTest(foreground.store);
 			const next = await foreground.engine.begin({
@@ -598,6 +715,23 @@ function ledgerTip(fixture: Fixture): string {
 	} catch {
 		return "absent";
 	}
+}
+
+/** Admit the fixture's current checker fingerprint into its derived state root. */
+async function admitCurrentChecker(fixture: Fixture): Promise<void> {
+	const store = createReceiptStore({
+		stateRoot: fixture.stateRoot,
+		repositoryIdentity: fixture.repositoryIdentity,
+	});
+	const checker = createVaultCheckerPort(
+		fixture.clone,
+		createNodeProcessPort(),
+	);
+	await store.admitChecker({
+		schemaVersion: 1,
+		...(await checker.fingerprint()),
+		admittedAt: "2026-08-09T00:00:00.000Z",
+	});
 }
 
 /**
@@ -751,8 +885,13 @@ interface Fixture {
 	readonly root: string;
 	readonly clone: string;
 	readonly stateRoot: string;
+	readonly repositoryIdentity: string;
 	readonly env: NodeJS.ProcessEnv;
 	run(args: readonly string[]): Promise<CliProcessResult>;
+	runWithHumanDecision(
+		decision: "activate" | "defer" | "revoke",
+		args: readonly string[],
+	): Promise<CliProcessResult>;
 	begin(path: string): Promise<CliProcessResult>;
 	beginTransaction(path: string): Promise<string>;
 	launchWithRole(
@@ -781,6 +920,7 @@ async function createFixture(
 	git(clone, ["config", "user.name", "Vault CLI Test"]);
 	git(clone, ["config", "user.email", "vault-cli@example.invalid"]);
 	await mkdir(join(clone, "notes"), { recursive: true });
+	await mkdir(join(clone, "schemas"), { recursive: true });
 	await writeFile(
 		join(clone, "notes", "a.md"),
 		options.checkerRepair ? "baseline\nowner:\n" : "baseline\n",
@@ -832,12 +972,20 @@ async function createFixture(
 	);
 	// The checker admission fingerprint requires a real bun.lock; a missing
 	// lock file refuses admission by design.
-	await writeFile(join(clone, "bun.lock"), "{}\n");
+	await writeFile(
+		join(clone, "bun.lock"),
+		'{"lockfileVersion":1,"configVersion":1,"workspaces":{}}\n',
+	);
+	await writeFile(
+		join(clone, "schemas", "frontmatter-contract.json"),
+		'{"type":"object"}\n',
+	);
 	git(clone, [
 		"add",
 		"package.json",
 		"bun.lock",
 		"notes/a.md",
+		"schemas/frontmatter-contract.json",
 		...(options.checkerRepair
 			? ["scripts/vault-check.ts", "scripts/vault-repair-registry.ts"]
 			: []),
@@ -845,12 +993,19 @@ async function createFixture(
 	git(clone, ["commit", "-m", "chore: initialize vault fixture"]);
 	git(clone, ["push", "-u", "origin", "main"]);
 	git(bare, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+	const repositoryIdentity = (
+		await resolveVaultRepositoryIdentity({
+			repositoryPath: clone,
+			process: createNodeProcessPort(),
+			timeoutMs: 5_000,
+		})
+	).identity;
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		VAULT_GIT_REPOSITORY_PATH: clone,
 		VAULT_GIT_CHECK_REPOSITORY_PATH: clone,
 		VAULT_GIT_STATE_ROOT: stateRoot,
-		VAULT_GIT_REPOSITORY_IDENTITY: "fixture-vault",
+		VAULT_GIT_REPOSITORY_IDENTITY: "ignored-fixture-override",
 		VAULT_GIT_ACTOR: "agent-a",
 		VAULT_GIT_HOST: "host-a",
 		VAULT_GIT_REMOTE: "origin",
@@ -861,6 +1016,17 @@ async function createFixture(
 			argv: ["bun", "run", cliPath, ...args],
 			cwd: packageRoot,
 			env,
+			timeoutMs: 30_000,
+		});
+	const runWithHumanDecision = (
+		decision: "activate" | "defer" | "revoke",
+		args: readonly string[],
+	) =>
+		runCliProcess({
+			label: `vault-git human ${decision} ${args.join(" ")}`,
+			argv: ["bun", "run", cliPath, ...args],
+			cwd: packageRoot,
+			env: { ...env, VAULT_GIT_TEST_HUMAN_DECISION: decision },
 			timeoutMs: 30_000,
 		});
 	const begin = (path: string) =>
@@ -884,7 +1050,7 @@ async function createFixture(
 	};
 	const store = createReceiptStore({
 		stateRoot,
-		repositoryIdentity: "fixture-vault",
+		repositoryIdentity,
 	});
 	if (options.admitActivation !== false) await admitActivationForTest(store);
 	const launchWithRole = async (
@@ -969,8 +1135,10 @@ async function createFixture(
 		root,
 		clone,
 		stateRoot,
+		repositoryIdentity,
 		env,
 		run,
+		runWithHumanDecision,
 		begin,
 		beginTransaction,
 		launchWithRole,

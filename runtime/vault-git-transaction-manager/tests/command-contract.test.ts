@@ -17,6 +17,7 @@ import {
 	defineVaultGitCommandContracts,
 	parseVaultGitInvocation,
 	projectVaultGitCommandDiscoveryTree,
+	vaultGitActions,
 	vaultGitContractEntries,
 	vaultGitContracts,
 } from "../src/command-contract.ts";
@@ -35,6 +36,7 @@ import {
 	VAULT_GIT_WRITE_PERMISSIONS,
 	createVaultGitLifecycleResult,
 } from "../src/model.ts";
+import { VaultRepositoryIdentityUnavailableError } from "../src/ports.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contractOptions = {
@@ -43,6 +45,12 @@ const contractOptions = {
 } as const;
 
 describe("vault-git command contract", () => {
+	test("keeps Doctor continuation guidance recovery-neutral", () => {
+		expect(vaultGitActions.find(({ id }) => id === "run_doctor")?.summary).toBe(
+			"Run authority-free Doctor, then follow its reported next action.",
+		);
+	});
+
 	test("declares the complete facade-owned public surface", () => {
 		expect(Object.keys(vaultGitContracts)).toEqual([...VAULT_GIT_COMMANDS]);
 		expect(vaultGitContractEntries.map(([command]) => command)).toEqual([
@@ -82,6 +90,67 @@ describe("vault-git command contract", () => {
 			expect(help).toContain(vaultGitContracts[command].usage[0] ?? command);
 		}
 		expect(help).toContain("vault-git tidy now");
+	});
+
+	test("publishes one guarded activation journey without a public admit route", () => {
+		expect(VAULT_GIT_COMMANDS).toContain("activation");
+		expect(vaultGitContracts.activation.usage).toEqual([
+			"vault-git activation [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation prepare [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation review <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation defer <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+			"vault-git activation revoke <evidence-reference> [--no-input] [--json] [--run-id <id>] [--quiet] [--verbose] [--debug]",
+		]);
+		expect(renderVaultGitHelp()).toContain(
+			"vault-git activation review <evidence-reference>",
+		);
+		expect(JSON.stringify(projectVaultGitCommandDiscoveryTree())).not.toContain(
+			"activation admit",
+		);
+		expect(() => parseVaultGitInvocation(["activation", "admit"])).toThrow(
+			"activation action",
+		);
+	});
+
+	test("parses activation inspect, prepare, and human-review actions from one contract", () => {
+		expect(parseVaultGitInvocation(["activation", "--json"])).toMatchObject({
+			command: "activation",
+			activationAction: "inspect",
+			json: true,
+		});
+		expect(
+			parseVaultGitInvocation([
+				"activation",
+				"prepare",
+				"--no-input",
+				"--json",
+			]),
+		).toMatchObject({
+			command: "activation",
+			activationAction: "prepare",
+			noInput: true,
+			json: true,
+		});
+		for (const action of ["review", "defer", "revoke"] as const) {
+			expect(() => parseVaultGitInvocation(["activation", action])).toThrow(
+				"<evidence-reference>",
+			);
+			expect(() =>
+				parseVaultGitInvocation(["activation", action, "--json"]),
+			).toThrow("<evidence-reference>");
+			const invocation = parseVaultGitInvocation([
+				"activation",
+				action,
+				"vault-git:prepared:v2:deadbeef",
+				"--json",
+			]);
+			expect(invocation).toMatchObject({
+				command: "activation",
+				activationAction: action,
+				evidenceReference: "vault-git:prepared:v2:deadbeef",
+				json: true,
+			});
+		}
 	});
 
 	test("accepts facade diagnostics for every command without caller-specific policy", () => {
@@ -161,9 +230,24 @@ describe("vault-git command contract", () => {
 			CliRuntimeContractError,
 		);
 	});
+
+	test("declares Doctor's owner-private reconciliation without canonical write authority", () => {
+		expect(vaultGitContracts.doctor).toMatchObject({
+			mutation: "local_write",
+			sideEffects: ["read", "check", "network", "write"],
+			executionModes: ["normal"],
+			capabilityRoles: ["diagnostic"],
+		});
+		expect(vaultGitContracts.doctor.summary).toContain(
+			"owner-private task evidence",
+		);
+		expect(vaultGitContracts.doctor.summary).toContain(
+			"without canonical mutation",
+		);
+	});
 });
 
-describe("vault-git U1 read-only runtime", () => {
+describe("vault-git U1 bounded runtime", () => {
 	test("routes no args to one bounded read-only dashboard action", async () => {
 		const run = await runVaultGitForTest([], { runId: "run-dashboard" });
 		expect(run.exitCode).toBe(0);
@@ -233,6 +317,36 @@ describe("vault-git U1 read-only runtime", () => {
 		}
 	});
 
+	test("maps unavailable live identity proof to activation_blocked", async () => {
+		const run = await runVaultGitForTest(
+			["begin", "--event", "note_created", "--path", "notes/a.md", "--json"],
+			{
+				runId: "run-identity-unavailable",
+				resolveComposition: async () => {
+					throw new VaultRepositoryIdentityUnavailableError();
+				},
+			},
+		);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe("");
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "activation_blocked", retryable: true },
+			data: {
+				outcome: "refused",
+				write_permission: "denied",
+				changed_state: "none",
+				retry_safety: "same_input_safe",
+				blockers: ["activation_blocked"],
+				activation_restriction: {
+					cause: { id: "revalidation_unavailable" },
+					next_action: { id: "inspect_configured_vault" },
+				},
+			},
+		});
+	});
+
 	test("usage-failure JSON never echoes private path values", async () => {
 		const rejectedEnum = await runVaultGitForTest(
 			["begin", "--event", "/Users/example/private-vault", "--json"],
@@ -284,9 +398,19 @@ describe("vault-git U1 read-only runtime", () => {
 	});
 
 	test("repair without an engine-owned action is a usage failure", () => {
+		expect(VAULT_GIT_REPAIR_ACTIONS).toEqual([
+			"resume",
+			"retry-push",
+			"close-verified",
+			"stale-lease-takeover",
+			"reconcile-quarantine",
+		]);
 		expect(() => parseVaultGitInvocation(["repair", "--json"])).toThrow(
 			`repair requires one action: ${VAULT_GIT_REPAIR_ACTIONS.join(", ")}`,
 		);
+		expect(() =>
+			parseVaultGitInvocation(["repair", "replay", "--transaction-id", "tx-1"]),
+		).toThrow("repair action");
 	});
 
 	test("result construction rejects literals outside package vocabulary", () => {
@@ -313,9 +437,13 @@ describe("vault-git U1 read-only runtime", () => {
 });
 
 describe("vault-git Branch Station runtime coverage", () => {
-	test("preview and doctor stay read-only through the runtime in json and plain output", async () => {
+	test("preview and Doctor remain authority-free through the runtime in json and plain output", async () => {
 		for (const command of ["preview", "doctor"] as const) {
-			const station = stationById(`${command}.read_only`);
+			const station = stationById(
+				command === "doctor"
+					? "doctor.private_task_reconciliation"
+					: "preview.read_only",
+			);
 			const json = await runVaultGitForTest([command, "--json"], {
 				runId: `run-${command}-json`,
 			});
@@ -446,10 +574,14 @@ describe("vault-git KTD16 boundaries", () => {
 		["worker-policy.ts", new Set(["model.ts"])],
 	]);
 	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
-		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
+		[
+			"git-adapter.ts",
+			new Set(["model.ts", "ports.ts", "remote-safety.ts"]),
+		],
+		["remote-safety.ts", new Set(["ports.ts"])],
 		["remote-ledger.ts", new Set(["model.ts", "ports.ts"])],
 		["clock.ts", new Set(["ports.ts"])],
-		["store.ts", new Set(["model.ts"])],
+		["store.ts", new Set(["activation-contract.ts", "model.ts"])],
 		[
 			"doctor.ts",
 			new Set(["model.ts", "ports.ts", "remote-ledger.ts", "store.ts"]),
@@ -595,6 +727,8 @@ function argvForFlag(
 			return [...argv, flag, "docs(vault): record example"];
 		case "--transaction-id":
 			return [...argv, flag, "txn_00000000000000000000000000000000"];
+		case "--task-id":
+			return [...argv, flag, "task_00000000000000000000000000000000"];
 		default:
 			return [...argv, flag];
 	}

@@ -91,6 +91,16 @@ Activation record owner: `runtime/vault-git-transaction-manager/src/store.ts`.
 
 ### Per-host Git identity admission
 
+- Configure one stable host handle through the operator rollout:
+  - `VAULT_GIT_HOST`
+- Keep that handle stable across hostname, network, and sharing-name changes.
+- Never derive activation trust from the OS hostname.
+- Configure these host-local path variables through the operator rollout:
+  - `VAULT_GIT_SSH_IDENTITY_FILE_PATH`
+  - `VAULT_GIT_SSH_PUBLIC_KEY_PATH`
+  - `VAULT_GIT_SSH_KNOWN_HOSTS_PATH`
+- Store paths only. Never put key or known-hosts content in environment variables.
+- Run `vault-git doctor --json` to list absent configuration field names without exposing configured paths.
 - Use one dedicated repository-scoped SSH identity per writer host.
 - Keep `known_hosts` owner-only and reviewed.
 - Use batch mode.

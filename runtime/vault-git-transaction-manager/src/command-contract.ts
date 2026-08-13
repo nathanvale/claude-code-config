@@ -8,6 +8,10 @@ import {
 	usageError,
 } from "@side-quest/cli-command-facade";
 import {
+	VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
+	VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
+} from "./activation-contract.ts";
+import {
 	VAULT_GIT_COMMANDS_CONTRACT_ID,
 	VAULT_GIT_EVENT_TYPES,
 	VAULT_GIT_NEXT_ACTION_IDS,
@@ -25,6 +29,7 @@ export const VAULT_GIT_COMMANDS = [
 	"join",
 	"complete",
 	"status",
+	"activation",
 	"preview",
 	"doctor",
 	"repair",
@@ -35,6 +40,19 @@ export const VAULT_GIT_COMMANDS = [
 
 /** Public vault-git command id. */
 export type VaultGitCommand = (typeof VAULT_GIT_COMMANDS)[number];
+
+/** Guarded activation journey actions. Admission remains internal to human review. */
+export const VAULT_GIT_ACTIVATION_ACTIONS = [
+	"inspect",
+	"prepare",
+	"review",
+	"defer",
+	"revoke",
+] as const;
+
+/** One public activation journey action. */
+export type VaultGitActivationAction =
+	(typeof VAULT_GIT_ACTIVATION_ACTIONS)[number];
 
 /** Caller audience. Caller labels never alter policy. */
 export type VaultGitAudience = "agent" | "operator";
@@ -85,6 +103,12 @@ const discoveryResultContract = {
 	schema_version: VAULT_GIT_SCHEMA_VERSION,
 } as const;
 
+const activationResultContract = {
+	id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
+	kind: "Activation readiness and admission result.",
+	schema_version: VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
+} as const;
+
 /** Runtime action affordances shared by discovery and envelopes. */
 export const vaultGitActions = VAULT_GIT_NEXT_ACTION_IDS.map((id) => ({
 	id,
@@ -94,7 +118,12 @@ export const vaultGitActions = VAULT_GIT_NEXT_ACTION_IDS.map((id) => ({
 
 function actionSummary(id: VaultGitNextActionId): string {
 	if (id === "wait_for_runtime") return "Wait for the remaining runtime owner before writing.";
-	if (id === "request_operator_admission") return "Ask an operator to admit runtime activation before canonical vault writes.";
+	if (id === "review_prepared") return "Open human review for the current prepared evidence.";
+	if (id === "return_to_human_review") return "Return to the human review surface for the final choice.";
+	if (id === "prepare_fresh") return "Prepare fresh V2 evidence, then return to human review.";
+	if (id === "configure_activation_identity") return "Configure the required host activation identity paths, then rerun Doctor.";
+	if (id === "inspect_configured_vault") return "Inspect the configured vault and its live activation dependencies.";
+	if (id === "run_doctor") return "Run authority-free Doctor, then follow its reported next action.";
 	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
 	if (id === "change_input") return "Correct the command arguments and retry parsing.";
 	return `Continue with the ${id.replaceAll("_", " ")} action.`;
@@ -136,6 +165,12 @@ const transactionIdFlag = {
 		description: "Select the public transaction correlation id.",
 	},
 } as const;
+const taskIdFlag = {
+	"--task-id": {
+		type: "string",
+		description: "Select one opaque background-completion task.",
+	},
+} as const;
 const capabilityFdFlag = {
 	"--capability-fd": {
 		type: "string",
@@ -157,7 +192,8 @@ const expectedFlags = {
 		"--capability-fd",
 		"--summary",
 	],
-	status: ["--json"],
+	status: ["--json", "--task-id"],
+	activation: ["--json", "--no-input"],
 	preview: ["--json", "--transaction-id"],
 	doctor: ["--json", "--transaction-id"],
 	repair: [
@@ -177,12 +213,27 @@ const expectedResultContractIds = {
 	join: VAULT_GIT_RESULT_CONTRACT_ID,
 	complete: VAULT_GIT_RESULT_CONTRACT_ID,
 	status: VAULT_GIT_RESULT_CONTRACT_ID,
+	activation: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 	preview: VAULT_GIT_RESULT_CONTRACT_ID,
 	doctor: VAULT_GIT_RESULT_CONTRACT_ID,
 	repair: VAULT_GIT_RESULT_CONTRACT_ID,
 	tidy: VAULT_GIT_RESULT_CONTRACT_ID,
 	janitor: VAULT_GIT_RESULT_CONTRACT_ID,
 	commands: VAULT_GIT_COMMANDS_CONTRACT_ID,
+} as const satisfies Record<VaultGitCommand, string>;
+
+const expectedResultSchemaVersions = {
+	begin: VAULT_GIT_SCHEMA_VERSION,
+	join: VAULT_GIT_SCHEMA_VERSION,
+	complete: VAULT_GIT_SCHEMA_VERSION,
+	status: VAULT_GIT_SCHEMA_VERSION,
+	activation: VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
+	preview: VAULT_GIT_SCHEMA_VERSION,
+	doctor: VAULT_GIT_SCHEMA_VERSION,
+	repair: VAULT_GIT_SCHEMA_VERSION,
+	tidy: VAULT_GIT_SCHEMA_VERSION,
+	janitor: VAULT_GIT_SCHEMA_VERSION,
+	commands: VAULT_GIT_SCHEMA_VERSION,
 } as const satisfies Record<VaultGitCommand, string>;
 
 /**
@@ -217,9 +268,12 @@ export function defineVaultGitCommandContracts<
 				`vault-git-result-contract-drift: Restore the package result contract for ${command}.`,
 			);
 		}
-		if (contract.resultContract?.schema_version !== VAULT_GIT_SCHEMA_VERSION) {
+		if (
+			contract.resultContract?.schema_version !==
+			expectedResultSchemaVersions[command]
+		) {
 			issues.push(
-				`vault-git-result-schema-version-drift: Restore result schema_version ${VAULT_GIT_SCHEMA_VERSION} for ${command}.`,
+				`vault-git-result-schema-version-drift: Restore result schema_version ${expectedResultSchemaVersions[command]} for ${command}.`,
 			);
 		}
 		if (!Array.isArray(contract.sideEffects) || contract.sideEffects.length === 0) {
@@ -300,7 +354,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	status: {
 		script: "vault-git",
 		summary: "Show bounded read-only transaction state with exactly one next safe action.",
-		usage: [`vault-git status [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git status [--task-id <id>] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
 		mutation: "read",
@@ -311,7 +365,30 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		interactivity: "none",
 		resultContract: lifecycleResultContract,
 		actionAffordances,
-		flags: jsonFlag,
+		flags: { ...jsonFlag, ...taskIdFlag },
+		exitCodes: vaultGitExitCodes,
+	},
+	activation: {
+		script: "vault-git",
+		summary: "Inspect, prepare, and complete the guarded human activation journey.",
+		usage: [
+			`vault-git activation [--json] ${diagnosticsUsage}`,
+			`vault-git activation prepare [--no-input] [--json] ${diagnosticsUsage}`,
+			`vault-git activation review <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
+			`vault-git activation defer <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
+			`vault-git activation revoke <evidence-reference> [--no-input] [--json] ${diagnosticsUsage}`,
+		],
+		json: true,
+		audience: "operator",
+		mutation: "local_write",
+		sideEffects: ["read", "check", "network", "write"],
+		executionModes: ["normal", "check"],
+		previewExemption,
+		outputModes: ["plain", "json"],
+		interactivity: "optional",
+		resultContract: activationResultContract,
+		actionAffordances,
+		flags: { ...jsonFlag, ...noInputFlag },
 		exitCodes: vaultGitExitCodes,
 	},
 	preview: {
@@ -332,13 +409,14 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	},
 	doctor: {
 		script: "vault-git",
-		summary: "Classify lifecycle state and deterministic recovery without mutation.",
+		summary: "Classify lifecycle state and reconcile owner-private task evidence without canonical mutation.",
 		usage: [`vault-git doctor [--transaction-id <id>] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
-		mutation: "preview",
-		sideEffects: ["read", "check", "network"],
-		executionModes: ["check"],
+		mutation: "local_write",
+		sideEffects: ["read", "check", "network", "write"],
+		executionModes: ["normal"],
+		previewExemption,
 		outputModes: ["plain", "json"],
 		capabilityRoles: ["diagnostic"],
 		interactivity: "none",
@@ -452,6 +530,8 @@ export interface ParsedVaultGitInvocation {
 	readonly noInput: boolean;
 	/** Optional non-secret transaction id. */
 	readonly transactionId?: string;
+	/** Optional opaque background task selector. */
+	readonly taskId?: string;
 	/** Optional inherited capability descriptor. */
 	readonly capabilityFd?: number;
 	/** Optional meaningful event type. */
@@ -462,6 +542,10 @@ export interface ParsedVaultGitInvocation {
 	readonly summary?: string;
 	/** Optional repair action. */
 	readonly repairAction?: VaultGitRepairAction;
+	/** Guarded activation action selected under the activation command. */
+	readonly activationAction?: VaultGitActivationAction;
+	/** Opaque prepared-evidence correlation for human review actions. */
+	readonly evidenceReference?: string;
 	/** Explicit stale-takeover operator attestation. */
 	readonly priorWriterStopped: boolean;
 	/** Bare invocation alias marker. */
@@ -495,12 +579,36 @@ export function parseVaultGitInvocation(
 	let json = false;
 	let noInput = false;
 	let transactionId: string | undefined;
+	let taskId: string | undefined;
 	let capabilityFd: number | undefined;
 	let event: VaultGitEventType | undefined;
 	let summary: string | undefined;
 	let repairAction: VaultGitRepairAction | undefined;
+	let activationAction: VaultGitActivationAction | undefined;
+	let evidenceReference: string | undefined;
 	let priorWriterStopped = false;
 	const paths: string[] = [];
+	if (command === "activation") {
+		const actionCandidate = argv[index];
+		if (actionCandidate === undefined || actionCandidate.startsWith("-")) {
+			activationAction = "inspect";
+		} else {
+			activationAction = parseSafeEnumValue(
+				"activation action",
+				actionCandidate,
+				VAULT_GIT_ACTIVATION_ACTIONS.filter((action) => action !== "inspect"),
+			);
+			index += 1;
+			if (["review", "defer", "revoke"].includes(activationAction)) {
+				const reference = argv[index];
+				if (reference === undefined || reference.startsWith("-")) {
+					throw usageError(`${activationAction} requires <evidence-reference>`);
+				}
+				evidenceReference = reference;
+				index += 1;
+			}
+		}
+	}
 
 	for (; index < argv.length; index += 1) {
 		const arg = argv[index] ?? "";
@@ -530,6 +638,12 @@ export function parseVaultGitInvocation(
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
 				transactionId = parsed;
+				break;
+			}
+			case "--task-id": {
+				const parsed = inlineValue ?? requireValue(argv, index, flag);
+				if (inlineValue === undefined) index += 1;
+				taskId = parsed;
 				break;
 			}
 			case "--capability-fd": {
@@ -596,10 +710,13 @@ export function parseVaultGitInvocation(
 		priorWriterStopped,
 		paths,
 		...(transactionId === undefined ? {} : { transactionId }),
+		...(taskId === undefined ? {} : { taskId }),
 		...(capabilityFd === undefined ? {} : { capabilityFd }),
 		...(event === undefined ? {} : { event }),
 		...(summary === undefined ? {} : { summary }),
 		...(repairAction === undefined ? {} : { repairAction }),
+		...(activationAction === undefined ? {} : { activationAction }),
+		...(evidenceReference === undefined ? {} : { evidenceReference }),
 		...(noArgs || flagOnlyAlias ? { alias: "no_args" as const } : {}),
 	};
 }

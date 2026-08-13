@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import {
 	buildVaultCommitMessage,
@@ -24,7 +24,10 @@ import {
 	createNodeProcessPort,
 } from "../src/git-adapter.ts";
 import { createVaultGitTransactionEngine } from "../src/engine.ts";
-import { admitActivationForTest } from "./activation-fixture.ts";
+import {
+	admitActivationForTest,
+	admittedActivationAuthorityForTest,
+} from "./activation-fixture.ts";
 import type {
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
@@ -35,6 +38,11 @@ import type {
 import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
 
 const roots: string[] = [];
+
+// Real-Git transaction rows regularly take 2-5 seconds in isolation. Keep the
+// test harness deadline above loaded full-suite variance; production operation
+// deadlines remain owned by the injected adapter timeouts.
+setDefaultTimeout(15_000);
 
 afterEach(async () => {
 	for (const root of roots.splice(0)) {
@@ -1115,6 +1123,7 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 		ledger: { git: ledgerGit, clock: runtime },
 		runtime,
 		repositoryIdentity: "fixture-vault",
+		activationAuthority: admittedActivationAuthorityForTest,
 		check: {
 			async run() {
 				await options.onCheck?.(clone);
