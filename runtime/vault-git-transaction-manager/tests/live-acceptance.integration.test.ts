@@ -367,9 +367,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 				),
 				workerExecutions,
 				changedStatus: changed?.status,
-				changedErrorIsTaskSpecific:
-					changed?.error?.code !== undefined &&
-					changed.error.code !== "remote_unavailable",
+				changedErrorCode: changed?.error?.code,
 				changedOutcome: changed?.data?.outcome,
 				changedTaskId: changed?.data?.task_id,
 			}).toEqual({
@@ -380,7 +378,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 				identicalTransactionIds: new Set([transactionId]),
 				workerExecutions: 1,
 				changedStatus: "error",
-				changedErrorIsTaskSpecific: true,
+				changedErrorCode: "task_input_mismatch",
 				changedOutcome: "refused",
 				changedTaskId: undefined,
 			});
@@ -432,6 +430,58 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 				task_state: "launching",
 				next_action: { id: "run_doctor" },
 			},
+		});
+
+		// The first call only proves the immediate refusal. One replacement launch
+		// is permitted, so retry past the launch deadline until the attempt budget
+		// is spent, then read the durable classification the issue requires:
+		// repair_needed, never remote_unavailable.
+		let retried = refused;
+		let retriedEnvelope = envelope as {
+			error?: { code?: string };
+			data?: { task_id?: string; task_state?: string };
+		};
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			await Bun.sleep(1_750);
+			retried = await fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): record malformed acknowledgement",
+				"--json",
+			]);
+			retriedEnvelope = parseCliProcessJson<{
+				error?: { code?: string };
+				data?: { task_id?: string; task_state?: string };
+			}>(retried);
+		}
+		const taskId = retriedEnvelope.data?.task_id;
+		const inspected = await fixture.run([
+			"status",
+			"--task-id",
+			taskId ?? "task_missing",
+			"--json",
+		]);
+		const inspectedEnvelope = parseCliProcessJson<{
+			data?: {
+				task_state?: string;
+				next_action?: { id?: string };
+				blockers?: readonly string[];
+			};
+		}>(inspected);
+
+		expect({
+			retriedErrorCode: retriedEnvelope.error?.code,
+			taskState: inspectedEnvelope.data?.task_state,
+			nextAction: inspectedEnvelope.data?.next_action?.id,
+			blockersExcludeRemoteOutage:
+				!(inspectedEnvelope.data?.blockers ?? []).includes("remote_unavailable"),
+		}).toEqual({
+			retriedErrorCode: "worker_launch_protocol_failed",
+			taskState: "repair_needed",
+			nextAction: "run_doctor",
+			blockersExcludeRemoteOutage: true,
 		});
 	});
 
