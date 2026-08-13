@@ -228,6 +228,14 @@ describe("vault-git doctor", () => {
 			receipt.leaseGeneration as string,
 		);
 		expect(token.byteLength).toBeGreaterThan(0);
+		const proof = await independentReader.readDoctorProof(
+			receipt.transactionId as string,
+			receipt.leaseGeneration as string,
+		);
+		expect(proof).toMatchObject({
+			receiptId: receipt.receiptId,
+			receiptRevision: receipt.revision,
+		});
 
 		expect(JSON.stringify(result)).not.toContain(stateRoot);
 	});

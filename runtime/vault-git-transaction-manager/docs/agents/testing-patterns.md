@@ -47,14 +47,17 @@ A guard is only proven if a disposable perturbation makes its owning test fail. 
 - **In-file** — for a single guard, satisfy every other clause so the flipped one is the sole variable (a compound `||` guard passes on any clause). Assert the refusal, then confirm removing the production clause flips the assertion. Restore production byte-for-byte; a test-only change leaves `git diff src/*.ts` empty.
 - **Recompile-and-run harness** — `tests/background-worker-negative-controls.integration.test.ts` copies src+tests to a temp root, asserts the baseline passes, applies one source mutation, and requires the literal `(fail)` in the owning test's output. This proves a real assertion failed, not a compile error.
 
-The domain guards worth a negative control: at-most-one-owner (`priorWriterStopped`), the launch-generation fence, terminal-refinement (`closed` absorbs), and Doctor's never-its-own-continuation invariant (`nextAction.id !== "run_doctor"`).
+Domain guards worth a negative control, by form:
+
+- Recompile-and-run harness (`tests/background-worker-negative-controls.integration.test.ts`): worker-uniqueness, revision-CAS, the launch-generation / stale-generation fence, and terminal-refinement (`closed` absorbs).
+- In-file controls: at-most-one-owner `priorWriterStopped` in `tests/repair.integration.test.ts`, and Doctor's never-its-own-continuation invariant (`nextAction.id !== "run_doctor"`) in `tests/doctor.test.ts`.
 
 ## Running tests
 
 `bun test` is not run directly. Use the MCP runner tools with `response_format: "json"`:
 
 - `mcp__bun-runner__bun_testFile` for one file — but it caps at 30s.
-- The smoke lane sets `setDefaultTimeout(180_000)` and spawns real subprocesses, so it exceeds that cap. Run smoke files (or a `-t` phase filter) through the skill-local runner `skills/test-runner/src/test-runner.sh --json -- <file> [-t <name>]`, which honors the in-file timeout.
+- The smoke lane sets `setDefaultTimeout(180_000)` and spawns real subprocesses, so it exceeds that cap. Run smoke files (or a `-t` phase filter) through the skill-local runner `skills/test-runner/src/test-runner.sh --json -- <file> [-t <name>]` (path is relative to the claude-code-config repo root, not this package), which honors the in-file timeout.
 - `package.json` owns the script surface (`test`, `test:smoke`, `test:smoke:pr`); read it there rather than trusting a copy.
 
 The `test:smoke:pr` gate is the cheap merge check: it must exercise every persisted lifecycle phase. A phase left off the `-t` filter ships regressions in that phase green.

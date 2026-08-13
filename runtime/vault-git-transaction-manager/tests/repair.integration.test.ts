@@ -351,9 +351,9 @@ describe("deterministic push_pending repair", () => {
 			fixture.transactionId,
 			fixture.ledgerHead,
 		);
-		// priorWriterStopped is the sole flipped variable from the valid takeover
-		// baseline; every other guard clause stays satisfied so the refusal proves
-		// this clause alone fences the supersede.
+		// A present token plus the matching generation pins the other guard
+		// clauses satisfied, so priorWriterStopped is the sole flipped variable.
+		expect(token.byteLength).toBeGreaterThan(0);
 		const result = await fixture.repair.run({
 			action: "stale-lease-takeover",
 			transactionId: fixture.transactionId,
@@ -380,6 +380,7 @@ describe("deterministic push_pending repair", () => {
 			fixture.transactionId,
 			fixture.ledgerHead,
 		);
+		expect(token.byteLength).toBeGreaterThan(0);
 		const result = await fixture.repair.run({
 			action: "stale-lease-takeover",
 			transactionId: fixture.transactionId,
