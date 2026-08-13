@@ -223,9 +223,24 @@ describe("vault-git command contract", () => {
 			CliRuntimeContractError,
 		);
 	});
+
+	test("declares Doctor's owner-private reconciliation without canonical write authority", () => {
+		expect(vaultGitContracts.doctor).toMatchObject({
+			mutation: "local_write",
+			sideEffects: ["read", "check", "network", "write"],
+			executionModes: ["normal"],
+			capabilityRoles: ["diagnostic"],
+		});
+		expect(vaultGitContracts.doctor.summary).toContain(
+			"owner-private task evidence",
+		);
+		expect(vaultGitContracts.doctor.summary).toContain(
+			"without canonical mutation",
+		);
+	});
 });
 
-describe("vault-git U1 read-only runtime", () => {
+describe("vault-git U1 bounded runtime", () => {
 	test("routes no args to one bounded read-only dashboard action", async () => {
 		const run = await runVaultGitForTest([], { runId: "run-dashboard" });
 		expect(run.exitCode).toBe(0);
@@ -415,9 +430,13 @@ describe("vault-git U1 read-only runtime", () => {
 });
 
 describe("vault-git Branch Station runtime coverage", () => {
-	test("preview and doctor stay read-only through the runtime in json and plain output", async () => {
+	test("preview and Doctor remain authority-free through the runtime in json and plain output", async () => {
 		for (const command of ["preview", "doctor"] as const) {
-			const station = stationById(`${command}.read_only`);
+			const station = stationById(
+				command === "doctor"
+					? "doctor.private_task_reconciliation"
+					: "preview.read_only",
+			);
 			const json = await runVaultGitForTest([command, "--json"], {
 				runId: `run-${command}-json`,
 			});

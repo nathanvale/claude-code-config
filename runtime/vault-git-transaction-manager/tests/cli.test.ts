@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
 	createVaultGitCliComposition,
 	projectVaultGitBackgroundWorkerEnvironment,
+	readVaultGitProcessIdentity,
 	runVaultGitForTest,
 	type VaultGitCliComposition,
 } from "../src/cli.ts";
@@ -18,7 +20,11 @@ import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
-import type { VaultGitRepairAction } from "../src/model.ts";
+import type {
+	VaultGitReceipt,
+	VaultGitRepairAction,
+	VaultGitTaskState,
+} from "../src/model.ts";
 import type { VaultGitRuntimePort } from "../src/ports.ts";
 import type {
 	VaultGitRepairInput,
@@ -47,12 +53,46 @@ describe("vault-git CLI composition", () => {
 				AWS_SECRET_ACCESS_KEY: "must-not-cross",
 				BITBUCKET_API_TOKEN: "must-not-cross",
 				VAULT_GIT_TASK_ID: "hostile-parent-task",
+				VAULT_GIT_TASK_LAUNCH_GENERATION: "hostile-parent-generation",
 			}),
 		).toEqual({
 			HOME: "/profile",
 			PATH: "/bin",
 			VAULT_GIT_REPOSITORY_PATH: "/vault",
 		});
+	});
+
+	test("derives portable process identity from Linux start ticks with a C-locale ps fallback", () => {
+		const pid = 42;
+		const statFields = ["S", ...Array.from({ length: 18 }, (_, index) => String(index)), "987654"];
+		const procIdentity = readVaultGitProcessIdentity(pid, {
+			platform: "linux",
+			readLinuxProcStat: () => `${pid} (worker ) name) ${statFields.join(" ")}`,
+			readPsStart: () => {
+				throw new Error("ps fallback not expected");
+			},
+		});
+		expect(procIdentity).toBe(
+			createHash("sha256").update(`${pid}\0${"987654"}`).digest("hex"),
+		);
+
+		let observedLocale: string | undefined;
+		const fallbackIdentity = readVaultGitProcessIdentity(pid, {
+			platform: "linux",
+			readLinuxProcStat: () => {
+				throw new Error("proc unavailable");
+			},
+			readPsStart: (_candidatePid, env) => {
+				observedLocale = env.LC_ALL;
+				return "Thu Aug 13 12:00:00 2026";
+			},
+		});
+		expect(observedLocale).toBe("C");
+		expect(fallbackIdentity).toBe(
+			createHash("sha256")
+				.update(`${pid}\0Thu Aug 13 12:00:00 2026`)
+				.digest("hex"),
+		);
 	});
 
 	test("withholds process-fixture controls unless the harness opts in", () => {
@@ -504,7 +544,7 @@ describe("vault-git CLI composition", () => {
 		expect(envelope.runtime_actions).toHaveLength(1);
 	});
 
-	test("keeps the public doctor command read-only", async () => {
+	test("keeps Doctor authority-free while allowing owner-private task evidence reconciliation", async () => {
 		let issueTakeoverToken: boolean | undefined;
 		const engine = fakeEngine({
 			async doctor(input) {
@@ -534,7 +574,162 @@ describe("vault-git CLI composition", () => {
 			command: "doctor",
 			outcome: "read_only",
 			changed_state: "none",
+			write_permission: "denied",
 		});
+	});
+
+	test("maps owner capability read failures to a Doctor-owned recovery action", async () => {
+		for (const failure of [
+			Object.assign(new Error("missing"), { code: "ENOENT" }),
+			Object.assign(new Error("not private"), { code: "EPERM" }),
+		]) {
+			const composition = fakeComposition(fakeEngine(), {
+				async load() {
+					return { status: "loaded", receipt: activeReceipt(), history: [], historyPaths: [] };
+				},
+				async readCapability() {
+					throw failure;
+				},
+			});
+			const run = await runVaultGitForTest(
+				[
+					"complete",
+					"--transaction-id",
+					activeReceipt().transactionId ?? "missing",
+					"--summary",
+					"docs(vault): record note",
+					"--json",
+				],
+				{ composition },
+			);
+			const envelope = JSON.parse(run.stdout);
+			const expectedBlocker = failure.code === "ENOENT"
+				? "capability_missing"
+				: "receipt_conflict";
+
+			expect(run.exitCode).toBe(1);
+			expect(envelope).toMatchObject({
+				status: "error",
+				error: { code: expectedBlocker },
+				data: {
+					outcome: "refused",
+					blockers: [expectedBlocker],
+					changed_state: "none",
+					next_action: { id: "run_doctor" },
+				},
+				continuation: { next_action_id: "run_doctor" },
+			});
+			expect(run.stderr).toBe("");
+		}
+	});
+
+	test("keeps expired-launch recovery inside the original acknowledgement budget", async () => {
+		let state = taskState({
+			state: "launching",
+			launchGeneration: "launch_expired",
+			launchExpiresAt: "1970-01-01T00:00:00.000Z",
+			workerPid: 99,
+			workerProcessIdentity: "identity-expired",
+			launchAttempt: 1,
+		});
+		const base = fakeComposition(fakeEngine(), {
+			async load() {
+				return { status: "loaded", receipt: activeReceipt(), history: [], historyPaths: [] };
+			},
+			async readCapability() {
+				return new Uint8Array([1, 2, 3]);
+			},
+		});
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: {
+				repositoryId: "task-store-fixture",
+				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
+				claimPath: () => "/private/claims/receipt",
+				async claimOrJoin(input) {
+					expect(input.capabilityDigest).toBe(
+						createHash("sha256").update(new Uint8Array([1, 2, 3])).digest("hex"),
+					);
+					return { status: "existing", launch: "joined", state };
+				},
+				async load() { return { status: "loaded", state, history: [state] }; },
+				async loadByTaskId() { return { status: "loaded", state, history: [state] }; },
+				async materializeClaimState() { return { status: "loaded", state }; },
+				async transition(_taskId, expectedRevision, changes) {
+					expect(expectedRevision).toBe(state.revision);
+					state = {
+						...state,
+						...changes,
+						revision: state.revision + 1,
+					} as VaultGitTaskState;
+					return { status: "transitioned", state };
+				},
+			},
+		};
+		let monotonicMs = 0;
+		let sleptMs = 0;
+		const run = await runVaultGitForTest(
+			[
+				"complete",
+				"--transaction-id",
+				activeReceipt().transactionId ?? "missing",
+				"--summary",
+				"docs(vault): recover launch",
+				"--json",
+			],
+			{
+				composition,
+				backgroundCompletionRuntime: {
+					now: () => monotonicMs,
+					async sleep(milliseconds) {
+						monotonicMs += milliseconds;
+						sleptMs += milliseconds;
+					},
+					spawnWorker: () => 100,
+					readProcessIdentity: () => "replacement-identity",
+					async stopExpiredWorker() {
+						monotonicMs += 1_000;
+						return true;
+					},
+				},
+			},
+		);
+
+		expect(run.exitCode).toBe(1);
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			error: { code: "worker_launch_protocol_failed" },
+			data: { task_state: "launching" },
+		});
+		expect(sleptMs).toBe(500);
+		expect(monotonicMs).toBe(1_500);
+	});
+
+	test("projects lease_generation verbatim in public task JSON", async () => {
+		const state = taskState({ state: "in_progress", phase: "running" });
+		const base = fakeComposition(fakeEngine());
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: {
+				repositoryId: "task-store-fixture",
+				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
+				claimPath: () => "/private/claims/receipt",
+				async claimOrJoin() { throw new Error("claim not expected"); },
+				async load() { return { status: "loaded", state, history: [state] }; },
+				async loadByTaskId() { return { status: "loaded", state, history: [state] }; },
+				async materializeClaimState() { return { status: "loaded", state }; },
+				async transition() { throw new Error("transition not expected"); },
+			},
+		};
+		const run = await runVaultGitForTest(
+			["status", "--task-id", state.taskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(JSON.parse(run.stdout).data.lease_generation).toBe(
+			state.leaseGeneration,
+		);
+		expect(run.stdout).toContain(state.leaseGeneration);
 	});
 
 	test("reports an unknown task locally with one cause-specific action", async () => {
@@ -545,10 +740,10 @@ describe("vault-git CLI composition", () => {
 				repositoryId: "task-store-fixture",
 				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
 				claimPath: () => "/private/claims/receipt",
-				async admit() { throw new Error("admit not expected"); },
 				async claimOrJoin() { throw new Error("claim not expected"); },
 				async load() { return { status: "absent" }; },
 				async loadByTaskId() { return { status: "absent" }; },
+				async materializeClaimState() { return { status: "absent" }; },
 				async transition() { throw new Error("transition not expected"); },
 			},
 		};
@@ -578,10 +773,10 @@ describe("vault-git CLI composition", () => {
 				repositoryId: "a".repeat(64),
 				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
 				claimPath() { return "/private/claim"; },
-				async admit() { throw new Error("admit not expected"); },
 				async claimOrJoin() { throw new Error("claim not expected"); },
 				async load() { return { status: "absent" }; },
 				async loadByTaskId() { return { status: "corrupt", reason: "malformed" }; },
+				async materializeClaimState() { return { status: "absent" }; },
 				async transition() { throw new Error("transition not expected"); },
 			},
 		};
@@ -1062,5 +1257,61 @@ function repairResult(
 		retrySafety: "same_input_safe",
 		nextAction: { id: nextAction, summary: "Fixture next action." },
 		diagnosticsReference: "repair:fixture",
+	};
+}
+
+function activeReceipt(): VaultGitReceipt {
+	return {
+		schemaVersion: 2,
+		receiptId: "receipt_11111111111111111111111111111111",
+		transactionId: "txn_11111111111111111111111111111111",
+		revision: 2,
+		phase: "writing",
+		transition: "write_authority_granted",
+		recordedAt: "2026-08-13T00:00:00.000Z",
+		event: "note_created",
+		actor: "agent-a",
+		host: "host-a",
+		remote: "origin",
+		ownedPaths: [
+			{ path: "notes/example.md", baselineHash: null, admittedNewFile: true },
+		],
+		unrelatedState: { statusHex: "", indexHex: "" },
+		localMainHead: "a".repeat(40),
+		remoteMainHead: "a".repeat(40),
+		expectedLeaseGeneration: "b".repeat(40),
+		leaseGeneration: "c".repeat(40),
+		leaseAcquiredAt: "2026-08-13T00:00:00.000Z",
+		leaseDurationMs: 60_000,
+		commitId: null,
+		expectedMainCommit: null,
+		ledgerReleaseId: null,
+		pushOutcome: "not_attempted",
+		nextSafeAction: "resume_writing",
+		diagnosticsReference: "receipt:fixture",
+	};
+}
+
+function taskState(overrides: Partial<VaultGitTaskState> = {}): VaultGitTaskState {
+	return {
+		schemaVersion: 1,
+		taskId: "task_11111111111111111111111111111111",
+		receiptId: activeReceipt().receiptId,
+		transactionId: activeReceipt().transactionId ?? "missing",
+		leaseGeneration: activeReceipt().leaseGeneration ?? "missing",
+		revision: 1,
+		state: "claimed",
+		phase: "admitted",
+		recordedAt: "1970-01-01T00:00:00.000Z",
+		updatedAt: "1970-01-01T00:00:00.000Z",
+		heartbeatAt: null,
+		checkpoint: null,
+		launchGeneration: null,
+		launchExpiresAt: null,
+		workerPid: null,
+		workerProcessIdentity: null,
+		launchAttempt: 0,
+		terminalResult: null,
+		...overrides,
 	};
 }

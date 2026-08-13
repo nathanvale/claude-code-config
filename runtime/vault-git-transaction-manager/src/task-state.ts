@@ -49,6 +49,32 @@ export type VaultGitTaskClaim = Readonly<
 	VaultGitTaskState & { readonly bindingDigest: string }
 >;
 
+const VAULT_GIT_TASK_STATE_KEYS = [
+	"schemaVersion",
+	"taskId",
+	"receiptId",
+	"transactionId",
+	"leaseGeneration",
+	"revision",
+	"state",
+	"phase",
+	"recordedAt",
+	"updatedAt",
+	"heartbeatAt",
+	"checkpoint",
+	"launchGeneration",
+	"launchExpiresAt",
+	"workerPid",
+	"workerProcessIdentity",
+	"launchAttempt",
+	"terminalResult",
+] as const;
+
+const VAULT_GIT_TASK_CLAIM_KEYS = [
+	...VAULT_GIT_TASK_STATE_KEYS,
+	"bindingDigest",
+] as const;
+
 /** Exact durable acknowledgement required before one task-worker launch. */
 export interface VaultGitTaskWorkerAcknowledgement {
 	readonly schemaVersion: 1;
@@ -146,6 +172,8 @@ export function advanceVaultGitTaskState(
 			!(["closed", "repair_needed", "unknown"] as const).includes(
 				input.state as never,
 			)) ||
+		(input.launchAttempt !== undefined &&
+			input.launchAttempt < previous.launchAttempt) ||
 		Date.parse(input.updatedAt) < Date.parse(previous.updatedAt)
 	) {
 		throw new Error("task state transition invalid");
@@ -207,55 +235,16 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 		throw new Error("task claim invalid");
 	}
 	const record = value as Record<string, unknown>;
-	const expectedKeys = [
-		"schemaVersion",
-		"taskId",
-		"receiptId",
-		"transactionId",
-		"leaseGeneration",
-		"revision",
-		"state",
-		"phase",
-		"recordedAt",
-		"updatedAt",
-		"heartbeatAt",
-		"checkpoint",
-		"launchGeneration",
-		"launchExpiresAt",
-		"workerPid",
-		"workerProcessIdentity",
-		"launchAttempt",
-		"terminalResult",
-		"bindingDigest",
-	] as const;
 	if (
-		Object.keys(record).length !== expectedKeys.length ||
-		!expectedKeys.every((key) => Object.hasOwn(record, key)) ||
+		Object.keys(record).length !== VAULT_GIT_TASK_CLAIM_KEYS.length ||
+		!VAULT_GIT_TASK_CLAIM_KEYS.every((key) => Object.hasOwn(record, key)) ||
 		typeof record.bindingDigest !== "string" ||
 		!/^[0-9a-f]{64}$/.test(record.bindingDigest)
 	) {
 		throw new Error("task claim invalid");
 	}
-	const state = parseVaultGitTaskState({
-		schemaVersion: record.schemaVersion,
-		taskId: record.taskId,
-		receiptId: record.receiptId,
-		transactionId: record.transactionId,
-		leaseGeneration: record.leaseGeneration,
-		revision: record.revision,
-		state: record.state,
-		phase: record.phase,
-		recordedAt: record.recordedAt,
-		updatedAt: record.updatedAt,
-		heartbeatAt: record.heartbeatAt,
-		checkpoint: record.checkpoint,
-		launchGeneration: record.launchGeneration,
-		launchExpiresAt: record.launchExpiresAt,
-		workerPid: record.workerPid,
-		workerProcessIdentity: record.workerProcessIdentity,
-		launchAttempt: record.launchAttempt,
-		terminalResult: record.terminalResult,
-	});
+	const { bindingDigest: _bindingDigest, ...stateValue } = record;
+	const state = parseVaultGitTaskState(stateValue);
 	return Object.freeze({ ...state, bindingDigest: record.bindingDigest });
 }
 
@@ -399,26 +388,6 @@ export function digestVaultGitTaskBinding(
  * ```
  */
 export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
-	const expectedKeys = [
-		"schemaVersion",
-		"taskId",
-		"receiptId",
-		"transactionId",
-		"leaseGeneration",
-		"revision",
-		"state",
-		"phase",
-		"recordedAt",
-		"updatedAt",
-		"heartbeatAt",
-		"checkpoint",
-		"launchGeneration",
-		"launchExpiresAt",
-		"workerPid",
-		"workerProcessIdentity",
-		"launchAttempt",
-		"terminalResult",
-	] as const;
 	if (
 		typeof value !== "object" ||
 		value === null ||
@@ -428,8 +397,8 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 	}
 	const record = value as Record<string, unknown>;
 	if (
-		Object.keys(record).length !== expectedKeys.length ||
-		!expectedKeys.every((key) => Object.hasOwn(record, key)) ||
+		Object.keys(record).length !== VAULT_GIT_TASK_STATE_KEYS.length ||
+		!VAULT_GIT_TASK_STATE_KEYS.every((key) => Object.hasOwn(record, key)) ||
 		record.schemaVersion !== 1 ||
 		typeof record.taskId !== "string" ||
 		!/^task_[0-9a-f]{32}$/.test(record.taskId) ||

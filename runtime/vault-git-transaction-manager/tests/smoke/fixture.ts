@@ -341,8 +341,14 @@ async function mkSmokeClone(
 					`worker launch did not succeed: ${accepted.stdout}${accepted.stderr}`,
 				);
 			}
+			const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(
+				accepted,
+			).data?.task_id;
+			if (!taskId || !/^task_[0-9a-f]{32}$/.test(taskId)) {
+				throw new Error("worker launch omitted a valid task id");
+			}
 			await waitForFile(`${gate}.ready`, 30_000);
-			const workerPid = await readWorkerPid(stateRoot, 10_000);
+			const workerPid = await readWorkerPid(stateRoot, taskId, 10_000);
 			try {
 				process.kill(workerPid, "SIGKILL");
 			} catch (error) {
@@ -355,8 +361,9 @@ async function mkSmokeClone(
 			while (Date.now() < deadline) {
 				try {
 					process.kill(workerPid, 0);
-				} catch {
-					return;
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+					throw error;
 				}
 				await Bun.sleep(10);
 			}
@@ -471,24 +478,45 @@ async function mkSmokeClone(
 	};
 }
 
-/** Read the acknowledged worker's pid from the private task record. */
+/** Read the acknowledged worker's pid from its latest task history revision. */
 async function readWorkerPid(
 	stateRoot: string,
+	taskId: string,
 	timeoutMs: number,
 ): Promise<number> {
+	if (!/^task_[0-9a-f]{32}$/.test(taskId)) throw new Error("invalid task id");
 	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		for (const repository of await readdir(managerRoot).catch(() => [])) {
-			const tasks = join(managerRoot, repository, "tasks");
-			for (const taskId of await readdir(tasks).catch(() => [])) {
-				const source = await readFile(
-					join(tasks, taskId, "current.json"),
-					"utf8",
-				).catch(() => "");
-				if (!source) continue;
-				const record = JSON.parse(source) as { workerPid: number | null };
-				if (record.workerPid !== null) return record.workerPid;
+			const history = join(
+				managerRoot,
+				repository,
+				"tasks",
+				taskId,
+				"history",
+			);
+			const latest = (await readdir(history).catch(() => []))
+				.filter((name) => /^\d{12}\.json$/.test(name))
+				.sort()
+				.at(-1);
+			if (!latest) continue;
+			const source = await readFile(join(history, latest), "utf8").catch(() => "");
+			if (!source) continue;
+			try {
+				const record = JSON.parse(source) as {
+					taskId?: string;
+					workerPid?: number | null;
+				};
+				if (
+					record.taskId === taskId &&
+					Number.isSafeInteger(record.workerPid) &&
+					(record.workerPid as number) > 0
+				) {
+					return record.workerPid as number;
+				}
+			} catch {
+				// A concurrently published or malformed revision is never authoritative.
 			}
 		}
 		await Bun.sleep(10);

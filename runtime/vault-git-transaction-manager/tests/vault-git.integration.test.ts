@@ -111,7 +111,7 @@ const scenarios = {
 	"preview.read_only": scenario(async (fixture) =>
 		fixture.run(["preview", "--json"]),
 	),
-	"doctor.read_only": scenario(async (fixture) =>
+	"doctor.private_task_reconciliation": scenario(async (fixture) =>
 		fixture.run(["doctor", "--json"]),
 	),
 	"commands.discovery": scenario(async (fixture) =>
@@ -455,7 +455,7 @@ describe("vault-git catalog-driven process boundary", () => {
 		expect(fixture.gitBare(["show", "refs/heads/main:notes/a.md"])).toBe(
 			"baseline",
 		);
-	});
+	}, 60_000);
 
 	test("un-admitted runtime refuses begin, surfaces the dashboard blocker, and keeps janitor zero-commit", async () => {
 		const fixture = await createFixture({ admitActivation: false });

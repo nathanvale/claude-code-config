@@ -71,25 +71,28 @@ describe("row 9: an owned path changes before index freeze", () => {
 		const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(
 			completed,
 		).data?.task_id;
+		if (!taskId) throw new Error("accepted completion omitted task id");
 		let taskStatus = await fixture.run([
 			"status",
 			"--task-id",
-			taskId ?? "task_missing",
+			taskId,
 			"--json",
 		]);
+		let taskState: string | undefined;
 		for (let attempt = 0; attempt < 200; attempt += 1) {
-			const state = parseCliProcessJson<{ data?: { task_state?: string } }>(
+			taskState = parseCliProcessJson<{ data?: { task_state?: string } }>(
 				taskStatus,
 			).data?.task_state;
-			if (state === "repair_needed" || state === "unknown") break;
+			if (taskState === "repair_needed" || taskState === "unknown") break;
 			await Bun.sleep(10);
 			taskStatus = await fixture.run([
 				"status",
 				"--task-id",
-				taskId ?? "task_missing",
+				taskId,
 				"--json",
 			]);
 		}
+		expect(taskState).toBe("repair_needed");
 		expect(parseCliProcessJson(taskStatus)).toMatchObject({
 			status: "ok",
 			data: {

@@ -380,8 +380,28 @@ async function expectedContinuationBindings(
 	if (loaded.status !== "loaded") {
 		throw new AuthorityDenial("revalidation_unavailable");
 	}
+	// A fresh human-reviewed activation deliberately establishes a new safe
+	// baseline after the documented activation-blocked fallback. An older closed
+	// receipt is historical evidence, not authority to override that approval.
+	// Receipts created after the evidence remain authoritative so normal
+	// transaction closure continues to advance the admitted baseline.
+	if (
+		loaded.receipt.phase === "closed" &&
+		recordedBefore(loaded.receipt.recordedAt, evidence.capturedAt)
+	) {
+		return evidence;
+	}
 	const mutable = expectedReceiptBindings(loaded.receipt);
 	return { ...evidence, ...mutable };
+}
+
+function recordedBefore(left: string, right: string): boolean {
+	const leftMs = Date.parse(left);
+	const rightMs = Date.parse(right);
+	if (!Number.isFinite(leftMs) || !Number.isFinite(rightMs)) {
+		throw new AuthorityDenial("revalidation_unavailable");
+	}
+	return leftMs < rightMs;
 }
 
 function expectedReceiptBindings(receipt: VaultGitReceipt): Pick<

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,9 +7,57 @@ import {
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
 } from "../src/task-reconciliation.ts";
+import {
+	createNodeVaultGitDurabilityPort,
+	type VaultGitDurabilityPort,
+} from "../src/store.ts";
 import { createVaultGitTaskStore } from "../src/task-store.ts";
 
 describe("task closure reconciliation", () => {
+	test("claim-only closure materializes revision one and preserves the claim task ID", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-task-claim-only-"));
+		try {
+			const receiptId = "receipt_11111111111111111111111111111111";
+			const transactionId = "txn_11111111111111111111111111111111";
+			const interrupted = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "repo-claim-only",
+				durability: rejectTaskStatePublication(),
+			});
+			await expect(interrupted.claimOrJoin({
+				claimReceiptId: receiptId,
+				receiptId,
+				transactionId,
+				remote: "origin",
+				generation: "a".repeat(40),
+				capabilityDigest: "b".repeat(64),
+				normalizedInput: '{"command":"complete"}',
+				recordedAt: "2026-08-12T11:30:00.000Z",
+			})).rejects.toThrow("task state durability unavailable");
+			const claimedTaskId = JSON.parse(
+				await readFile(interrupted.claimPath(receiptId), "utf8"),
+			).taskId as string;
+
+			const recovered = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "repo-claim-only",
+			});
+			await reconcileClosedVaultGitTask(recovered, {
+				receiptId,
+				transactionId,
+				changedState: "none",
+				recordedAt: "2026-08-12T11:31:00.000Z",
+			});
+
+			expect(await recovered.load(receiptId)).toMatchObject({
+				status: "loaded",
+				state: { taskId: claimedTaskId, state: "closed", revision: 2 },
+			});
+		} finally {
+			await rm(stateRoot, { recursive: true, force: true });
+		}
+	});
+
 	test("Doctor proof closes the same repair task without another admission", async () => {
 		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-task-reconcile-"));
 		try {
@@ -167,6 +215,60 @@ describe("task closure reconciliation", () => {
 		}
 	});
 
+	test("Doctor maps an absent push-pending outcome to unknown", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-task-push-pending-"));
+		try {
+			const store = createVaultGitTaskStore({ stateRoot, repositoryIdentity: "repo-push" });
+			const receiptId = "receipt_12121212121212121212121212121212";
+			const transactionId = "txn_34343434343434343434343434343434";
+			const admission = await store.claimOrJoin({
+				claimReceiptId: receiptId,
+				receiptId,
+				transactionId,
+				remote: "origin",
+				generation: "e".repeat(40),
+				capabilityDigest: "f".repeat(64),
+				normalizedInput: '{"command":"complete"}',
+				recordedAt: "2026-08-12T11:30:00.000Z",
+			});
+			if (admission.status === "refused") throw new Error("test admission refused");
+			await store.transition(admission.state.taskId, admission.state.revision, {
+				state: "in_progress",
+				phase: "running",
+				updatedAt: "2026-08-12T11:30:01.000Z",
+				heartbeatAt: "2026-08-12T11:30:01.000Z",
+				checkpoint: "push_pending",
+				launchGeneration: "launch_56565656565656565656565656565656",
+				launchExpiresAt: null,
+				workerPid: 12345,
+				workerProcessIdentity: "a".repeat(64),
+			});
+
+			await reconcileStaleVaultGitTaskFromDoctor(store, receiptId, {
+				status: "diagnosed",
+				state: "absent",
+				phase: "push_pending",
+				finding: "remote_outcome_unknown",
+				changedState: "none",
+				retrySafety: "operator_required",
+				nextAction: { id: "retry_remote", summary: "Inspect the remote." },
+				diagnosticsReference: "diag_78787878787878787878787878787878",
+				transactionId,
+			}, "2026-08-12T11:31:00.000Z", () => false);
+
+			expect(await store.load(receiptId)).toMatchObject({
+				status: "loaded",
+				state: {
+					state: "unknown",
+					checkpoint: "push_pending",
+					terminalResult: { blocker: "worker_lost" },
+				},
+			});
+		} finally {
+			await rm(stateRoot, { recursive: true, force: true });
+		}
+	});
+
 	test("an unparsable observation timestamp never terminalizes a dead worker's task", async () => {
 		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-task-nan-"));
 		try {
@@ -219,3 +321,17 @@ describe("task closure reconciliation", () => {
 		}
 	});
 });
+
+function rejectTaskStatePublication(): VaultGitDurabilityPort {
+	const real = createNodeVaultGitDurabilityPort();
+	return {
+		async writeTemp(handle, bytes, target) {
+			if (target === "task_state") throw new Error("crash before task state write");
+			await real.writeTemp(handle, bytes, target);
+		},
+		syncFile: real.syncFile,
+		rename: real.rename,
+		linkExclusive: real.linkExclusive,
+		syncDirectory: real.syncDirectory,
+	};
+}

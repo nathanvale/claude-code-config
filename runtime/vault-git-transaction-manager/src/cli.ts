@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, openSync } from "node:fs";
+import { closeSync, constants, openSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -101,6 +101,7 @@ import {
 	type VaultGitTaskTransitionFence,
 } from "./task-store.ts";
 import {
+	VAULT_GIT_TASK_HEARTBEAT_STALE_MS,
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
 } from "./task-reconciliation.ts";
@@ -319,6 +320,17 @@ export interface VaultGitCliOptions {
 	readonly launchPrivate?: boolean;
 	/** Human-only review interaction; tests inject explicit decisions. */
 	readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
+	/** Background completion process and monotonic-time seams for focused tests. */
+	readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
+}
+
+/** Process and monotonic-time operations used by foreground task acknowledgement. */
+export interface VaultGitBackgroundCompletionRuntime {
+	readonly now: () => number;
+	readonly sleep: (milliseconds: number) => Promise<void>;
+	readonly spawnWorker: typeof spawnBackgroundWorker;
+	readonly readProcessIdentity: (pid: number) => string;
+	readonly stopExpiredWorker: typeof stopExpiredUnacknowledgedWorker;
 }
 
 /** Human-review action selected by the guarded activation journey. */
@@ -932,6 +944,9 @@ export async function main(
 				composition,
 				invocation: invocation as VaultGitRuntimeInvocation & { readonly command: "complete" },
 				args,
+				backgroundRuntime:
+					options.backgroundCompletionRuntime ??
+					DEFAULT_BACKGROUND_COMPLETION_RUNTIME,
 				stdout,
 				stderr,
 				runId: diagnostics.options.runId,
@@ -1012,6 +1027,7 @@ export async function runVaultGitForTest(
 		readonly readCapability?: (descriptor: number) => Promise<Uint8Array>;
 		readonly launchPrivate?: boolean;
 		readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
+		readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
 	} = {},
 ): Promise<VaultGitCliRun> {
 	const stdout = new BufferWriter();
@@ -1031,6 +1047,9 @@ export async function runVaultGitForTest(
 			: { launchPrivate: options.launchPrivate }),
 		...(options.humanActivationReview
 			? { humanActivationReview: options.humanActivationReview }
+			: {}),
+		...(options.backgroundCompletionRuntime
+			? { backgroundCompletionRuntime: options.backgroundCompletionRuntime }
 			: {}),
 	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
@@ -1586,8 +1605,12 @@ async function launchBackgroundCompletion(input: EmitContext & {
 	readonly composition: VaultGitCliComposition;
 	readonly invocation: VaultGitRuntimeInvocation & { readonly command: "complete" };
 	readonly args: readonly string[];
+	readonly backgroundRuntime: VaultGitBackgroundCompletionRuntime;
 	readonly stderr: CliWriter;
 }): Promise<number> {
+	// One foreground budget covers receipt loading, stale-launch recovery,
+	// replacement launch, and acknowledgement. Recovery must not reset it.
+	const acknowledgementDeadline = input.backgroundRuntime.now() + 1_500;
 	const loaded = await input.composition.store.load();
 	if (
 		loaded.status !== "loaded" ||
@@ -1608,10 +1631,23 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		});
 		return emitPayload({ ...input, payload, success: false, errorCode: "receipt_conflict" });
 	}
-	const capability = await input.composition.store.readCapability(
-		loaded.receipt.receiptId,
-		"owner",
-	);
+	let capability: Uint8Array;
+	try {
+		capability = await input.composition.store.readCapability(
+			loaded.receipt.receiptId,
+			"owner",
+		);
+	} catch (error) {
+		return emitBackgroundCapabilityReadFailure(input, loaded.receipt.phase,
+			isMissingFileError(error) ? "capability_missing" : "receipt_conflict");
+	}
+	if (capability.byteLength === 0) {
+		return emitBackgroundCapabilityReadFailure(
+			input,
+			loaded.receipt.phase,
+			"capability_missing",
+		);
+	}
 	const capabilityDigest = createHash("sha256").update(capability).digest("hex");
 	const taskStore = requireTaskStore(input.composition);
 	const admission = await taskStore.claimOrJoin({
@@ -1649,7 +1685,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		state.launchExpiresAt !== null &&
 		Date.parse(state.launchExpiresAt) <= input.now()
 	) {
-		const stopped = await stopExpiredUnacknowledgedWorker(
+		const stopped = await input.backgroundRuntime.stopExpiredWorker(
 			state.workerPid,
 			state.workerProcessIdentity,
 		);
@@ -1705,14 +1741,14 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		state = launching.state;
 		launchWinner = launching.status === "transitioned";
 		if (launchWinner) try {
-			const workerPid = spawnBackgroundWorker(
+			const workerPid = input.backgroundRuntime.spawnWorker(
 				input.composition,
 				loaded.receipt.receiptId,
 				state.taskId,
 				launchGeneration,
 				input.args,
 			);
-			const workerProcessIdentity = await readProcessIdentity(workerPid);
+			const workerProcessIdentity = input.backgroundRuntime.readProcessIdentity(workerPid);
 			const registered = await taskStore.transition(state.taskId, state.revision, {
 				state: "launching",
 				phase: "admitted",
@@ -1750,9 +1786,11 @@ async function launchBackgroundCompletion(input: EmitContext & {
 			}, { expectedLaunchGeneration: launchGeneration });
 		}
 	}
-	const acknowledgementDeadline = performance.now() + 1_500;
-	while (state.state !== "in_progress" && performance.now() < acknowledgementDeadline) {
-		await Bun.sleep(10);
+	while (
+		state.state !== "in_progress" &&
+		input.backgroundRuntime.now() < acknowledgementDeadline
+	) {
+		await input.backgroundRuntime.sleep(10);
 		const current = await taskStore.loadByTaskId(state.taskId);
 		if (current.status !== "loaded") break;
 		state = current.state;
@@ -1806,6 +1844,37 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		next_action: action("inspect_status", "Inspect this task for durable progress."),
 	});
 	return emitPayload({ ...input, payload, success: true, errorCode: "" });
+}
+
+function emitBackgroundCapabilityReadFailure(
+	input: EmitContext & {
+		readonly invocation: VaultGitRuntimeInvocation & { readonly command: "complete" };
+		readonly stderr: CliWriter;
+	},
+	phase: VaultGitTransactionPhase,
+	blocker: "capability_missing" | "receipt_conflict",
+): number {
+	const payload = createVaultGitLifecycleResult({
+		command: "complete",
+		outcome: "refused",
+		phase,
+		write_permission: "denied",
+		changed_state: "none",
+		retry_safety: "operator_required",
+		blockers: [blocker],
+		transaction_id: input.invocation.transactionId,
+		next_action: action("run_doctor"),
+	});
+	return emitPayload({ ...input, payload, success: false, errorCode: blocker });
+}
+
+function isMissingFileError(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
 }
 
 function spawnBackgroundWorker(
@@ -1867,17 +1936,62 @@ function stopUnacknowledgedWorker(pid: number): void {
 	}
 }
 
-async function readProcessIdentity(pid: number): Promise<string> {
-	const output = Bun.spawnSync(["/bin/ps", "-o", "lstart=", "-p", String(pid)]);
-	if (output.exitCode !== 0) throw new Error("background worker identity unavailable");
-	const started = output.stdout.toString().trim();
-	if (started.length === 0) throw new Error("background worker identity unavailable");
+/** Injectable process-identity sources used by portability tests. */
+export interface VaultGitProcessIdentitySources {
+	readonly platform?: NodeJS.Platform;
+	readonly readLinuxProcStat?: (pid: number) => string;
+	readonly readPsStart?: (pid: number, env: NodeJS.ProcessEnv) => string | null;
+}
+
+/**
+ * Hash one PID with its OS-owned process start identity.
+ * Linux prefers /proc start ticks; other hosts and restricted /proc use ps.
+ */
+export function readVaultGitProcessIdentity(
+	pid: number,
+	sources: VaultGitProcessIdentitySources = {},
+): string {
+	let started: string | null = null;
+	if ((sources.platform ?? process.platform) === "linux") {
+		try {
+			const stat = (sources.readLinuxProcStat ?? ((candidatePid) =>
+				readFileSync(`/proc/${candidatePid}/stat`, "utf8")))(pid);
+			started = parseLinuxProcessStartTicks(stat);
+		} catch {
+			// Restricted or racing /proc falls back to the portable ps contract.
+		}
+	}
+	if (started === null) {
+		const environment = { ...process.env, LC_ALL: "C" };
+		started = (sources.readPsStart ?? readPsProcessStart)(pid, environment);
+	}
+	if (started === null || started.length === 0) {
+		throw new Error("background worker identity unavailable");
+	}
 	return createHash("sha256").update(`${pid}\0${started}`).digest("hex");
 }
 
-async function processIdentityMatches(pid: number, expected: string): Promise<boolean> {
+function parseLinuxProcessStartTicks(stat: string): string | null {
+	const commandEnd = stat.lastIndexOf(")");
+	if (commandEnd < 0) return null;
+	// Fields after comm begin at field 3 (state); starttime is field 22.
+	const fields = stat.slice(commandEnd + 1).trim().split(/\s+/);
+	const startTicks = fields[19];
+	return startTicks && /^\d+$/.test(startTicks) ? startTicks : null;
+}
+
+function readPsProcessStart(pid: number, env: NodeJS.ProcessEnv): string | null {
+	const output = Bun.spawnSync(["/bin/ps", "-o", "lstart=", "-p", String(pid)], {
+		env,
+	});
+	if (output.exitCode !== 0) return null;
+	const started = output.stdout.toString().trim();
+	return started.length > 0 ? started : null;
+}
+
+function processIdentityMatches(pid: number, expected: string): boolean {
 	try {
-		return isProcessAlive(pid) && await readProcessIdentity(pid) === expected;
+		return isProcessAlive(pid) && readVaultGitProcessIdentity(pid) === expected;
 	} catch {
 		return false;
 	}
@@ -1888,24 +2002,32 @@ async function stopExpiredUnacknowledgedWorker(
 	expectedIdentity: string | null,
 ): Promise<boolean> {
 	if (pid === null || expectedIdentity === null) return true;
-	if (!await processIdentityMatches(pid, expectedIdentity)) return true;
+	if (!processIdentityMatches(pid, expectedIdentity)) return true;
 	stopUnacknowledgedWorker(pid);
 	const gracefulDeadline = performance.now() + 250;
-	while (await processIdentityMatches(pid, expectedIdentity) && performance.now() < gracefulDeadline) {
+	while (processIdentityMatches(pid, expectedIdentity) && performance.now() < gracefulDeadline) {
 		await Bun.sleep(10);
 	}
-	if (!await processIdentityMatches(pid, expectedIdentity)) return true;
+	if (!processIdentityMatches(pid, expectedIdentity)) return true;
 	try {
 		process.kill(-pid, "SIGKILL");
 	} catch {
 		// A concurrent retry may have observed the same exact process exit.
 	}
 	const forcedDeadline = performance.now() + 500;
-	while (await processIdentityMatches(pid, expectedIdentity) && performance.now() < forcedDeadline) {
+	while (processIdentityMatches(pid, expectedIdentity) && performance.now() < forcedDeadline) {
 		await Bun.sleep(10);
 	}
-	return !await processIdentityMatches(pid, expectedIdentity);
+	return !processIdentityMatches(pid, expectedIdentity);
 }
+
+const DEFAULT_BACKGROUND_COMPLETION_RUNTIME: VaultGitBackgroundCompletionRuntime = {
+	now: () => performance.now(),
+	sleep: (milliseconds) => Bun.sleep(milliseconds),
+	spawnWorker: spawnBackgroundWorker,
+	readProcessIdentity: readVaultGitProcessIdentity,
+	stopExpiredWorker: stopExpiredUnacknowledgedWorker,
+};
 
 const BACKGROUND_WORKER_ENVIRONMENT_NAMES = [
 	"HOME",
@@ -2739,7 +2861,7 @@ function payloadForRuntime(
 		const stale =
 			value.state === "in_progress" &&
 			value.heartbeatAt !== null &&
-			now - Date.parse(value.heartbeatAt) > 20_000;
+			now - Date.parse(value.heartbeatAt) > VAULT_GIT_TASK_HEARTBEAT_STALE_MS;
 		const nextAction =
 			value.state === "closed"
 				? action("none")

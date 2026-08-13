@@ -43,8 +43,9 @@ if (Number.isFinite(privateLaunchTimeoutMs) && privateLaunchTimeoutMs > 0) {
 }
 
 if (
-	Bun.argv.includes("--capability-fd") &&
-	process.env.VAULT_GIT_TEST_PRIVATE_CHILD_MODE === "malformed_ack"
+	process.env.VAULT_GIT_TEST_PRIVATE_CHILD_MODE === "malformed_ack" &&
+	process.env.VAULT_GIT_TASK_ID &&
+	process.env.VAULT_GIT_TASK_LAUNCH_GENERATION
 ) {
 	process.stdout.write("{malformed-worker-ack");
 	process.exit(0);
