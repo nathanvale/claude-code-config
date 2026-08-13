@@ -5,6 +5,14 @@ import type { VaultGitTaskStore } from "./task-store.ts";
 /** Heartbeat age after which Doctor may investigate a dead task worker. */
 export const VAULT_GIT_TASK_HEARTBEAT_STALE_MS = 20_000;
 
+/**
+ * Window within which a launched Attempt must be acknowledged before the launch
+ * is treated as expired. Governs every site that opens, persists, or waits on
+ * that interval. Distinct from the post-acknowledgement heartbeat-staleness
+ * budget above: this fences the pre-acknowledgement launch, not a live worker.
+ */
+export const VAULT_GIT_LAUNCH_ACK_WINDOW_MS = 1_500;
+
 /** Evidence already classified by the existing Doctor or repair owner. */
 export interface VaultGitTaskClosureEvidence {
 	readonly receiptId: string;
