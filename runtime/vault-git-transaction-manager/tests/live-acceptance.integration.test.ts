@@ -5,6 +5,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	readdir,
 	rm,
 	symlink,
 	writeFile,
@@ -381,6 +382,183 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 				changedErrorCode: "task_input_mismatch",
 				changedOutcome: "refused",
 				changedTaskId: undefined,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"a parent killed after durable claim leaves one task and one worker on retry",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"claim-before-spawn event\n",
+			);
+			const summary = "docs(vault): record claim-before-spawn death";
+
+			await fixture.killDuringLaunch(transactionId, summary, "claimed");
+			const tasksAfterDeath = await readTaskStates(fixture.stateRoot);
+
+			const retry = fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			]);
+			await fixture.releaseCheck();
+			const settled = await retry;
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				error?: { code?: string };
+				data?: { task_id?: string; next_action?: { id?: string } };
+			}>(settled);
+			const tasksAfterRetry = await readTaskStates(fixture.stateRoot);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				tasksAfterDeath: tasksAfterDeath.length,
+				tasksAfterRetry: tasksAfterRetry.length,
+				retryReturnedSameTask:
+					envelope.data?.task_id === tasksAfterDeath[0]?.taskId,
+				// Recovery must never fan out into a second writer, whichever side
+				// of the checker barrier the killed attempt's worker reached.
+				atMostOneWorker: workerExecutions <= 1,
+				// The kill can land either side of acknowledgement, so both a join
+				// and a launch-fault refusal are correct -- but never a remote
+				// outage, and never a continuation other than inspect or repair.
+				retryNamesLocalOutcome:
+					envelope.error?.code !== "remote_unavailable" &&
+					["inspect_status", "run_doctor"].includes(
+						envelope.data?.next_action?.id ?? "",
+					),
+			}).toEqual({
+				tasksAfterDeath: 1,
+				tasksAfterRetry: 1,
+				retryReturnedSameTask: true,
+				atMostOneWorker: true,
+				retryNamesLocalOutcome: true,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"a parent killed after acknowledgement returns the same task and never restarts the worker",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"ack-before-response event\n",
+			);
+			const summary = "docs(vault): record ack-before-response death";
+
+			// The worker is already acknowledged and running behind the checker
+			// barrier when its launching parent dies.
+			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
+			const tasksAfterDeath = await readTaskStates(fixture.stateRoot);
+
+			// Let the orphaned worker finish before retrying. Holding it at the
+			// barrier while a second caller joins deadlocks the retry against a
+			// transaction the dead parent's worker still owns.
+			await fixture.releaseCheck();
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				data?: { task_id?: string; task_state?: string };
+			}>(
+				await fixture.run([
+					"complete",
+					"--transaction-id",
+					transactionId,
+					"--summary",
+					summary,
+					"--json",
+				]),
+			);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				tasksAfterDeath: tasksAfterDeath.length,
+				// Acknowledgement was durable before the parent died, so the task
+				// records a running worker rather than an unlaunched claim.
+				deadParentTaskState: tasksAfterDeath[0]?.state,
+				retryReturnedSameTask:
+					envelope.data?.task_id === tasksAfterDeath[0]?.taskId,
+				tasksAfterRetry: (await readTaskStates(fixture.stateRoot)).length,
+				// The contract is idempotent delivery: the retry never starts a
+				// second worker for the acknowledged task.
+				atMostOneWorker: workerExecutions <= 1,
+			}).toEqual({
+				tasksAfterDeath: 1,
+				deadParentTaskState: "in_progress",
+				retryReturnedSameTask: true,
+				tasksAfterRetry: 1,
+				atMostOneWorker: true,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"restarting completion after worker death keeps one task and one worker",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"restart recovery event\n",
+			);
+			const summary = "docs(vault): record restart recovery";
+
+			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
+			const admitted = await readTaskStates(fixture.stateRoot);
+			// Kill the acknowledged worker itself, not just its launching parent.
+			spawnSync("pkill", ["-f", `--transaction-id ${transactionId}`]);
+			await Bun.sleep(250);
+
+			const restarted = await fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			]);
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				data?: { task_id?: string };
+			}>(restarted);
+			await fixture.releaseCheck();
+			const tasksAfterRestart = await readTaskStates(fixture.stateRoot);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				admittedTasks: admitted.length,
+				tasksAfterRestart: tasksAfterRestart.length,
+				restartReturnedSameTask:
+					envelope.data?.task_id === admitted[0]?.taskId,
+				atMostOneWorker: workerExecutions <= 1,
+			}).toEqual({
+				admittedTasks: 1,
+				tasksAfterRestart: 1,
+				restartReturnedSameTask: true,
+				atMostOneWorker: true,
 			});
 		},
 		60_000,
@@ -864,6 +1042,11 @@ interface Fixture {
 	begin(path: string): Promise<string>;
 	owner(args: readonly string[]): Promise<CliProcessResult>;
 	interruptComplete(transactionId: string): Promise<void>;
+	killDuringLaunch(
+		transactionId: string,
+		summary: string,
+		until: "claimed" | "acknowledged",
+	): Promise<void>;
 	releaseCheck(): Promise<void>;
 	git(...args: string[]): string;
 	gitBare(...args: string[]): string;
@@ -1077,6 +1260,45 @@ async function createCloneFixture(
 		child.kill("SIGKILL");
 		await new Promise<void>((resolveChild) => child.once("close", () => resolveChild()));
 	};
+	// Kill the foreground through the ordinary launch path -- no --capability-fd,
+	// so launchBackgroundCompletion actually runs and the detached worker exists.
+	const killDuringLaunch = async (
+		transactionId: string,
+		summary: string,
+		until: "claimed" | "acknowledged",
+	): Promise<void> => {
+		const child = spawn(
+			process.execPath,
+			[
+				"run",
+				cliPath,
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			],
+			{ cwd: packageRoot, env, stdio: ["ignore", "pipe", "pipe"] },
+		);
+		try {
+			await waitForTaskState(
+				stateRoot,
+				until === "claimed"
+					? (state) => state === "claimed" || state === "launching"
+					: (state) => state === "in_progress",
+				10_000,
+			);
+		} catch {
+			// The kill is the point of this helper. Losing the race to the target
+			// state still leaves a dead parent, which the caller's assertions cover.
+		} finally {
+			child.kill("SIGKILL");
+			await new Promise<void>((resolveChild) =>
+				child.once("close", () => resolveChild()),
+			);
+		}
+	};
 	return {
 		root,
 		bare,
@@ -1091,6 +1313,7 @@ async function createCloneFixture(
 		begin,
 		owner,
 		interruptComplete,
+		killDuringLaunch,
 		releaseCheck: () => writeFile(`${checkMarker}.release`, "release\n"),
 		git: (...args) => git(clone, ...args),
 		gitBare: (...args) => git(bare, ...args),
@@ -1270,6 +1493,42 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 		await Bun.sleep(10);
 	}
 	throw new Error(`timed out waiting for ${path}`);
+}
+
+/** Read every durable task record the private state root currently holds. */
+async function readTaskStates(
+	stateRoot: string,
+): Promise<readonly { taskId: string; state: string; phase: string }[]> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const repositories = await readdir(managerRoot).catch(() => []);
+	const states: { taskId: string; state: string; phase: string }[] = [];
+	for (const repository of repositories) {
+		const tasks = join(managerRoot, repository, "tasks");
+		for (const taskId of await readdir(tasks).catch(() => [])) {
+			const source = await readFile(
+				join(tasks, taskId, "current.json"),
+				"utf8",
+			).catch(() => "");
+			if (!source) continue;
+			const record = JSON.parse(source) as { state: string; phase: string };
+			states.push({ taskId, state: record.state, phase: record.phase });
+		}
+	}
+	return states;
+}
+
+async function waitForTaskState(
+	stateRoot: string,
+	matches: (state: string) => boolean,
+	timeoutMs: number,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const states = await readTaskStates(stateRoot);
+		if (states.some((task) => matches(task.state))) return;
+		await Bun.sleep(10);
+	}
+	throw new Error("timed out waiting for durable task state");
 }
 
 function gitShimSource(): string {
