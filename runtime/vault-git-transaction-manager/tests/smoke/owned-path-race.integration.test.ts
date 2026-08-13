@@ -10,7 +10,6 @@ import {
 	assertLedgerOwner,
 	assertLedgerState,
 	assertRefsUnchanged,
-	assertStructuredCode,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
 } from "./fixture.ts";
@@ -68,12 +67,40 @@ describe("row 9: an owned path changes before index freeze", () => {
 			"--json",
 		]);
 
-		expect(completed.exitCode).toBe(1);
-		assertStructuredCode(completed, "completion_baseline_changed");
-		expect(parseCliProcessJson(completed)).toMatchObject({
-			status: "error",
-			data: { phase: "repairable" },
-			continuation: { next_action_id: "run_repair" },
+		expect(completed.exitCode).toBe(0);
+		const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(
+			completed,
+		).data?.task_id;
+		if (!taskId) throw new Error("accepted completion omitted task id");
+		let taskStatus = await fixture.run([
+			"status",
+			"--task-id",
+			taskId,
+			"--json",
+		]);
+		let taskState: string | undefined;
+		for (let attempt = 0; attempt < 200; attempt += 1) {
+			taskState = parseCliProcessJson<{ data?: { task_state?: string } }>(
+				taskStatus,
+			).data?.task_state;
+			if (taskState === "repair_needed" || taskState === "unknown") break;
+			await Bun.sleep(10);
+			taskStatus = await fixture.run([
+				"status",
+				"--task-id",
+				taskId,
+				"--json",
+			]);
+		}
+		expect(taskState).toBe("repair_needed");
+		expect(parseCliProcessJson(taskStatus)).toMatchObject({
+			status: "ok",
+			data: {
+				task_state: "repair_needed",
+				blockers: ["completion_baseline_changed"],
+				task_terminal_result: { phase: "repairable" },
+			},
+			continuation: { next_action_id: "run_doctor" },
 		});
 		assertRefsUnchanged(before, fixture.snapshot());
 		expect(

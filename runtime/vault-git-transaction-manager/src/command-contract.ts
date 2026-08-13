@@ -123,7 +123,7 @@ function actionSummary(id: VaultGitNextActionId): string {
 	if (id === "prepare_fresh") return "Prepare fresh V2 evidence, then return to human review.";
 	if (id === "configure_activation_identity") return "Configure the required host activation identity paths, then rerun Doctor.";
 	if (id === "inspect_configured_vault") return "Inspect the configured vault and its live activation dependencies.";
-	if (id === "run_doctor") return "Run read-only Doctor, then retry explicit preparation.";
+	if (id === "run_doctor") return "Run authority-free Doctor, then follow its reported next action.";
 	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
 	if (id === "change_input") return "Correct the command arguments and retry parsing.";
 	return `Continue with the ${id.replaceAll("_", " ")} action.`;
@@ -165,6 +165,12 @@ const transactionIdFlag = {
 		description: "Select the public transaction correlation id.",
 	},
 } as const;
+const taskIdFlag = {
+	"--task-id": {
+		type: "string",
+		description: "Select one opaque background-completion task.",
+	},
+} as const;
 const capabilityFdFlag = {
 	"--capability-fd": {
 		type: "string",
@@ -186,7 +192,7 @@ const expectedFlags = {
 		"--capability-fd",
 		"--summary",
 	],
-	status: ["--json"],
+	status: ["--json", "--task-id"],
 	activation: ["--json", "--no-input"],
 	preview: ["--json", "--transaction-id"],
 	doctor: ["--json", "--transaction-id"],
@@ -348,7 +354,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	status: {
 		script: "vault-git",
 		summary: "Show bounded read-only transaction state with exactly one next safe action.",
-		usage: [`vault-git status [--json] ${diagnosticsUsage}`],
+		usage: [`vault-git status [--task-id <id>] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
 		mutation: "read",
@@ -359,7 +365,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		interactivity: "none",
 		resultContract: lifecycleResultContract,
 		actionAffordances,
-		flags: jsonFlag,
+		flags: { ...jsonFlag, ...taskIdFlag },
 		exitCodes: vaultGitExitCodes,
 	},
 	activation: {
@@ -403,13 +409,14 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	},
 	doctor: {
 		script: "vault-git",
-		summary: "Classify lifecycle state and deterministic recovery without mutation.",
+		summary: "Classify lifecycle state and reconcile owner-private task evidence without canonical mutation.",
 		usage: [`vault-git doctor [--transaction-id <id>] [--json] ${diagnosticsUsage}`],
 		json: true,
 		audience: "operator",
-		mutation: "preview",
-		sideEffects: ["read", "check", "network"],
-		executionModes: ["check"],
+		mutation: "local_write",
+		sideEffects: ["read", "check", "network", "write"],
+		executionModes: ["normal"],
+		previewExemption,
 		outputModes: ["plain", "json"],
 		capabilityRoles: ["diagnostic"],
 		interactivity: "none",
@@ -523,6 +530,8 @@ export interface ParsedVaultGitInvocation {
 	readonly noInput: boolean;
 	/** Optional non-secret transaction id. */
 	readonly transactionId?: string;
+	/** Optional opaque background task selector. */
+	readonly taskId?: string;
 	/** Optional inherited capability descriptor. */
 	readonly capabilityFd?: number;
 	/** Optional meaningful event type. */
@@ -570,6 +579,7 @@ export function parseVaultGitInvocation(
 	let json = false;
 	let noInput = false;
 	let transactionId: string | undefined;
+	let taskId: string | undefined;
 	let capabilityFd: number | undefined;
 	let event: VaultGitEventType | undefined;
 	let summary: string | undefined;
@@ -628,6 +638,12 @@ export function parseVaultGitInvocation(
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
 				transactionId = parsed;
+				break;
+			}
+			case "--task-id": {
+				const parsed = inlineValue ?? requireValue(argv, index, flag);
+				if (inlineValue === undefined) index += 1;
+				taskId = parsed;
 				break;
 			}
 			case "--capability-fd": {
@@ -694,6 +710,7 @@ export function parseVaultGitInvocation(
 		priorWriterStopped,
 		paths,
 		...(transactionId === undefined ? {} : { transactionId }),
+		...(taskId === undefined ? {} : { taskId }),
 		...(capabilityFd === undefined ? {} : { capabilityFd }),
 		...(event === undefined ? {} : { event }),
 		...(summary === undefined ? {} : { summary }),
