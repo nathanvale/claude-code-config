@@ -1930,15 +1930,31 @@ const BACKGROUND_WORKER_ENVIRONMENT_NAMES = [
 	"VAULT_GIT_SSH_KNOWN_HOSTS_PATH",
 	"VAULT_GIT_SSH_PUBLIC_KEY_PATH",
 	"VAULT_GIT_STATE_ROOT",
-	// Process-fixture controls. Production does not define them.
+] as const;
+
+/**
+ * Process-fixture controls. These redirect git resolution, child behaviour, and
+ * engine interruption, so a worker holding an owner capability must admit them
+ * only when the fixture harness explicitly opts in. Never add one of these to
+ * BACKGROUND_WORKER_ENVIRONMENT_NAMES: that list is forwarded unconditionally.
+ */
+const BACKGROUND_WORKER_TEST_ENVIRONMENT_NAMES = [
 	"VAULT_GIT_CHECK_LOG",
 	"VAULT_GIT_CHECK_MARKER",
 	"VAULT_GIT_REAL_GIT",
 	"VAULT_GIT_SHIM_LOG",
 	"VAULT_GIT_SHIM_MARKER",
 	"VAULT_GIT_SHIM_MODE",
+	"VAULT_GIT_TEST_INTERRUPT_GATE",
+	"VAULT_GIT_TEST_INTERRUPT_POINT",
 	"VAULT_GIT_TEST_PRIVATE_CHILD_MODE",
 ] as const;
+
+/**
+ * Explicit opt-in a fixture sets to admit test controls into a detached worker.
+ * @internal
+ */
+export const VAULT_GIT_TEST_HARNESS_ENVIRONMENT_NAME = "VAULT_GIT_TEST_HARNESS";
 
 /** Project the exact non-secret environment admitted to a detached worker. @internal */
 export function projectVaultGitBackgroundWorkerEnvironment(
@@ -1946,6 +1962,12 @@ export function projectVaultGitBackgroundWorkerEnvironment(
 ): NodeJS.ProcessEnv {
 	const scrubbed: NodeJS.ProcessEnv = {};
 	for (const name of BACKGROUND_WORKER_ENVIRONMENT_NAMES) {
+		const value = source[name];
+		if (value !== undefined) scrubbed[name] = value;
+	}
+	if (source[VAULT_GIT_TEST_HARNESS_ENVIRONMENT_NAME] !== "1") return scrubbed;
+	scrubbed[VAULT_GIT_TEST_HARNESS_ENVIRONMENT_NAME] = "1";
+	for (const name of BACKGROUND_WORKER_TEST_ENVIRONMENT_NAMES) {
 		const value = source[name];
 		if (value !== undefined) scrubbed[name] = value;
 	}

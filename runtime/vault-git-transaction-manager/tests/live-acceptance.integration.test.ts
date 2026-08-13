@@ -1168,6 +1168,7 @@ async function createCloneFixture(
 		VAULT_GIT_REMOTE: "origin",
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_TEST_HARNESS: "1",
 		VAULT_GIT_SHIM_LOG: shimLog,
 		VAULT_GIT_CHECK_LOG: checkLog,
 		...(options.shimMode ? { VAULT_GIT_SHIM_MODE: options.shimMode } : {}),

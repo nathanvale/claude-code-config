@@ -55,6 +55,35 @@ describe("vault-git CLI composition", () => {
 		});
 	});
 
+	test("withholds process-fixture controls unless the harness opts in", () => {
+		const fixtureControls = {
+			VAULT_GIT_REAL_GIT: "/tmp/shim/git",
+			VAULT_GIT_SHIM_MODE: "remote_offline",
+			VAULT_GIT_TEST_INTERRUPT_POINT: "after_local_commit",
+			VAULT_GIT_TEST_INTERRUPT_GATE: "/tmp/gate",
+			VAULT_GIT_TEST_PRIVATE_CHILD_MODE: "malformed_ack",
+		} as const;
+
+		expect(
+			projectVaultGitBackgroundWorkerEnvironment({
+				PATH: "/bin",
+				...fixtureControls,
+			}),
+		).toEqual({ PATH: "/bin" });
+
+		expect(
+			projectVaultGitBackgroundWorkerEnvironment({
+				PATH: "/bin",
+				VAULT_GIT_TEST_HARNESS: "1",
+				...fixtureControls,
+			}),
+		).toEqual({
+			PATH: "/bin",
+			VAULT_GIT_TEST_HARNESS: "1",
+			...fixtureControls,
+		});
+	});
+
 	test("derives the private-store identity from the configured checkout", async () => {
 		const repositoryPath = await temp("vault-git-composition-identity-");
 		const initialized = spawnSync(

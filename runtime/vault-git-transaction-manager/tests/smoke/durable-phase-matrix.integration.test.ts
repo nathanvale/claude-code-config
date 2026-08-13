@@ -565,6 +565,73 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		});
 		expect(JSON.stringify(diagnosis)).not.toContain('"repair_action"');
 	});
+
+	// The cases above kill an owner process started with --capability-fd, which
+	// skips the background launcher entirely. These two kill the detached worker
+	// itself at the phases the background contract names.
+	for (const workerCase of [
+		{
+			name: "after the local commit but before the push",
+			point: "after_local_commit",
+			expectedPhases: ["push_pending", "committing"],
+		},
+		{
+			name: "after release publication but before task closure",
+			point: "after_release_publication",
+			expectedPhases: ["closed", "push_pending"],
+		},
+	] as const) {
+		test(`a detached worker killed ${workerCase.name} leaves one safe continuation`, async () => {
+			const fixture = await mkSmokeFixture();
+			await installPassingCheck(fixture.clone);
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				`${workerCase.point} bytes\n`,
+			);
+			const before = fixture.snapshot();
+
+			await fixture.killWorkerAtInterrupt(
+				[
+					"complete",
+					"--transaction-id",
+					transactionId,
+					"--summary",
+					`docs(vault): interrupt ${workerCase.point}`,
+					"--json",
+				],
+				workerCase.point,
+			);
+
+			const store = createReceiptStore({
+				stateRoot: fixture.stateRoot,
+				repositoryIdentity: "smoke-vault",
+			});
+			const loaded = await store.load();
+			if (loaded.status !== "loaded") throw new Error("receipt unavailable");
+			expect(workerCase.expectedPhases).toContain(loaded.receipt.phase);
+			// The worktree must survive a mid-publication kill untouched.
+			expect(fixture.snapshot().worktree).toBe(before.worktree);
+
+			const doctor = await fixture.run([
+				"doctor",
+				"--transaction-id",
+				transactionId,
+				"--json",
+			]);
+			const diagnosis = parseCliProcessJson<{
+				status?: string;
+				data?: { phase?: string; finding?: string };
+				continuation?: { next_action_id?: string };
+			}>(doctor);
+			expect(diagnosis.status).toBe("ok");
+			expect(typeof diagnosis.data?.finding).toBe("string");
+			// Exactly one continuation, and never a remote-outage claim for a
+			// locally interrupted worker.
+			expect(typeof diagnosis.continuation?.next_action_id).toBe("string");
+			expect(JSON.stringify(diagnosis)).not.toContain("remote_unavailable");
+		});
+	}
 });
 
 async function installPassingCheck(clone: string): Promise<void> {

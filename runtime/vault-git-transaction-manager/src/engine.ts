@@ -1159,6 +1159,7 @@ export function createVaultGitTransactionEngine(
 				// not allowed to start.
 				return refusal("human_required", committing.phase, "receipt_corrupt", "inspect_private_receipt", "Inspect private receipt durability; commit evidence could not persist, so publication was not attempted.", "committed", "operator_required");
 			}
+			options.runtime.interrupt("after_local_commit");
 			const closeRequest = {
 				remote: committing.remote,
 				expectedMainHead: committing.remoteMainHead,
@@ -1203,6 +1204,7 @@ export function createVaultGitTransactionEngine(
 				return refusal("human_required", "human_required", "host_contract_breach", "request_operator_review", "Ask an operator to inspect the interrupted atomic close; local commit evidence is preserved.", "committed", "operator_required");
 			}
 			if (publication.status === "closed") {
+				options.runtime.interrupt("after_release_publication");
 				const closed = nextVaultGitReceipt(publicationReceipt, {
 					phase: "closed",
 					transition: "closed",
