@@ -381,14 +381,11 @@ async function expectedContinuationBindings(
 		throw new AuthorityDenial("revalidation_unavailable");
 	}
 	// A fresh human-reviewed activation deliberately establishes a new safe
-	// baseline after the documented activation-blocked fallback. An older closed
-	// receipt is historical evidence, not authority to override that approval.
-	// Receipts created after the evidence remain authoritative so normal
-	// transaction closure continues to advance the admitted baseline.
-	if (
-		loaded.receipt.phase === "closed" &&
-		recordedBefore(loaded.receipt.recordedAt, evidence.capturedAt)
-	) {
+	// baseline after the documented activation-blocked fallback. Any older
+	// receipt remains transaction and repair evidence, but is not authority to
+	// override that newer approval. Receipts created at or after the evidence
+	// remain authoritative so an in-flight transaction still fences continuation.
+	if (recordedBefore(loaded.receipt.recordedAt, evidence.capturedAt)) {
 		return evidence;
 	}
 	const mutable = expectedReceiptBindings(loaded.receipt);
