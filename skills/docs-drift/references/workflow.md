@@ -2,26 +2,23 @@
 
 The script. Pass `args: { root, lenses? }` — `lenses` defaults to all four.
 
-Agent count is `4 scanners + N verifiers + 1 synthesiser`. N is the number of findings, so a clean repo runs 5 agents and a drifted one runs more. Cap findings per lens to keep a bad scan from fanning out unboundedly.
+`reference` resolves in-process (no agent), so agent count is `3 scanners + N verifiers + 1 synthesiser` where N counts judged findings only. A clean repo costs 3 agents.
 
 ```js
 export const meta = {
   name: 'docs-drift',
   description: 'Check whether ADRs, CONTEXT.md, AGENTS.md, and docs/ still describe the code',
   phases: [
-    { title: 'Scan', detail: 'one scanner per drift lens' },
-    { title: 'Verify', detail: 'adversarially refute each claimed finding' },
-    { title: 'Synthesise', detail: 'dedup across lenses and report' },
+    { title: 'Scan', detail: 'resolve references deterministically; one scanner per judged lens' },
+    { title: 'Verify', detail: 'read both sides first, then compare against the claim' },
+    { title: 'Synthesise', detail: 'dedup across lenses and report by confidence' },
   ],
 }
 
 const MAX_PER_LENS = 12
 
+// `reference` is absent: it resolves in-process below, never as an agent.
 const LENSES = {
-  reference: {
-    hunt: 'A doc names a path, script, command, env var, or flag that does not resolve on disk.',
-    evidence: 'Resolve every named path and command against the repo. A path that does not exist is the finding.',
-  },
   claim: {
     hunt: 'A doc asserts behaviour the code contradicts.',
     evidence: 'Read the doc claim and the implementing code. Quote both.',
@@ -36,6 +33,12 @@ const LENSES = {
   },
 }
 
+// Judges anchor on confident assertion language, scoring assertive trajectories
+// 0.27-0.36 higher regardless of outcome (arXiv 2606.09863). `observation` is
+// deliberately neutral so the verifier compares two statements rather than
+// rating a confident claim.
+const BANNED_VOCAB = ['successfully', 'clearly', 'obviously', 'definitely', 'certainly', 'proves']
+
 const FINDINGS = {
   type: 'object',
   properties: {
@@ -45,11 +48,15 @@ const FINDINGS = {
         type: 'object',
         properties: {
           doc: { type: 'string', description: 'file:line of the doc making the claim' },
-          code: { type: 'string', description: 'file:line of the contradicting code, or "" when the finding is an absence' },
-          claim: { type: 'string', description: 'what the doc asserts, quoted' },
-          contradiction: { type: 'string', description: 'one line: why the code disagrees' },
+          code: { type: 'string', description: 'file:line of the relevant code, or "" when the finding is an absence' },
+          claim: { type: 'string', description: 'what the doc states, quoted verbatim' },
+          observation: {
+            type: 'string',
+            description:
+              'Neutral two-part statement: what the doc states, and what the code does. No verdict words, no emphasis, no conclusion. Write "doc says X; code does Y" — not "the doc is clearly wrong".',
+          },
         },
-        required: ['doc', 'claim', 'contradiction'],
+        required: ['doc', 'claim', 'observation'],
       },
     },
   },
@@ -66,10 +73,33 @@ const VERDICT = {
 }
 
 const root = args?.root ?? '.'
-const lenses = (args?.lenses ?? Object.keys(LENSES)).filter((l) => LENSES[l])
+const requested = args?.lenses ?? ['reference', ...Object.keys(LENSES)]
+const judgedLenses = requested.filter((l) => LENSES[l])
+const wantReference = requested.includes('reference')
+
+// ---------------------------------------------------------------------------
+// reference lens — deterministic, in-process, no agent.
+//
+// Resolving a path is `test -e`, not a judgement call. LLM judges run ~0.65
+// AUROC on this class of verification while mechanical detectors reach
+// 0.83-0.95 (arXiv 2606.09863), so this lens never reaches the verify stage
+// and its findings ship as confidence:'deterministic'.
+//
+// resolveReferences() is supplied by the caller (see SKILL.md "Run"): it greps
+// the doc surface for backticked paths/scripts/flags, resolves each against
+// the repo, and returns the non-resolvers.
+// ---------------------------------------------------------------------------
+const referenceFindings = wantReference
+  ? (await resolveReferences(root)).slice(0, MAX_PER_LENS).map((f) => ({
+      ...f,
+      lens: 'reference',
+      confidence: 'deterministic',
+      verdict: { refuted: false, why: 'path does not resolve on disk' },
+    }))
+  : []
 
 const results = await pipeline(
-  lenses,
+  judgedLenses,
 
   // Scan — mechanical. Cheap model, low effort.
   (lens) =>
@@ -81,45 +111,64 @@ Find DRIFT of one kind: ${LENSES[lens].hunt}
 Doc surface: AGENTS.md, CLAUDE.md, CONTEXT.md, CONTEXT-MAP.md, README.md, docs/**.
 Evidence required: ${LENSES[lens].evidence}
 
+Write every \`observation\` as a neutral two-part statement — what the doc states,
+what the code does — and stop there. Do not add a verdict, and do not use these
+words: ${BANNED_VOCAB.join(', ')}. A later step decides whether it is drift.
+
 An ADR marked superseded or deprecated is NOT drift — it correctly records history.
 Report at most ${MAX_PER_LENS} findings, strongest first. Report zero if the docs hold.`,
       { label: `scan:${lens}`, phase: 'Scan', schema: FINDINGS, model: 'haiku', effort: 'low' },
     ),
 
-  // Verify — judgement. Inherit the session model; refute by default.
+  // Verify — commit-first. The verifier forms its own reading of both sides
+  // BEFORE the finding is revealed, then compares. Anchored judges score
+  // plausibility over correctness; committing first drops false positives
+  // sharply on exact-match tasks (arXiv 2607.05904). For `vocabulary` and
+  // `decision` there is no ground truth to commit to, so this reduces the
+  // anchoring bias without eliminating it — hence confidence:'judged'.
   (scan, lens) =>
     parallel(
       (scan?.findings ?? []).slice(0, MAX_PER_LENS).map((f) => () =>
         agent(
-          `Try to REFUTE this claimed documentation drift.
+          `Two steps, in order. Do not skip step 1.
 
-Doc:  ${f.doc}
-Code: ${f.code || '(absence — nothing to point at)'}
-Claim: ${f.claim}
-Alleged contradiction: ${f.contradiction}
+STEP 1 — commit first. Read these two locations and write down, in your own
+words, what each one actually says. Do this before reading step 2.
+  Doc:  ${f.doc}
+  Code: ${f.code || '(absence — nothing to point at)'}
 
-Read both sides yourself. Refute it when: the doc is actually correct, the ADR is
-marked superseded, the claim is aspirational rather than factual, or the wording is
-merely awkward without asserting anything false.
+STEP 2 — compare. Another process reported:
+  Doc states: ${f.claim}
+  Observation: ${f.observation}
 
-Default to refuted=true when uncertain. A survivor must be a doc stating something
-the code contradicts today.`,
+Does YOUR step-1 reading match that observation? Refute it when your own reading
+disagrees, the doc is correct, the ADR is marked superseded, the claim is
+aspirational rather than factual, or the wording is awkward without asserting
+anything false.
+
+Default to refuted=true when uncertain. A survivor must be a doc stating
+something the code contradicts today, confirmed by your own reading.`,
           { label: `verify:${lens}`, phase: 'Verify', schema: VERDICT },
-        ).then((v) => ({ ...f, lens, verdict: v })),
+        ).then((v) => ({ ...f, lens, confidence: 'judged', verdict: v })),
       ),
     ),
 )
 
 // Barrier earned: dedup needs every lens at once.
-const confirmed = results
+const judged = results
   .flat()
   .filter(Boolean)
   .filter((f) => f.verdict && !f.verdict.refuted)
 
-log(`${confirmed.length} confirmed across ${lenses.length} lenses`)
+const confirmed = [...referenceFindings, ...judged]
+const lenses = [...(wantReference ? ['reference'] : []), ...judgedLenses]
+
+log(
+  `${confirmed.length} confirmed (${referenceFindings.length} deterministic, ${judged.length} judged) across ${lenses.length} lenses`,
+)
 
 if (confirmed.length === 0) {
-  return { confirmed: [], lenses, summary: 'No drift survived verification.' }
+  return { confirmed: [], lenses, summary: 'No drift found.' }
 }
 
 phase('Synthesise')
@@ -128,9 +177,17 @@ const report = await agent(
 
 ${JSON.stringify(confirmed, null, 2)}
 
-Group by lens in this order: reference, claim, vocabulary, decision.
+Group by confidence, deterministic first:
+
+  1. "Broken references" — confidence:'deterministic'. These resolved on disk and
+     are objectively wrong. State them plainly.
+  2. "Judged findings" — confidence:'judged'. These passed an LLM verifier that
+     runs near 0.65 AUROC on this class of check. Introduce the group with one
+     line saying they need human confirmation, then list them.
+
+Within each group, order by lens: reference, claim, vocabulary, decision.
 Collapse findings that are the same underlying drift seen from two lenses.
-Each entry: the doc (file:line), the code (file:line), and one line on the contradiction.
+Each entry: the doc (file:line), the code (file:line), and the observation.
 State per-lens counts including zeros. Do not propose edits — this is report-only.`,
   { label: 'synthesise', phase: 'Synthesise' },
 )
@@ -138,11 +195,35 @@ State per-lens counts including zeros. Do not propose edits — this is report-o
 return { confirmed, lenses, report }
 ```
 
+## `resolveReferences(root)`
+
+Supply this before invoking. It returns `[{ doc, code: '', claim, observation }]` for every backticked path that does not resolve.
+
+```js
+// Shape it returns — one entry per non-resolving reference:
+// {
+//   doc: 'AGENTS.md:12',
+//   code: '',
+//   claim: 'runtime/skill-catalog.json',
+//   observation: 'doc names runtime/skill-catalog.json; path does not exist in the repo',
+// }
+```
+
+Implementation notes: grep the doc surface for backticked tokens that look like paths (contain `/` or a known extension); skip URLs, globs, and anything inside a fenced code block marked as an example; resolve each against `root`. Bare commands (`bun run build`) resolve against `package.json` scripts rather than the filesystem.
+
+## Confidence
+
+Two tiers, and the distinction is the point:
+
+- **`deterministic`** — `reference` only. A path resolves or it does not. No verifier, no false positives.
+- **`judged`** — `claim`, `vocabulary`, `decision`. An LLM verifier decided. Best-in-class judges reach ~0.65 AUROC on completion-style verification (arXiv 2606.09863), so treat these as leads for a human, not conclusions. Adding more verifiers does not fix this: a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904).
+
 ## Tuning
 
-- **Too noisy** — drop `vocabulary` and `decision` from `lenses`; they carry the most judgement and the weakest evidence.
-- **Too slow** — lower `MAX_PER_LENS`, or scan a subdirectory by narrowing `root`.
-- **Verifier refuting real drift** — the refute-by-default bias is deliberate. Loosen the last paragraph of the verify prompt before touching anything else.
+- **Too noisy** — pass `lenses: ['reference']` for the deterministic lens alone.
+- **Too slow** — lower `MAX_PER_LENS`, or narrow `root` to a subdirectory.
+- **Verifier refuting real drift** — refute-by-default is deliberate. Loosen the last paragraph of the STEP 2 prompt before touching anything else.
+- **Scanner writing verdicts anyway** — extend `BANNED_VOCAB`. The neutral `observation` is what keeps the verifier comparing rather than rating.
 
 ## Resume
 

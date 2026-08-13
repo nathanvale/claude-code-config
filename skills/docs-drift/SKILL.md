@@ -6,16 +6,16 @@ role: quality-gate
 
 # Docs Drift
 
-Fan scanners across the repo, verify every claimed finding adversarially, report what actually drifted. Report-only: this skill never edits docs.
+Resolve broken references mechanically, fan scanners across the rest, verify what remains, report by confidence. Report-only: this skill never edits docs.
 
-**Drift** is a doc making a claim the code contradicts. Four lenses find four kinds; each needs different evidence, and only two are objective.
+**Drift** is a doc making a claim the code contradicts. Four lenses find four kinds, and they do not carry equal weight.
 
-| Lens | Claim shape | Evidence | Verifiable |
+| Lens | Claim shape | How it is checked | Confidence |
 |---|---|---|---|
-| `reference` | A named path, script, command, or flag exists | Resolve it on disk | Objective |
-| `claim` | Behaviour works as described | Read both sides | Judgement |
-| `vocabulary` | Domain terms match the glossary | Term appears in code but not `CONTEXT.md`, or vice versa | Judgement |
-| `decision` | Load-bearing choices are recorded | Hard-to-reverse choice with no ADR | Weakest |
+| `reference` | A named path, script, command, or flag exists | Resolved on disk, in-process | **Deterministic** |
+| `claim` | Behaviour works as described | LLM verifier | Judged |
+| `vocabulary` | Domain terms match the glossary | LLM verifier | Judged |
+| `decision` | Load-bearing choices are recorded | LLM verifier | Judged |
 
 Superseded ADRs are not drift. An ADR marked superseded is correctly stale — it records history. Only an ADR presenting itself as current can drift.
 
@@ -24,34 +24,43 @@ Superseded ADRs are not drift. An ADR marked superseded is correctly stale — i
 Author the workflow inline; pass the repo's doc surface as `args`. Nathan must have opted into orchestration — the ask itself counts.
 
 ```
-Workflow({ script: <the script below>, args: { root: "<repo>" } })
+Workflow({ script: <the script>, args: { root: "<repo>" } })
 ```
 
-Read [references/workflow.md](references/workflow.md) for the script and the schemas.
+Read [references/workflow.md](references/workflow.md) for the script, the schemas, and the `resolveReferences()` contract.
 
 ## Shape
 
-`pipeline()`, not `parallel()`. Each lens verifies its own findings the moment that lens returns, rather than waiting for the slowest scanner. One barrier at the end, where synthesis genuinely needs every lens at once to dedup.
+`pipeline()`, not `parallel()`. Each judged lens verifies its own findings the moment that lens returns. One barrier at the end, where synthesis genuinely needs every lens at once to dedup.
 
 ```
-lens ──▶ scan (haiku, low) ──▶ verify each finding (inherit) ─┐
-lens ──▶ scan ──────────────▶ verify ────────────────────────┼──▶ synthesise
-lens ──▶ scan ──────────────▶ verify ────────────────────────┘   (barrier)
+reference ─▶ resolve on disk (no agent) ──────────────────────┐
+claim ────▶ scan (haiku, low) ──▶ verify each (inherit) ──────┤
+vocabulary ▶ scan ──────────────▶ verify ─────────────────────┼──▶ synthesise
+decision ─▶ scan ───────────────▶ verify ─────────────────────┘   (barrier)
 ```
 
-Scanners run `haiku` at `low` effort — resolving whether a path exists is mechanical. Verifiers inherit the session model: refuting a claimed drift is where a wrong call costs the most, so it gets the strongest model available.
+Scanners run `haiku` at `low` effort — finding candidates is mechanical. Verifiers inherit the session model. A clean repo costs 3 agents.
 
-## Verify adversarially
+## Verify by committing first
 
-Each verifier tries to **refute** its finding, and defaults to refuted when uncertain. A doc that reads oddly but states nothing false is not drift. Findings that survive carry `file:line` on both sides — the doc making the claim and the code contradicting it.
+Each verifier reads the doc and the code and forms **its own reading before the finding is revealed**, then compares. It defaults to refuted when uncertain.
 
-Without this pass the report fills with prose the scanner found merely surprising.
+This shape is deliberate. A judge that sees a claim and rates it scores plausibility rather than correctness; committing first drops false positives sharply where ground truth exists (arXiv 2607.05904). Scanners are also barred from verdict vocabulary — judges score confidently-worded findings 0.27-0.36 higher regardless of whether they are true (arXiv 2606.09863), so `observation` fields state what the doc says and what the code does, and stop there.
 
 ## Report
 
-Group by lens, most objective first: broken references, then contradicted claims, then vocabulary, then undocumented decisions. Each finding names the doc, the code, and the one-line contradiction. State the counts per lens, including zeros — a lens that found nothing is a result.
+Deterministic findings first, judged findings second under an explicit caveat. Each finding names the doc, the code, and the observation. State the counts per lens, including zeros — a lens that found nothing is a result.
 
 Nathan decides what to fix. Offer to route confirmed vocabulary gaps to `domain-modeling` and undocumented decisions to `record-decision`.
+
+## Limits
+
+Two, and both are worth stating rather than hiding:
+
+**Judged findings are leads, not conclusions.** Best-in-class LLM judges reach ~0.65 AUROC on this class of verification, while mechanical detectors reach 0.83-0.95 (arXiv 2606.09863). That gap is why `reference` never touches an agent. More verifiers do not close it — a three-judge ensemble still accepted 55% of wrong answers (arXiv 2607.05904). Treat the judged group as a human's worklist.
+
+**Detection is the weaker half of the problem.** The industry consensus is that preventing drift at merge time beats detecting it afterwards, via spec-driven generation or a docs check in the PR. That applies cleanly to generated artifacts — OpenAPI specs, typed signatures. It applies poorly to prose ADRs and a hand-written glossary, which is the surface this skill covers. Use it as an audit, and keep generated docs generated.
 
 ## Next safe action
 
