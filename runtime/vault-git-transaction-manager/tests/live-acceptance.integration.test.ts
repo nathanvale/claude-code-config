@@ -466,10 +466,17 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
 			const tasksAfterDeath = await readTaskStates(fixture.stateRoot);
 
-			// Let the orphaned worker finish before retrying. Holding it at the
-			// barrier while a second caller joins deadlocks the retry against a
-			// transaction the dead parent's worker still owns.
+			// Let the orphaned worker reach a terminal state before retrying.
+			// Retrying while it still owns the transaction makes the second caller
+			// wait on that worker, which under parallel suite load outlasts the
+			// test budget instead of returning a task projection.
 			await fixture.releaseCheck();
+			await waitForTaskState(
+				fixture.stateRoot,
+				(state) =>
+					state === "closed" || state === "repair_needed" || state === "unknown",
+				30_000,
+			);
 			const envelope = parseCliProcessJson<{
 				status?: string;
 				data?: { task_id?: string; task_state?: string };
