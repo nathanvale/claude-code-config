@@ -2,6 +2,9 @@ import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitChangedState } from "./model.ts";
 import type { VaultGitTaskStore } from "./task-store.ts";
 
+/** Heartbeat age after which Doctor may investigate a dead task worker. */
+export const VAULT_GIT_TASK_HEARTBEAT_STALE_MS = 20_000;
+
 /** Evidence already classified by the existing Doctor or repair owner. */
 export interface VaultGitTaskClosureEvidence {
 	readonly receiptId: string;
@@ -19,7 +22,10 @@ export async function reconcileClosedVaultGitTask(
 	evidence: VaultGitTaskClosureEvidence,
 ): Promise<void> {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
-		const loaded = await store.load(evidence.receiptId);
+		const loaded = await store.materializeClaimState(
+			evidence.receiptId,
+			evidence.transactionId,
+		);
 		if (loaded.status !== "loaded") return;
 		if (loaded.state.transactionId !== evidence.transactionId) return;
 		if (loaded.state.state === "closed") return;
@@ -75,7 +81,7 @@ export async function reconcileStaleVaultGitTaskFromDoctor(
 			workerIsAlive(loaded.state.workerPid) ||
 			!Number.isFinite(observedAt) ||
 			!Number.isFinite(heartbeatAt) ||
-			observedAt - heartbeatAt <= 20_000
+			observedAt - heartbeatAt <= VAULT_GIT_TASK_HEARTBEAT_STALE_MS
 		) return;
 		const unknown = evidence.state === "unknown" || evidence.phase === "push_pending";
 		const transitioned = await store.transition(loaded.state.taskId, loaded.state.revision, {

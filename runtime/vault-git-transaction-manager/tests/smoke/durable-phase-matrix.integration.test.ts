@@ -23,10 +23,11 @@ async function waitForTerminalTask(
 ) {
 	const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(accepted).data
 		?.task_id;
+	if (!taskId) throw new Error("accepted completion omitted task id");
 	let status = await fixture.run([
 		"status",
 		"--task-id",
-		taskId ?? "task_missing",
+		taskId,
 		"--json",
 	]);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
@@ -39,7 +40,7 @@ async function waitForTerminalTask(
 		status = await fixture.run([
 			"status",
 			"--task-id",
-			taskId ?? "task_missing",
+			taskId,
 			"--json",
 		]);
 	}
@@ -609,7 +610,9 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			});
 			const loaded = await store.load();
 			if (loaded.status !== "loaded") throw new Error("receipt unavailable");
-			expect(workerCase.expectedPhases).toContain(loaded.receipt.phase);
+			expect(
+				new Set<string>(workerCase.expectedPhases).has(loaded.receipt.phase),
+			).toBe(true);
 			// The worktree must survive a mid-publication kill untouched.
 			expect(fixture.snapshot().worktree).toBe(before.worktree);
 

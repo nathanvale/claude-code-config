@@ -256,6 +256,16 @@ describe("durable task state", () => {
 		expect(() => advanceVaultGitTaskState(replacement, {
 			state: "claimed",
 			phase: "admitted",
+			updatedAt: "2026-08-12T11:30:05.500Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: null,
+			launchExpiresAt: null,
+			launchAttempt: 1,
+		})).toThrow("task state transition invalid");
+		expect(() => advanceVaultGitTaskState(replacement, {
+			state: "claimed",
+			phase: "admitted",
 			updatedAt: "2026-08-12T11:30:06.000Z",
 			heartbeatAt: null,
 			checkpoint: null,

@@ -99,23 +99,25 @@ describe("private task store", () => {
 
 		const admissions = await Promise.all(
 			stores.map((store) =>
-				store.admit({
+				store.claimOrJoin(taskClaimInput({
 					receiptId,
 					transactionId: "txn_22222222222222222222222222222222",
 					leaseGeneration: "a".repeat(40),
 					recordedAt: "2026-08-12T11:45:00.000Z",
-				}),
+				})),
 			),
 		);
-		const taskIds = new Set(
-			admissions.map((admission) => admission.state.taskId),
+		const admittedStates = admissions.flatMap((admission) =>
+			admission.status === "refused" ? [] : [admission.state],
 		);
+		const taskIds = new Set(admittedStates.map((state) => state.taskId));
 
 		expect(admissions.filter((admission) => admission.status === "created")).toHaveLength(1);
+		expect(admittedStates).toHaveLength(20);
 		expect(taskIds.size).toBe(1);
 		expect([...taskIds][0]).toMatch(/^task_[0-9a-f]{32}$/);
 		expect([...taskIds][0]).not.toContain(receiptId.slice("receipt_".length));
-		expect(admissions.every((admission) => Object.isFrozen(admission.state))).toBe(true);
+		expect(admittedStates.every((state) => Object.isFrozen(state))).toBe(true);
 
 		const claimNames = await readdir(stores[0].paths.claims);
 		expect(claimNames).toEqual([`${receiptId}.json`]);
@@ -146,16 +148,20 @@ describe("private task store", () => {
 		expect((await stat(stores[0].paths.claims)).mode & 0o777).toBe(0o700);
 		expect((await stat(claimPath)).mode & 0o777).toBe(0o600);
 
-		const later = await stores[0].admit({
+		const later = await stores[0].claimOrJoin(taskClaimInput({
 			receiptId,
 			transactionId: "txn_22222222222222222222222222222222",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:46:00.000Z",
+		}));
+		expect(later).toEqual({
+			status: "existing",
+			launch: "joined",
+			state: admittedStates[0],
 		});
-		expect(later).toEqual({ status: "existing", state: admissions[0].state });
 		expect(await stores[0].load(receiptId)).toEqual({
 			status: "loaded",
-			state: admissions[0].state,
+			state: admittedStates[0],
 		});
 	});
 
@@ -168,12 +174,13 @@ describe("private task store", () => {
 			durability: recordingTaskDurabilityPort(calls),
 		});
 
-		const admitted = await store.admit({
+		const admitted = await store.claimOrJoin(taskClaimInput({
 			receiptId: "receipt_33333333333333333333333333333333",
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T12:30:00.000Z",
-		});
+		}));
+		if (admitted.status === "refused") throw new Error("test claim refused");
 
 		expect(calls.slice(0, 4)).toEqual([
 			{ method: "writeTemp", target: "task_claim" },
@@ -181,13 +188,12 @@ describe("private task store", () => {
 			{ method: "linkExclusive", target: "task_claim" },
 			{ method: "syncDirectory", target: "task_claim" },
 		]);
-		expect(calls.map((call) => call.method)).toEqual([
-			...taskClaimDurabilityOrder,
-			...taskClaimDurabilityOrder,
-			"writeTemp",
-			"syncFile",
-			"rename",
-			"syncDirectory",
+		expect(calls).toEqual([
+			...taskDurabilityCalls("task_claim"),
+			...taskDurabilityCalls("task_state"),
+		]);
+		expect(await readdir(join(store.paths.tasks, admitted.state.taskId))).toEqual([
+			"history",
 		]);
 		expect(await store.load(admitted.state.receiptId)).toEqual({
 			status: "loaded",
@@ -210,7 +216,8 @@ describe("private task store", () => {
 			stateRoot,
 			repositoryIdentity: "vault@example",
 		});
-		const original = await originalStore.admit(input);
+		const original = await originalStore.claimOrJoin(taskClaimInput(input));
+		if (original.status === "refused") throw new Error("test claim refused");
 		expect(original.status).toBe("created");
 
 		const calls: TaskDurabilityCall[] = [];
@@ -221,7 +228,7 @@ describe("private task store", () => {
 		});
 		let failure: unknown;
 		try {
-			await interruptedJoiner.admit(input);
+			await interruptedJoiner.claimOrJoin(taskClaimInput(input));
 		} catch (error) {
 			failure = error;
 		}
@@ -247,8 +254,12 @@ describe("private task store", () => {
 		const retry = await createVaultGitTaskStore({
 			stateRoot,
 			repositoryIdentity: "vault@example",
-		}).admit(input);
-		expect(retry).toEqual({ status: "existing", state: original.state });
+		}).claimOrJoin(taskClaimInput(input));
+		expect(retry).toEqual({
+			status: "existing",
+			launch: "joined",
+			state: original.state,
+		});
 		expect(await readdir(originalStore.paths.claims)).toEqual([
 			`${receiptId}.json`,
 		]);
@@ -273,12 +284,12 @@ describe("private task store", () => {
 			});
 
 			await expect(
-				store.admit({
+				store.claimOrJoin(taskClaimInput({
 					receiptId,
 					transactionId: "txn_44444444444444444444444444444444",
 					leaseGeneration: "a".repeat(40),
 					recordedAt: "2026-08-12T12:31:00.000Z",
-				}),
+				})),
 			).rejects.toThrow("task claim durability unavailable");
 			expect(calls.map((call) => call.method)).toEqual(
 				taskClaimDurabilityOrder.slice(0, crashAt),
@@ -304,6 +315,47 @@ describe("private task store", () => {
 		});
 	}
 
+	for (const [taskStateOffset, method] of [
+		[0, "writeTemp"],
+		[1, "syncFile"],
+		[2, "linkExclusive"],
+		[3, "syncDirectory"],
+	] as const) {
+		test(`preserves the claim when task-state ${method} is interrupted and explicit materialization recovers`, async () => {
+			const stateRoot = await temporaryDirectories.create(
+				`vault-git-task-state-${method}-`,
+			);
+			const calls: TaskDurabilityCall[] = [];
+			const receiptId = "receipt_89898989898989898989898989898989";
+			const transactionId = "txn_78787878787878787878787878787878";
+			const store = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "vault@example",
+				durability: recordingTaskDurabilityPort(calls, 4 + taskStateOffset),
+			});
+
+			await expect(store.claimOrJoin(taskClaimInput({
+				receiptId,
+				transactionId,
+				leaseGeneration: "a".repeat(40),
+				recordedAt: "2026-08-12T12:31:00.000Z",
+			}))).rejects.toThrow("task state durability unavailable");
+			expect(calls).toEqual([
+				...taskDurabilityCalls("task_claim"),
+				...taskDurabilityCalls("task_state").slice(0, taskStateOffset),
+			]);
+
+			const recovered = createVaultGitTaskStore({
+				stateRoot,
+				repositoryIdentity: "vault@example",
+			});
+			expect(await recovered.materializeClaimState(receiptId, transactionId)).toMatchObject({
+				status: "loaded",
+				state: { receiptId, transactionId, revision: 1 },
+			});
+		});
+	}
+
 	test("refuses a terminal write from a superseded launch generation", async () => {
 		const stateRoot = await temporaryDirectories.create(
 			"vault-git-task-stale-generation-",
@@ -313,12 +365,13 @@ describe("private task store", () => {
 			stateRoot,
 			repositoryIdentity: "vault@example",
 		});
-		const admitted = await store.admit({
+		const admitted = await store.claimOrJoin(taskClaimInput({
 			receiptId,
 			transactionId: "txn_55555555555555555555555555555555",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T14:00:00.000Z",
-		});
+		}));
+		if (admitted.status === "refused") throw new Error("test claim refused");
 		const taskId = admitted.state.taskId;
 		const stale = "launch_11111111111111111111111111111111";
 		const live = "launch_22222222222222222222222222222222";
@@ -388,12 +441,13 @@ describe("private task store", () => {
 			stateRoot,
 			repositoryIdentity: "vault@example",
 		});
-		const admitted = await store.admit({
+		const admitted = await store.claimOrJoin(taskClaimInput({
 			receiptId: "receipt_66666666666666666666666666666666",
 			transactionId: "txn_66666666666666666666666666666666",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T15:00:00.000Z",
-		});
+		}));
+		if (admitted.status === "refused") throw new Error("test claim refused");
 		const taskId = admitted.state.taskId;
 		const staleRevision = admitted.state.revision;
 
@@ -432,11 +486,51 @@ describe("private task store", () => {
 			},
 		});
 	});
+
+	test("an unknown task transition does not create task state directories", async () => {
+		const stateRoot = await temporaryDirectories.create("vault-git-task-unknown-");
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		});
+		const taskId = "task_77777777777777777777777777777777";
+
+		await expect(store.transition(taskId, 1, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-12T15:00:01.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: "launch_77777777777777777777777777777777",
+			launchExpiresAt: "2026-08-12T15:00:03.000Z",
+		})).rejects.toThrow("task state unavailable: absent");
+		await expect(stat(join(store.paths.tasks, taskId))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
 });
 
 interface TaskDurabilityCall {
 	readonly method: keyof VaultGitDurabilityPort;
 	readonly target: string;
+}
+
+function taskClaimInput(input: {
+	readonly receiptId: string;
+	readonly transactionId: string;
+	readonly leaseGeneration: string;
+	readonly recordedAt: string;
+}) {
+	return {
+		claimReceiptId: input.receiptId,
+		receiptId: input.receiptId,
+		transactionId: input.transactionId,
+		remote: "origin",
+		generation: input.leaseGeneration,
+		capabilityDigest: "0".repeat(64),
+		normalizedInput: '{"command":"complete"}',
+		recordedAt: input.recordedAt,
+	};
 }
 
 const taskClaimDurabilityOrder = [
@@ -445,6 +539,10 @@ const taskClaimDurabilityOrder = [
 	"linkExclusive",
 	"syncDirectory",
 ] as const satisfies readonly (keyof VaultGitDurabilityPort)[];
+
+function taskDurabilityCalls(target: "task_claim" | "task_state") {
+	return taskClaimDurabilityOrder.map((method) => ({ method, target }));
+}
 
 /** Real durability operations with deterministic pre-operation interruption. */
 function recordingTaskDurabilityPort(

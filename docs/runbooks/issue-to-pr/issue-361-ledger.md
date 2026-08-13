@@ -942,6 +942,15 @@ validator_wave_completed:
   structured-envelope capture are available. The next action is one TDD
   Builder implementation attempt for AC 4.
 
+- 2026-08-13T14:12:14+10:00: Corrected two source-event timestamps without
+  rewriting the append-only entries above. Git commit metadata records
+  `fenced-worker-composition` convergence commit `0840ed873534355e5b363ad049c61c1ba311b66e`
+  at `2026-08-13T05:39:21+10:00` and `task-selected-status` start commit
+  `879bccf3c21c03ef183231b05c10540e1fbf6045` at
+  `2026-08-13T05:40:31+10:00`. The earlier `05:45:00` convergence and
+  `05:40:04` start timestamps are transcription errors; the source commits
+  prove the dependency converged 70 seconds before the dependent batch began.
+
 ## Workflow Learnings
 
 ```yaml

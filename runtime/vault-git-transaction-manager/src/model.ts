@@ -553,6 +553,7 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"human_required",
 	"offline_mode",
 	"receipt_corrupt",
+	"capability_missing",
 	"capability_invalid",
 	"capability_role_mismatch",
 	"vault_identity_changed",

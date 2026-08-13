@@ -7,6 +7,7 @@ import {
 	inspectVaultGitActivationState,
 	type VaultGitLiveActivationBindings,
 } from "../src/index.ts";
+import type { VaultGitReceipt } from "../src/model.ts";
 import {
 	createReceiptStore,
 	type VaultGitReceiptStore,
@@ -354,6 +355,83 @@ describe("activation authority", () => {
 		});
 	});
 
+	test("fresh human activation supersedes an older closed receipt baseline", async () => {
+		const fixture = await authorityFixture({
+			wrapStore(store) {
+				const receipt = closedReceipt({
+					recordedAt: "2026-08-08T00:00:00.000Z",
+					expectedMainCommit: "d".repeat(40),
+					ledgerReleaseId: "e".repeat(40),
+				});
+				return {
+					...store,
+					async load() {
+						return {
+							status: "loaded" as const,
+							receipt,
+							history: [receipt],
+							historyPaths: ["fixture-receipt.json"],
+						};
+					},
+				};
+			},
+		});
+		await fixture.store.publishPreparedEvidence(fixture.evidence);
+		await fixture.authority.admit({
+			evidenceId: fixture.evidence.evidenceId,
+			humanCapability,
+			note: "approve fresh baseline",
+		});
+
+		expect(await fixture.authority.validate("continuation")).toEqual({
+			status: "admitted",
+			evidenceId: fixture.evidence.evidenceId,
+		});
+	});
+
+	for (const invalidField of ["recordedAt", "capturedAt"] as const) {
+		test(`continuation fails closed for invalid ${invalidField}`, async () => {
+			const fixture = await authorityFixture({
+				wrapStore(store) {
+					const receipt = closedReceipt({
+						recordedAt: invalidField === "recordedAt"
+							? "not-a-timestamp"
+							: "2026-08-08T00:00:00.000Z",
+					});
+					return {
+						...store,
+						async load() {
+							return {
+								status: "loaded" as const,
+								receipt,
+								history: [receipt],
+								historyPaths: ["fixture-receipt.json"],
+							};
+						},
+						async readPreparedEvidence() {
+							const evidence = await store.readPreparedEvidence();
+							return invalidField === "capturedAt" && evidence
+								? { ...evidence, capturedAt: "not-a-timestamp" }
+								: evidence;
+						},
+					};
+				},
+			});
+			await fixture.store.publishPreparedEvidence(fixture.evidence);
+			await fixture.store.admitActivation({
+				schemaVersion: 2,
+				evidenceId: fixture.evidence.evidenceId,
+				admittedAt: "2026-08-11T00:00:00.000Z",
+				note: "fixture admission",
+			});
+
+			expect(await fixture.authority.validate("continuation")).toEqual({
+				status: "denied",
+				reason: "revalidation_unavailable",
+			});
+		});
+	}
+
 	test("continuation fails closed when current receipt state conflicts", async () => {
 		let conflict = false;
 		const fixture = await authorityFixture({
@@ -643,4 +721,35 @@ function liveBindings(
 
 function identity(owner: string, byte: string): string {
 	return `${owner}:v1:${byte.repeat(64)}`;
+}
+
+function closedReceipt(overrides: Partial<VaultGitReceipt> = {}): VaultGitReceipt {
+	return {
+		schemaVersion: 2,
+		receiptId: "receipt_11111111111111111111111111111111",
+		transactionId: "txn_22222222222222222222222222222222",
+		revision: 2,
+		phase: "closed",
+		transition: "closed",
+		recordedAt: "2026-08-10T00:00:00.000Z",
+		event: "note_created",
+		actor: "agent-a",
+		host: "laptop",
+		remote: "origin",
+		ownedPaths: [],
+		unrelatedState: { statusHex: "", indexHex: "" },
+		localMainHead: "c".repeat(40),
+		remoteMainHead: "c".repeat(40),
+		expectedLeaseGeneration: "a".repeat(40),
+		leaseGeneration: "b".repeat(40),
+		leaseAcquiredAt: "2026-08-10T00:00:00.000Z",
+		leaseDurationMs: 60_000,
+		commitId: "d".repeat(40),
+		expectedMainCommit: "d".repeat(40),
+		ledgerReleaseId: "e".repeat(40),
+		pushOutcome: "closed",
+		nextSafeAction: "none",
+		diagnosticsReference: "receipt:receipt_11111111111111111111111111111111",
+		...overrides,
+	};
 }

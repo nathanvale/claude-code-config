@@ -28,7 +28,7 @@ describe("vault-git Branch Station Catalog", () => {
 			"activation.revoke",
 			"activation.invalid_usage",
 			"preview.read_only",
-			"doctor.read_only",
+			"doctor.private_task_reconciliation",
 			"commands.discovery",
 			"begin.admitted",
 			"join.joined",
@@ -41,6 +41,17 @@ describe("vault-git Branch Station Catalog", () => {
 			"tidy.preview",
 			"janitor.preview",
 		]);
+	});
+
+	test("declares Doctor's bounded owner-private evidence write without canonical authority", () => {
+		const doctor = stations.find(
+			(station) => station.id === "doctor.private_task_reconciliation",
+		);
+		expect(doctor).toMatchObject({
+			command: "doctor",
+			mutationExpectation: "owner_private_task_evidence_only",
+		});
+		expect(doctor?.trigger).toContain("without canonical, vault, or remote mutation");
 	});
 
 	test("reconciles the catalog against live command discovery", () => {

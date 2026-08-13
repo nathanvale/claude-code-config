@@ -21,6 +21,7 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
+import { readVaultGitProcessIdentity } from "../src/cli.ts";
 import { VAULT_GIT_LEDGER_REF } from "../src/model.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
@@ -155,6 +156,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		} | null = null;
 		let taskStatusAtReturn: CliProcessResult | null = null;
 		let taskStatusAfterDeadline: CliProcessResult | null = null;
+		let taskId: string | undefined;
 		try {
 			await waitForFile(fixture.checkMarker, 10_000);
 			foreground = await Promise.race([
@@ -176,10 +178,12 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 					};
 				}>(foreground)
 				: null;
+			taskId = foregroundEnvelope?.data?.task_id;
+			if (!taskId) throw new Error("accepted completion omitted task id");
 			taskStatusAtReturn = await fixture.run([
 				"status",
 				"--task-id",
-				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				taskId,
 				"--json",
 			]);
 			// Cross the production launcher's scaled whole-child deadline after the
@@ -188,7 +192,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			taskStatusAfterDeadline = await fixture.run([
 				"status",
 				"--task-id",
-				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				taskId,
 				"--json",
 			]);
 		} finally {
@@ -197,7 +201,6 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		if (!taskStatusAtReturn || !taskStatusAfterDeadline) {
 			throw new Error("task status process did not run");
 		}
-		const taskId = foregroundEnvelope?.data?.task_id;
 		const taskStatusAtReturnEnvelope = parseCliProcessJson<{
 			status?: string;
 			error?: { code?: string };
@@ -227,8 +230,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			taskStatusAfterDeadline.stdout,
 		].join("\n");
 
-		// Settle the current synchronous implementation before fixture cleanup.
-		// V2 will have returned this accepted foreground response already.
+		// Capture the accepted foreground response after releasing the checker gate.
 		const settledForeground = await foregroundPromise;
 		const settledForegroundEnvelope = parseCliProcessJson<{
 			status?: string;
@@ -293,7 +295,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			leaksRawGitCommand: false,
 			leaksAuthBearingUrl: false,
 		});
-	});
+	}, 60_000);
 
 	test(
 		"twenty identical public completions join one task and changed input refuses",
@@ -532,7 +534,10 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
 			const admitted = await readTaskStates(fixture.stateRoot);
 			// Kill the acknowledged worker itself, not just its launching parent.
-			spawnSync("pkill", ["-f", `--transaction-id ${transactionId}`]);
+			expect(admitted).toHaveLength(1);
+			const admittedTask = admitted[0];
+			if (!admittedTask) throw new Error("acknowledged task state unavailable");
+			await killWorkerForTask(fixture.stateRoot, admittedTask.taskId, 10_000);
 			await Bun.sleep(250);
 
 			const restarted = await fixture.run([
@@ -642,10 +647,11 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			}>(retried);
 		}
 		const taskId = retriedEnvelope.data?.task_id;
+		if (!taskId) throw new Error("retried completion omitted task id");
 		const inspected = await fixture.run([
 			"status",
 			"--task-id",
-			taskId ?? "task_missing",
+			taskId,
 			"--json",
 		]);
 		const inspectedEnvelope = parseCliProcessJson<{
@@ -668,7 +674,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			nextAction: "run_doctor",
 			blockersExcludeRemoteOutage: true,
 		});
-	});
+	}, 60_000);
 
 	test(
 		"two clones admit exactly one writer and fence the stale generation",
@@ -1506,23 +1512,163 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 /** Read every durable task record the private state root currently holds. */
 async function readTaskStates(
 	stateRoot: string,
-): Promise<readonly { taskId: string; state: string; phase: string }[]> {
+	timeoutMs = 5_000,
+): Promise<
+	readonly {
+		taskId: string;
+		state: string;
+		phase: string;
+		workerPid: number | null;
+	}[]
+> {
 	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
-	const repositories = await readdir(managerRoot).catch(() => []);
-	const states: { taskId: string; state: string; phase: string }[] = [];
-	for (const repository of repositories) {
-		const tasks = join(managerRoot, repository, "tasks");
-		for (const taskId of await readdir(tasks).catch(() => [])) {
-			const source = await readFile(
-				join(tasks, taskId, "current.json"),
-				"utf8",
-			).catch(() => "");
-			if (!source) continue;
-			const record = JSON.parse(source) as { state: string; phase: string };
-			states.push({ taskId, state: record.state, phase: record.phase });
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const repositories = await readdir(managerRoot).catch(() => []);
+		const states: {
+			taskId: string;
+			state: string;
+			phase: string;
+			workerPid: number | null;
+		}[] = [];
+		for (const repository of repositories) {
+			const tasks = join(managerRoot, repository, "tasks");
+			for (const taskId of await readdir(tasks).catch(() => [])) {
+				const record = await readLatestTaskRevision(
+					join(tasks, taskId, "history"),
+				);
+				if (!record || record.taskId !== taskId) continue;
+				states.push({
+					taskId,
+					state: record.state,
+					phase: record.phase,
+					workerPid: record.workerPid,
+				});
+			}
 		}
+		if (states.length > 0) return states;
+		await Bun.sleep(10);
 	}
-	return states;
+	throw new Error("timed out waiting for durable task history");
+}
+
+async function readLatestTaskRevision(history: string): Promise<{
+	readonly taskId: string;
+	readonly state: string;
+	readonly phase: string;
+	readonly workerPid: number | null;
+	readonly workerProcessIdentity: string | null;
+} | null> {
+	const latest = (await readdir(history).catch(() => []))
+		.filter((name) => /^\d{12}\.json$/.test(name))
+		.sort()
+		.at(-1);
+	if (!latest) return null;
+	const source = await readFile(join(history, latest), "utf8").catch(() => "");
+	if (!source) return null;
+	try {
+		const record = JSON.parse(source) as Record<string, unknown>;
+		if (
+			typeof record.taskId !== "string" ||
+			typeof record.state !== "string" ||
+			typeof record.phase !== "string" ||
+			(record.workerPid !== null &&
+				(typeof record.workerPid !== "number" ||
+					!Number.isSafeInteger(record.workerPid) ||
+					record.workerPid <= 0)) ||
+			(record.workerProcessIdentity !== null &&
+				(typeof record.workerProcessIdentity !== "string" ||
+					!/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity))) ||
+			(record.workerPid === null) !== (record.workerProcessIdentity === null)
+		) {
+			return null;
+		}
+		return {
+			taskId: record.taskId,
+			state: record.state,
+			phase: record.phase,
+			workerPid: record.workerPid as number | null,
+			workerProcessIdentity: record.workerProcessIdentity as string | null,
+		};
+	} catch {
+		return null;
+	}
+}
+
+async function killWorkerForTask(
+	stateRoot: string,
+	taskId: string,
+	timeoutMs: number,
+): Promise<void> {
+	if (!/^task_[0-9a-f]{32}$/.test(taskId)) throw new Error("invalid task id");
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const deadline = Date.now() + timeoutMs;
+	let worker: { readonly pid: number; readonly identity: string } | null = null;
+	while (Date.now() < deadline && worker === null) {
+		for (const repository of await readdir(managerRoot).catch(() => [])) {
+			const record = await readLatestTaskRevision(
+				join(managerRoot, repository, "tasks", taskId, "history"),
+			);
+			if (
+				record?.taskId === taskId &&
+				record.workerPid !== null &&
+				record.workerProcessIdentity !== null
+			) {
+				worker = {
+					pid: record.workerPid,
+					identity: record.workerProcessIdentity,
+				};
+				break;
+			}
+		}
+		if (worker === null) await Bun.sleep(10);
+	}
+	if (worker === null) throw new Error("durable task omitted worker identity");
+	if (observeWorkerProcess(worker.pid, worker.identity) !== "matching") {
+		throw new Error("durable worker process identity did not match");
+	}
+	try {
+		process.kill(worker.pid, "SIGKILL");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+			throw new Error("durable worker pid was already absent", { cause: error });
+		}
+		throw error;
+	}
+	const exitDeadline = Date.now() + timeoutMs;
+	while (Date.now() < exitDeadline) {
+		const observed = observeWorkerProcess(worker.pid, worker.identity);
+		if (observed === "absent") return;
+		if (observed === "mismatch") {
+			throw new Error("durable worker process identity changed after SIGKILL");
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error("durable worker pid survived SIGKILL");
+}
+
+function observeWorkerProcess(
+	pid: number,
+	expectedIdentity: string,
+): "matching" | "absent" | "mismatch" {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		throw error;
+	}
+	try {
+		return readVaultGitProcessIdentity(pid) === expectedIdentity
+			? "matching"
+			: "mismatch";
+	} catch (error) {
+		try {
+			process.kill(pid, 0);
+		} catch (probeError) {
+			if ((probeError as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		}
+		throw error;
+	}
 }
 
 async function waitForTaskState(

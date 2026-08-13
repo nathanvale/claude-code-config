@@ -22,8 +22,8 @@ describe("background worker negative controls", () => {
 			mutate: (source: string) =>
 				replaceRequired(
 					source,
-					['await durability.linkExclusive(temporary, path, "task_claim");'],
-					['await durability.rename(temporary, path, "task_claim");'],
+					['await durability.linkExclusive(temporary, path, target);'],
+					['await durability.rename(temporary, path, target);'],
 				),
 		},
 		{
