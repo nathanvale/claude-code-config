@@ -148,6 +148,7 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"repair.ts",
 	"repository-identity.ts",
 	"store.ts",
+	"task-repair.ts",
 	"task-state.ts",
 	"task-reconciliation.ts",
 	"task-store.ts",
@@ -1665,6 +1666,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 	const admission = await taskStore.claimOrJoin({
 		claimReceiptId: loaded.receipt.receiptId,
 		receiptId: loaded.receipt.receiptId,
+		receiptRevision: loaded.receipt.revision,
 		transactionId: loaded.receipt.transactionId,
 		remote: input.composition.remote,
 		generation: loaded.receipt.leaseGeneration,
@@ -1834,6 +1836,8 @@ async function launchBackgroundCompletion(input: EmitContext & {
 			blockers: ["worker_launch_protocol_failed"],
 			transaction_id: loaded.receipt.transactionId,
 			task_id: state.taskId,
+			task_attempt_number: state.attemptNumber,
+			task_previous_failure: state.previousTerminalResult,
 			task_state: state.state,
 			task_phase: state.phase,
 			lease_generation: state.leaseGeneration,
@@ -1851,6 +1855,8 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		blockers: [],
 		transaction_id: state.transactionId,
 		task_id: state.taskId,
+		task_attempt_number: state.attemptNumber,
+		task_previous_failure: state.previousTerminalResult,
 		lease_generation: state.leaseGeneration,
 		task_state: state.state,
 		task_phase: state.phase,
@@ -2235,6 +2241,11 @@ async function executeInvocation(
 				// CAS race must never discard the diagnosis the operator asked for.
 				await reconcileTaskClosure(composition, value).catch(() => undefined);
 				await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
+				await authorizeTaskRepairForWritingReceipt(
+					composition,
+					invocation.transactionId,
+					value,
+				).catch(() => undefined);
 				return {
 				kind: "doctor",
 					value,
@@ -2275,6 +2286,16 @@ async function executeInvocation(
 					}
 					: { capability: privateBytes }),
 			});
+			if (action === "resume") {
+				composition.runtime.interrupt(
+					"after_repair_receipt_before_task_authorization",
+				);
+				await authorizeTaskRepairForWritingReceipt(
+					composition,
+					invocation.transactionId,
+					value,
+				);
+			}
 			await reconcileTaskClosure(composition, value).catch(() => undefined);
 			return {
 				kind: "repair",
@@ -2291,6 +2312,44 @@ async function executeInvocation(
 				kind: "janitor",
 				value: await composition.janitor.run({ trigger: "nightly" }),
 			};
+	}
+}
+
+async function authorizeTaskRepairForWritingReceipt(
+	composition: VaultGitCliComposition,
+	transactionId: string | undefined,
+	result: VaultGitDoctorResult | VaultGitRepairResult,
+): Promise<void> {
+	const repairResultEligible =
+		result.status === "repaired" && result.state === "active";
+	const doctorResultEligible =
+		result.status === "diagnosed" &&
+		result.state === "repairable" &&
+		result.repairAction === "resume";
+	if (
+		!composition.taskStore ||
+		(!repairResultEligible && !doctorResultEligible) ||
+		result.phase !== "writing" ||
+		!transactionId
+	) return;
+	const receipt = await composition.store.load();
+	if (
+		receipt.status !== "loaded" ||
+		receipt.receipt.phase !== "writing" ||
+		receipt.receipt.transactionId !== transactionId ||
+		receipt.receipt.leaseGeneration === null
+	) {
+		throw new Error("repaired receipt unavailable for task authorization");
+	}
+	const authorization = await composition.taskStore.authorizeRepair({
+		receiptId: receipt.receipt.receiptId,
+		transactionId,
+		leaseGeneration: receipt.receipt.leaseGeneration,
+		repairedReceiptRevision: receipt.receipt.revision,
+		recordedAt: composition.runtime.now().toISOString(),
+	});
+	if (authorization.status === "refused") {
+		throw new Error("repaired task authorization refused");
 	}
 }
 
@@ -2897,6 +2956,8 @@ function payloadForRuntime(
 			blockers: value.terminalResult?.blocker ? [value.terminalResult.blocker] : [],
 			transaction_id: value.transactionId,
 			task_id: value.taskId,
+			task_attempt_number: value.attemptNumber,
+			task_previous_failure: value.previousTerminalResult,
 			lease_generation: value.leaseGeneration,
 			task_state: value.state,
 			task_phase: value.phase,
@@ -3212,6 +3273,14 @@ function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
 		`retry_safety: ${result.retry_safety}`,
 		...(result.transaction_id ? [`transaction_id: ${result.transaction_id}`] : []),
 		...(result.task_id ? [`task_id: ${result.task_id}`] : []),
+		...(result.task_attempt_number
+			? [`task_attempt_number: ${result.task_attempt_number}`]
+			: []),
+		...(result.task_previous_failure
+			? [
+					`task_previous_failure: ${result.task_previous_failure.blocker ?? result.task_previous_failure.outcome}`,
+				]
+			: []),
 		...(result.task_state ? [`task_state: ${result.task_state}`] : []),
 		...(result.activation_restriction
 			? [renderVaultGitActivationRestriction(result.activation_restriction)]

@@ -425,10 +425,21 @@ export interface VaultGitTaskTerminalResult {
 	readonly retrySafety: VaultGitRetrySafety;
 }
 
+/** Single-use private proof that one known failed attempt may be replaced. */
+export interface VaultGitTaskRepairAuthorization {
+	readonly schemaVersion: 1;
+	readonly action: "resume";
+	readonly failedAttemptNumber: number;
+	readonly failedTaskRevision: number;
+	readonly repairedReceiptRevision: number;
+	readonly bindingDigest: string;
+	readonly authorizedAt: string;
+}
+
 /** Capability-free immutable state for one admitted background task. */
 export interface VaultGitTaskState {
 	/** Exact task-state schema version. */
-	readonly schemaVersion: 1;
+	readonly schemaVersion: 2;
 	/** Opaque task correlation generated independently of the receipt. */
 	readonly taskId: string;
 	/** Receipt whose exclusive completion claim owns the task. */
@@ -439,6 +450,8 @@ export interface VaultGitTaskState {
 	readonly leaseGeneration: string;
 	/** Monotonic compare-and-set revision. */
 	readonly revision: number;
+	/** Monotonic semantic worker execution within the stable task. */
+	readonly attemptNumber: number;
 	/** Public task lifecycle state. */
 	readonly state: VaultGitTaskLifecycleState;
 	/** Durable task phase. */
@@ -463,6 +476,12 @@ export interface VaultGitTaskState {
 	readonly launchAttempt: number;
 	/** Bounded result present only for a terminal task phase. */
 	readonly terminalResult: VaultGitTaskTerminalResult | null;
+	/** Sanitized terminal result from the immediately preceding attempt. */
+	readonly previousTerminalResult: VaultGitTaskTerminalResult | null;
+	/** Monotonic fence once any publication outcome for this task was uncertain. */
+	readonly repairReentryBlocked: boolean;
+	/** Pending exact repair proof; cleared atomically when the next attempt wins. */
+	readonly repairAuthorization: VaultGitTaskRepairAuthorization | null;
 }
 
 /**
@@ -814,6 +833,10 @@ export interface VaultGitLifecycleResultPayload {
 	readonly lease_generation?: string;
 	/** Selected task lifecycle state. */
 	readonly task_state?: VaultGitTaskLifecycleState;
+	/** Monotonic semantic worker attempt within the stable task. */
+	readonly task_attempt_number?: number;
+	/** Sanitized terminal result from the immediately preceding attempt. */
+	readonly task_previous_failure?: VaultGitTaskTerminalResult | null;
 	/** Selected task lifecycle phase. */
 	readonly task_phase?: VaultGitTaskPhase;
 	/** Latest observational heartbeat timestamp. */

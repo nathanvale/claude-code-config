@@ -34,14 +34,30 @@ export interface VaultGitTaskStoreOptions {
 /** Exact receipt-selected caller binding for one completion task. */
 export interface VaultGitTaskClaimOrJoinInput extends VaultGitTaskBindingInput {
 	readonly claimReceiptId: string;
+	/** Current receipt revision; legacy callers default to revision one. */
+	readonly receiptRevision?: number;
 	readonly recordedAt: string;
 }
 
 /** Observable single-flight decision for one completion task caller. */
 export type VaultGitTaskClaimOrJoinResult =
 	| { readonly status: "created"; readonly launch: "winner"; readonly state: VaultGitTaskState }
-	| { readonly status: "existing"; readonly launch: "joined"; readonly state: VaultGitTaskState }
+	| { readonly status: "existing"; readonly launch: "winner" | "joined"; readonly state: VaultGitTaskState }
 	| { readonly status: "refused"; readonly launch: "refused"; readonly reason: "task_input_mismatch" };
+
+/** Exact repaired receipt allowed to authorize one replacement attempt. */
+export interface VaultGitTaskAuthorizeRepairInput {
+	readonly receiptId: string;
+	readonly transactionId: string;
+	readonly leaseGeneration: string;
+	readonly repairedReceiptRevision: number;
+	readonly recordedAt: string;
+}
+
+/** Durable authorization publication result. */
+export type VaultGitTaskAuthorizeRepairResult =
+	| { readonly status: "transitioned" | "existing"; readonly state: VaultGitTaskState }
+	| { readonly status: "absent" | "refused" };
 
 /** Fail-closed read result for one task. */
 export type VaultGitTaskLoadResult =
@@ -81,6 +97,9 @@ export interface VaultGitTaskStore {
 		receiptId: string,
 		expectedTransactionId: string,
 	): Promise<VaultGitTaskLoadResult>;
+	authorizeRepair(
+		input: VaultGitTaskAuthorizeRepairInput,
+	): Promise<VaultGitTaskAuthorizeRepairResult>;
 	transition(
 		taskId: string,
 		expectedRevision: number,
@@ -256,9 +275,65 @@ export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): Vaul
 			}
 			return { status: "transitioned", state: next };
 		},
+		async authorizeRepair(input) {
+			const { authorizeVaultGitTaskRepair } = await import("./task-repair.ts");
+			assertReceiptId(input.receiptId);
+			if (
+				!/^txn_[0-9a-f]{32}$/u.test(input.transactionId) ||
+				!(/^[0-9a-f]{40}$/u.test(input.leaseGeneration) ||
+					/^[0-9a-f]{64}$/u.test(input.leaseGeneration)) ||
+				!Number.isSafeInteger(input.repairedReceiptRevision) ||
+				input.repairedReceiptRevision < 1
+			) {
+				return { status: "refused" };
+			}
+			const claim = await loadClaim(input.receiptId);
+			if (claim.status === "absent") return { status: "absent" };
+			if (
+				claim.status !== "loaded" ||
+				claim.claim.transactionId !== input.transactionId ||
+				claim.claim.leaseGeneration !== input.leaseGeneration
+			) {
+				return { status: "refused" };
+			}
+			await ensureInitialState(taskStateFromClaim(claim.claim));
+			const loaded = await loadByTaskId(claim.claim.taskId);
+			if (loaded.status !== "loaded" || loaded.state.state !== "repair_needed") {
+				return { status: "refused" };
+			}
+			if (loaded.state.repairAuthorization !== null) {
+				return loaded.state.repairAuthorization.repairedReceiptRevision ===
+						input.repairedReceiptRevision &&
+					loaded.state.repairAuthorization.bindingDigest === claim.claim.bindingDigest
+					? { status: "existing", state: loaded.state }
+					: { status: "refused" };
+			}
+			const next = authorizeVaultGitTaskRepair(loaded.state, {
+				repairedReceiptRevision: input.repairedReceiptRevision,
+				bindingDigest: claim.claim.bindingDigest,
+				recordedAt: input.recordedAt,
+			});
+			const created = await publishExclusiveJson(
+				revisionPath(taskHistory(next.taskId), next.revision),
+				next,
+				durability,
+				"task_state",
+			);
+			if (created) return { status: "transitioned", state: next };
+			const current = await loadByTaskId(next.taskId);
+			if (current.status !== "loaded") throw new Error("task CAS winner unavailable");
+			return current.state.repairAuthorization?.repairedReceiptRevision ===
+				input.repairedReceiptRevision
+				? { status: "existing", state: current.state }
+				: { status: "refused" };
+		},
 		async claimOrJoin(input) {
 			assertReceiptId(input.claimReceiptId);
 			assertReceiptId(input.receiptId);
+			const receiptRevision = input.receiptRevision ?? 1;
+			if (!Number.isSafeInteger(receiptRevision) || receiptRevision < 1) {
+				throw new Error("invalid receipt revision");
+			}
 			if (input.claimReceiptId !== input.receiptId) {
 				return { status: "refused", launch: "refused", reason: "task_input_mismatch" };
 			}
@@ -287,8 +362,31 @@ export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): Vaul
 				return { status: "refused", launch: "refused", reason: "task_input_mismatch" };
 			}
 			await ensureInitialState(taskStateFromClaim(existing.claim));
-			const latest = await loadByTaskId(existing.claim.taskId);
+			let latest = await loadByTaskId(existing.claim.taskId);
 			if (latest.status !== "loaded") throw new Error("existing task state unavailable");
+			if (
+				latest.state.state === "repair_needed" &&
+				latest.state.repairAuthorization?.repairedReceiptRevision ===
+					receiptRevision &&
+				latest.state.repairAuthorization.bindingDigest === existing.claim.bindingDigest
+			) {
+				const { consumeVaultGitTaskRepairAuthorization } = await import(
+					"./task-repair.ts"
+				);
+				const next = consumeVaultGitTaskRepairAuthorization(latest.state, {
+					repairedReceiptRevision: receiptRevision,
+					recordedAt: input.recordedAt,
+				});
+				const created = await publishExclusiveJson(
+					revisionPath(taskHistory(next.taskId), next.revision),
+					next,
+					durability,
+					"task_state",
+				);
+				if (created) return { status: "existing", launch: "winner", state: next };
+				latest = await loadByTaskId(existing.claim.taskId);
+				if (latest.status !== "loaded") throw new Error("task CAS winner unavailable");
+			}
 			return { status: "existing", launch: "joined", state: latest.state };
 		},
 	};

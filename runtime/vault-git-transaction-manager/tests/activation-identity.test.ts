@@ -421,7 +421,7 @@ async function reachableLocalSources(entrypoints: readonly string[]): Promise<st
 		sources.add(sourcePath);
 		const source = await readFile(sourcePath, "utf8");
 		for (const match of source.matchAll(
-			/(?:\bfrom\s*|\bimport\s*)["'](\.[^"']+)["']/g,
+			/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["'](\.[^"']+)["']/g,
 		)) {
 			const specifier = match[1];
 			if (specifier) {

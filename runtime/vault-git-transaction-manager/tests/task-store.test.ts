@@ -15,6 +15,162 @@ const temporaryDirectories = createTempDirectoryFixture();
 afterEach(temporaryDirectories.cleanup);
 
 describe("private task store", () => {
+	test("one repaired receipt authorizes exactly one fresh attempt under the stable task", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-repair-reentry-",
+		);
+		const receiptId = "receipt_01010101010101010101010101010101";
+		const transactionId = "txn_02020202020202020202020202020202";
+		const attemptOneGeneration =
+			"launch_03030303030303030303030303030303";
+		const stores = Array.from({ length: 20 }, () =>
+			createVaultGitTaskStore({ stateRoot, repositoryIdentity: "vault@example" }),
+		);
+		const input = {
+			...taskClaimInput({
+				receiptId,
+				transactionId,
+				leaseGeneration: "a".repeat(40),
+				recordedAt: "2026-08-13T09:00:00.000Z",
+			}),
+			receiptRevision: 2,
+		};
+		const admitted = await stores[0].claimOrJoin(input);
+		if (admitted.status === "refused") throw new Error("test claim refused");
+		const failed = await stores[0].transition(
+			admitted.state.taskId,
+			admitted.state.revision,
+			{
+				state: "repair_needed",
+				phase: "terminal",
+				updatedAt: "2026-08-13T09:00:01.000Z",
+				heartbeatAt: null,
+				checkpoint: "repairable",
+				launchGeneration: attemptOneGeneration,
+				launchAttempt: 1,
+				terminalResult: {
+					outcome: "refused",
+					phase: "repairable",
+					changedState: "local",
+					blocker: "vault_check_failed",
+					retrySafety: "same_input_unsafe",
+				},
+			},
+		);
+		expect(failed.status).toBe("transitioned");
+
+		const repairEvidence = {
+			receiptId,
+			transactionId,
+			leaseGeneration: "a".repeat(40),
+			repairedReceiptRevision: 3,
+			recordedAt: "2026-08-13T09:00:02.000Z",
+		} as const;
+		const interrupted = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+			durability: recordingTaskDurabilityPort([], 0),
+		});
+		await expect(interrupted.authorizeRepair(repairEvidence)).rejects.toThrow(
+			"task state durability unavailable",
+		);
+		const authorized = await stores[0].authorizeRepair(repairEvidence);
+		expect(authorized).toMatchObject({
+			status: "transitioned",
+			state: {
+				taskId: admitted.state.taskId,
+				attemptNumber: 1,
+				state: "repair_needed",
+				repairAuthorization: {
+					failedAttemptNumber: 1,
+					repairedReceiptRevision: 3,
+				},
+			},
+		});
+		expect(await stores[1].authorizeRepair(repairEvidence)).toMatchObject({
+			status: "existing",
+			state: { repairAuthorization: { repairedReceiptRevision: 3 } },
+		});
+
+		const repairedInput = {
+			...input,
+			receiptRevision: 3,
+			recordedAt: "2026-08-13T09:00:03.000Z",
+		};
+		expect(await stores[1].claimOrJoin({
+			...repairedInput,
+			normalizedInput: '{"command":"complete","summary":"changed"}',
+		})).toEqual({
+			status: "refused",
+			launch: "refused",
+			reason: "task_input_mismatch",
+		});
+		expect(await stores[0].load(receiptId)).toMatchObject({
+			status: "loaded",
+			state: { attemptNumber: 1, repairAuthorization: { repairedReceiptRevision: 3 } },
+		});
+		const selected = await Promise.all(
+			stores.map((store) => store.claimOrJoin(repairedInput)),
+		);
+		expect(selected.filter((result) => result.launch === "winner")).toHaveLength(1);
+		expect(selected.filter((result) => result.launch === "joined")).toHaveLength(19);
+		for (const result of selected) {
+			if (result.status === "refused") throw new Error("repaired claim refused");
+			expect(result.state).toMatchObject({
+				taskId: admitted.state.taskId,
+				attemptNumber: 2,
+				state: "claimed",
+				phase: "admitted",
+				launchAttempt: 0,
+				terminalResult: null,
+				previousTerminalResult: { blocker: "vault_check_failed" },
+				repairAuthorization: null,
+			});
+		}
+		const latest = await stores[0].load(receiptId);
+		if (latest.status !== "loaded") throw new Error("repaired task missing");
+		const lateAttemptOne = await stores[0].transition(
+			latest.state.taskId,
+			latest.state.revision,
+			{
+				state: "repair_needed",
+				phase: "terminal",
+				updatedAt: "2026-08-13T09:00:04.000Z",
+				heartbeatAt: null,
+				checkpoint: "repairable",
+				launchGeneration: attemptOneGeneration,
+				terminalResult: {
+					outcome: "refused",
+					phase: "repairable",
+					changedState: "local",
+					blocker: "vault_check_failed",
+					retrySafety: "same_input_unsafe",
+				},
+			},
+			{ expectedLaunchGeneration: attemptOneGeneration },
+		);
+		expect(lateAttemptOne).toMatchObject({
+			status: "stale",
+			state: { attemptNumber: 2, state: "claimed" },
+		});
+		const failedHistory = JSON.parse(
+			await readFile(
+				join(
+					stores[0].paths.tasks,
+					admitted.state.taskId,
+					"history",
+					`${String(failed.state.revision).padStart(12, "0")}.json`,
+				),
+				"utf8",
+			),
+		);
+		expect(failedHistory).toMatchObject({
+			attemptNumber: 1,
+			state: "repair_needed",
+			terminalResult: { blocker: "vault_check_failed" },
+		});
+	});
+
 	test("uses the exact repository namespace selected by the receipt store", async () => {
 		const stateRoot = await temporaryDirectories.create("vault-git-task-namespace-");
 		const repositoryId = "a".repeat(64);
@@ -124,6 +280,7 @@ describe("private task store", () => {
 		const claimPath = stores[0].claimPath(receiptId);
 		const claimSource = await readFile(claimPath, "utf8");
 		expect(Object.keys(JSON.parse(claimSource)).sort()).toEqual([
+			"attemptNumber",
 			"bindingDigest",
 			"checkpoint",
 			"heartbeatAt",
@@ -132,8 +289,11 @@ describe("private task store", () => {
 			"launchGeneration",
 			"leaseGeneration",
 			"phase",
+			"previousTerminalResult",
 			"receiptId",
 			"recordedAt",
+			"repairAuthorization",
+			"repairReentryBlocked",
 			"revision",
 			"schemaVersion",
 			"state",
