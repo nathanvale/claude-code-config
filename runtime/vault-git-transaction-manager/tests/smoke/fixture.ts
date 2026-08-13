@@ -1,6 +1,14 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +91,8 @@ export interface SmokeFixture {
 	): Promise<PreparedSmokeInterruption>;
 	/** Kill an owner process after a real external operation exposes its phase marker. */
 	killOwnerAfterFile(args: readonly string[], readyPath: string): Promise<void>;
+	/** Kill the detached background worker paused at one named engine boundary. */
+	killWorkerAtInterrupt(args: readonly string[], point: string): Promise<void>;
 	/** Run git in the clone. */
 	git(...args: string[]): string;
 	/** Run git in the bare remote. */
@@ -210,6 +220,7 @@ async function mkSmokeClone(
 		VAULT_GIT_REMOTE: "origin",
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_TEST_HARNESS: "1",
 		VAULT_GIT_SHIM_LOG: shimLog,
 		...(options.leaseDurationMs
 			? { VAULT_GIT_TEST_LEASE_DURATION_MS: String(options.leaseDurationMs) }
@@ -309,6 +320,47 @@ async function mkSmokeClone(
 					};
 				},
 			};
+		},
+		// The detached worker, not the foreground caller, is the process paused at
+		// an engine boundary. Read its pid from durable task state and kill that.
+		killWorkerAtInterrupt: async (args: readonly string[], point: string) => {
+			const gate = join(root, `${name}-worker-interrupt-${crypto.randomUUID()}`);
+			const accepted = await runCliProcess({
+				label: `vault-git ${args.join(" ")}`,
+				argv: [process.execPath, processCliPath, ...args],
+				cwd: packageRoot,
+				env: {
+					...env,
+					VAULT_GIT_TEST_INTERRUPT_POINT: point,
+					VAULT_GIT_TEST_INTERRUPT_GATE: gate,
+				},
+				timeoutMs: 45_000,
+			});
+			if (accepted.exitCode !== 0) {
+				throw new Error(
+					`worker launch did not succeed: ${accepted.stdout}${accepted.stderr}`,
+				);
+			}
+			await waitForFile(`${gate}.ready`, 30_000);
+			const workerPid = await readWorkerPid(stateRoot, 10_000);
+			try {
+				process.kill(workerPid, "SIGKILL");
+			} catch (error) {
+				// The worker can exit between reading its pid and signalling it.
+				// That is the state this helper wanted, not a failure.
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				return;
+			}
+			const deadline = Date.now() + 10_000;
+			while (Date.now() < deadline) {
+				try {
+					process.kill(workerPid, 0);
+				} catch {
+					return;
+				}
+				await Bun.sleep(10);
+			}
+			throw new Error("interrupted worker did not exit");
 		},
 		prepareAtInterrupt: async (args: readonly string[], point: string) => {
 			const gate = join(root, `${name}-interrupt-${crypto.randomUUID()}`);
@@ -417,6 +469,31 @@ async function mkSmokeClone(
 				.map((line) => JSON.parse(line) as string[]);
 		},
 	};
+}
+
+/** Read the acknowledged worker's pid from the private task record. */
+async function readWorkerPid(
+	stateRoot: string,
+	timeoutMs: number,
+): Promise<number> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		for (const repository of await readdir(managerRoot).catch(() => [])) {
+			const tasks = join(managerRoot, repository, "tasks");
+			for (const taskId of await readdir(tasks).catch(() => [])) {
+				const source = await readFile(
+					join(tasks, taskId, "current.json"),
+					"utf8",
+				).catch(() => "");
+				if (!source) continue;
+				const record = JSON.parse(source) as { workerPid: number | null };
+				if (record.workerPid !== null) return record.workerPid;
+			}
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error("timed out waiting for a durable worker pid");
 }
 
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {

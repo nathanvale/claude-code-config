@@ -58,7 +58,7 @@ export const vaultGitBranchStationCatalog = [
 	station("commands.discovery", "commands", "success", "machine discovery projects the live command contracts", 0, "ok", VAULT_GIT_COMMANDS_CONTRACT_ID, "read_only_projection"),
 	station("begin.admitted", "begin", "success", "aligned main and absent ledger admit one owner transaction", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "remote_lease_and_local_receipt", undefined, "complete_transaction"),
 	station("join.joined", "join", "success", "join capability extends owned paths without owner authority", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "local_receipt_only", undefined, "continue_outer_transaction"),
-	station("complete.completed", "complete", "success", "owner capability checks commits and atomically closes", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "atomic_remote_close", undefined, "none"),
+	station("complete.completed", "complete", "success", "owner capability admits one background close and returns its task", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "acknowledged_background_close", undefined, "inspect_status"),
 	station("complete.join_role_refused", "complete", "refusal", "join capability cannot complete or release", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_completion", "capability_role_mismatch", "use_owner_capability"),
 	station("repair.action_required", "repair", "usage_failure", "repair without an engine-owned action fails usage", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
 	station("repair.join_role_refused", "repair", "refusal", "join capability cannot execute an admitted repair", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_repair", "capability_role_mismatch", "use_owner_capability"),

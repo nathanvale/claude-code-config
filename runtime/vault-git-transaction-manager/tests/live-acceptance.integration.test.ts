@@ -5,6 +5,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	readdir,
 	rm,
 	symlink,
 	writeFile,
@@ -119,6 +120,554 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		for (const probe of dryRuns) {
 			expect(pushes.indexOf(probe)).toBeLessThan(closeIndex);
 		}
+	});
+
+	test("public complete durably admits one inspectable worker before returning", async () => {
+		const fixture = await createFixture({
+			blockingCheck: true,
+			privateLaunchTimeoutMs: 3_000,
+		});
+		const transactionId = await fixture.begin("notes/event.md");
+		await writeFile(join(fixture.clone, "notes/event.md"), "background event\n");
+
+		const startedAt = performance.now();
+		const foregroundPromise = fixture.run([
+			"complete",
+			"--transaction-id",
+			transactionId,
+			"--summary",
+			"docs(vault): record background event",
+			"--json",
+		]);
+		let foreground: CliProcessResult | null = null;
+		let foregroundElapsedMs = 0;
+		let foregroundEnvelope: {
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				schema_version?: string;
+				outcome?: string;
+				phase?: string;
+				transaction_id?: string;
+				task_id?: string;
+			};
+		} | null = null;
+		let taskStatusAtReturn: CliProcessResult | null = null;
+		let taskStatusAfterDeadline: CliProcessResult | null = null;
+		try {
+			await waitForFile(fixture.checkMarker, 10_000);
+			foreground = await Promise.race([
+				foregroundPromise,
+				Bun.sleep(2_000).then(() => null),
+			]);
+			foregroundElapsedMs = performance.now() - startedAt;
+			foregroundEnvelope = foreground
+				? parseCliProcessJson<{
+					status?: string;
+					error?: { code?: string };
+					data?: {
+						contract_id?: string;
+						schema_version?: string;
+						outcome?: string;
+						phase?: string;
+						transaction_id?: string;
+						task_id?: string;
+					};
+				}>(foreground)
+				: null;
+			taskStatusAtReturn = await fixture.run([
+				"status",
+				"--task-id",
+				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				"--json",
+			]);
+			// Cross the production launcher's scaled whole-child deadline after the
+			// checker proves the worker is alive.
+			await Bun.sleep(3_250);
+			taskStatusAfterDeadline = await fixture.run([
+				"status",
+				"--task-id",
+				foregroundEnvelope?.data?.task_id ?? "task_missing",
+				"--json",
+			]);
+		} finally {
+			await fixture.releaseCheck();
+		}
+		if (!taskStatusAtReturn || !taskStatusAfterDeadline) {
+			throw new Error("task status process did not run");
+		}
+		const taskId = foregroundEnvelope?.data?.task_id;
+		const taskStatusAtReturnEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				schema_version?: string;
+				transaction_id?: string;
+				task_id?: string;
+				task_state?: string;
+				foreground_non_vault_work_allowed?: boolean;
+			};
+		}>(taskStatusAtReturn);
+		const taskStatusAfterDeadlineEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				contract_id?: string;
+				transaction_id?: string;
+				task_id?: string;
+				task_state?: string;
+				foreground_non_vault_work_allowed?: boolean;
+			};
+		}>(taskStatusAfterDeadline);
+		const publicTaskSurfaces = [
+			foreground?.stdout ?? "",
+			taskStatusAtReturn.stdout,
+			taskStatusAfterDeadline.stdout,
+		].join("\n");
+
+		// Settle the current synchronous implementation before fixture cleanup.
+		// V2 will have returned this accepted foreground response already.
+		const settledForeground = await foregroundPromise;
+		const settledForegroundEnvelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+		}>(settledForeground);
+
+		expect({
+			foregroundElapsedUnderTwoSeconds: foregroundElapsedMs < 2_000,
+			foregroundStatus: foregroundEnvelope?.status,
+			foregroundError: foregroundEnvelope?.error?.code,
+			foregroundData: foregroundEnvelope?.data,
+			settledForegroundError: settledForegroundEnvelope.error?.code,
+			taskIdIsOpaque:
+				typeof taskId === "string" &&
+				taskId.length > 0 &&
+				taskId !== transactionId,
+			statusAtReturnExitCode: taskStatusAtReturn.exitCode,
+			statusAtReturnError: taskStatusAtReturnEnvelope.error?.code,
+			statusAtReturnData: taskStatusAtReturnEnvelope.data,
+			statusAfterDeadlineExitCode: taskStatusAfterDeadline.exitCode,
+			statusAfterDeadlineError: taskStatusAfterDeadlineEnvelope.error?.code,
+			statusAfterDeadlineData: taskStatusAfterDeadlineEnvelope.data,
+			leaksPrivateStateRoot: publicTaskSurfaces.includes(fixture.stateRoot),
+			leaksRepositoryPath: publicTaskSurfaces.includes(fixture.clone),
+			leaksRawGitCommand:
+				publicTaskSurfaces.includes("git push") ||
+				publicTaskSurfaces.includes("git commit-tree"),
+			leaksAuthBearingUrl: /https?:\/\/[^/\s:@]+:[^/\s@]+@/.test(
+				publicTaskSurfaces,
+			),
+		}).toMatchObject({
+			foregroundElapsedUnderTwoSeconds: true,
+			foregroundStatus: "ok",
+			foregroundError: undefined,
+			foregroundData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+			},
+			settledForegroundError: undefined,
+			taskIdIsOpaque: true,
+			statusAtReturnExitCode: 0,
+			statusAtReturnError: undefined,
+			statusAtReturnData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+			},
+			statusAfterDeadlineExitCode: 0,
+			statusAfterDeadlineError: undefined,
+			statusAfterDeadlineData: {
+				contract_id: "vault-git.lifecycle-result",
+				transaction_id: transactionId,
+				task_id: taskId,
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+			},
+			leaksPrivateStateRoot: false,
+			leaksRepositoryPath: false,
+			leaksRawGitCommand: false,
+			leaksAuthBearingUrl: false,
+		});
+	});
+
+	test(
+		"twenty identical public completions join one task and changed input refuses",
+		async () => {
+			const fixture = await createFixture({
+				blockingCheck: true,
+			});
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(join(fixture.clone, "notes/event.md"), "single-flight event\n");
+			const exactArgs = [
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): record single-flight event",
+				"--json",
+			] as const;
+
+			const firstCall = fixture.run(exactArgs);
+			try {
+				await waitForFile(fixture.checkMarker, 10_000);
+			} catch (error) {
+				await fixture.releaseCheck();
+				throw error;
+			}
+			const joiningCalls = Array.from({ length: 19 }, () => fixture.run(exactArgs));
+			const changedCall = fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): changed task fingerprint",
+				"--json",
+			]);
+			const foreground = await Promise.race([
+				Promise.all([firstCall, ...joiningCalls, changedCall]),
+				Bun.sleep(5_000).then(() => null),
+			]);
+			await fixture.releaseCheck();
+			const settled = await Promise.all([firstCall, ...joiningCalls, changedCall]);
+			const envelopes = settled.map((result) =>
+				parseCliProcessJson<{
+					status?: string;
+					error?: { code?: string };
+					data?: {
+						outcome?: string;
+						transaction_id?: string;
+						task_id?: string;
+						task_state?: string;
+					};
+				}>(result),
+			);
+			const identical = envelopes.slice(0, 20);
+			const changed = envelopes[20];
+			const taskIds = identical.map((envelope) => envelope.data?.task_id);
+			const workerExecutions = (await readFile(fixture.checkLog, "utf8").catch(
+				() => "",
+			))
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				allCallersSettledBeforeWorkerClosure: foreground !== null,
+				identicalStatuses: new Set(identical.map((envelope) => envelope.status)),
+				identicalTaskIds: new Set(taskIds),
+				taskIdIsOpaque:
+					typeof taskIds[0] === "string" &&
+					taskIds[0].length > 0 &&
+					taskIds[0] !== transactionId,
+				identicalTransactionIds: new Set(
+					identical.map((envelope) => envelope.data?.transaction_id),
+				),
+				workerExecutions,
+				changedStatus: changed?.status,
+				changedErrorCode: changed?.error?.code,
+				changedOutcome: changed?.data?.outcome,
+				changedTaskId: changed?.data?.task_id,
+			}).toEqual({
+				allCallersSettledBeforeWorkerClosure: true,
+				identicalStatuses: new Set(["ok"]),
+				identicalTaskIds: new Set([taskIds[0]]),
+				taskIdIsOpaque: true,
+				identicalTransactionIds: new Set([transactionId]),
+				workerExecutions: 1,
+				changedStatus: "error",
+				changedErrorCode: "task_input_mismatch",
+				changedOutcome: "refused",
+				changedTaskId: undefined,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"a parent killed after durable claim leaves one task and one worker on retry",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"claim-before-spawn event\n",
+			);
+			const summary = "docs(vault): record claim-before-spawn death";
+
+			await fixture.killDuringLaunch(transactionId, summary, "claimed");
+			const tasksAfterDeath = await readTaskStates(fixture.stateRoot);
+
+			const retry = fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			]);
+			await fixture.releaseCheck();
+			const settled = await retry;
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				error?: { code?: string };
+				data?: { task_id?: string; next_action?: { id?: string } };
+			}>(settled);
+			const tasksAfterRetry = await readTaskStates(fixture.stateRoot);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				tasksAfterDeath: tasksAfterDeath.length,
+				tasksAfterRetry: tasksAfterRetry.length,
+				retryReturnedSameTask:
+					envelope.data?.task_id === tasksAfterDeath[0]?.taskId,
+				// Recovery must never fan out into a second writer, whichever side
+				// of the checker barrier the killed attempt's worker reached.
+				atMostOneWorker: workerExecutions <= 1,
+				// The kill can land either side of acknowledgement, so both a join
+				// and a launch-fault refusal are correct -- but never a remote
+				// outage, and never a continuation other than inspect or repair.
+				retryNamesLocalOutcome:
+					envelope.error?.code !== "remote_unavailable" &&
+					["inspect_status", "run_doctor"].includes(
+						envelope.data?.next_action?.id ?? "",
+					),
+			}).toEqual({
+				tasksAfterDeath: 1,
+				tasksAfterRetry: 1,
+				retryReturnedSameTask: true,
+				atMostOneWorker: true,
+				retryNamesLocalOutcome: true,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"a parent killed after acknowledgement returns the same task and never restarts the worker",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"ack-before-response event\n",
+			);
+			const summary = "docs(vault): record ack-before-response death";
+
+			// The worker is already acknowledged and running behind the checker
+			// barrier when its launching parent dies.
+			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
+			const tasksAfterDeath = await readTaskStates(fixture.stateRoot);
+
+			// Let the orphaned worker reach a terminal state before retrying.
+			// Retrying while it still owns the transaction makes the second caller
+			// wait on that worker, which under parallel suite load outlasts the
+			// test budget instead of returning a task projection.
+			await fixture.releaseCheck();
+			await waitForTaskState(
+				fixture.stateRoot,
+				(state) =>
+					state === "closed" || state === "repair_needed" || state === "unknown",
+				30_000,
+			);
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				data?: { task_id?: string; task_state?: string };
+			}>(
+				await fixture.run([
+					"complete",
+					"--transaction-id",
+					transactionId,
+					"--summary",
+					summary,
+					"--json",
+				]),
+			);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				tasksAfterDeath: tasksAfterDeath.length,
+				// Acknowledgement was durable before the parent died, so the task
+				// records a running worker rather than an unlaunched claim.
+				deadParentTaskState: tasksAfterDeath[0]?.state,
+				retryReturnedSameTask:
+					envelope.data?.task_id === tasksAfterDeath[0]?.taskId,
+				tasksAfterRetry: (await readTaskStates(fixture.stateRoot)).length,
+				// The contract is idempotent delivery: the retry never starts a
+				// second worker for the acknowledged task.
+				atMostOneWorker: workerExecutions <= 1,
+			}).toEqual({
+				tasksAfterDeath: 1,
+				deadParentTaskState: "in_progress",
+				retryReturnedSameTask: true,
+				tasksAfterRetry: 1,
+				atMostOneWorker: true,
+			});
+		},
+		60_000,
+	);
+
+	test(
+		"restarting completion after worker death keeps one task and one worker",
+		async () => {
+			const fixture = await createFixture({ blockingCheck: true });
+			const transactionId = await fixture.begin("notes/event.md");
+			await writeFile(
+				join(fixture.clone, "notes/event.md"),
+				"restart recovery event\n",
+			);
+			const summary = "docs(vault): record restart recovery";
+
+			await fixture.killDuringLaunch(transactionId, summary, "acknowledged");
+			const admitted = await readTaskStates(fixture.stateRoot);
+			// Kill the acknowledged worker itself, not just its launching parent.
+			spawnSync("pkill", ["-f", `--transaction-id ${transactionId}`]);
+			await Bun.sleep(250);
+
+			const restarted = await fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			]);
+			const envelope = parseCliProcessJson<{
+				status?: string;
+				data?: { task_id?: string };
+			}>(restarted);
+			await fixture.releaseCheck();
+			const tasksAfterRestart = await readTaskStates(fixture.stateRoot);
+			const workerExecutions = (
+				await readFile(fixture.checkLog, "utf8").catch(() => "")
+			)
+				.split("\n")
+				.filter(Boolean).length;
+
+			expect({
+				admittedTasks: admitted.length,
+				tasksAfterRestart: tasksAfterRestart.length,
+				restartReturnedSameTask:
+					envelope.data?.task_id === admitted[0]?.taskId,
+				atMostOneWorker: workerExecutions <= 1,
+			}).toEqual({
+				admittedTasks: 1,
+				tasksAfterRestart: 1,
+				restartReturnedSameTask: true,
+				atMostOneWorker: true,
+			});
+		},
+		60_000,
+	);
+
+	test("malformed worker acknowledgement fails closed without claiming a remote outage", async () => {
+		const fixture = await createFixture({ privateChildMode: "malformed_ack" });
+		const transactionId = await fixture.begin("notes/event.md");
+		await writeFile(join(fixture.clone, "notes/event.md"), "malformed ack event\n");
+
+		const refused = await fixture.run([
+			"complete",
+			"--transaction-id",
+			transactionId,
+			"--summary",
+			"docs(vault): record malformed acknowledgement",
+			"--json",
+		]);
+		const envelope = parseCliProcessJson<{
+			status?: string;
+			error?: { code?: string };
+			data?: {
+				outcome?: string;
+				transaction_id?: string;
+				task_state?: string;
+				changed_state?: string;
+				next_action?: { id?: string };
+			};
+		}>(refused);
+
+		expect({
+			exitCode: refused.exitCode,
+			status: envelope.status,
+			errorIsLaunchSpecific:
+				envelope.error?.code !== undefined &&
+				envelope.error.code !== "remote_unavailable",
+			changedStateIsKnown: envelope.data?.changed_state !== "partial",
+			data: envelope.data,
+		}).toMatchObject({
+			exitCode: 1,
+			status: "error",
+			errorIsLaunchSpecific: true,
+			changedStateIsKnown: true,
+			data: {
+				outcome: "refused",
+				transaction_id: transactionId,
+				task_state: "launching",
+				next_action: { id: "run_doctor" },
+			},
+		});
+
+		// The first call only proves the immediate refusal. One replacement launch
+		// is permitted, so retry past the launch deadline until the attempt budget
+		// is spent, then read the durable classification the issue requires:
+		// repair_needed, never remote_unavailable.
+		let retried = refused;
+		let retriedEnvelope = envelope as {
+			error?: { code?: string };
+			data?: { task_id?: string; task_state?: string };
+		};
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			await Bun.sleep(1_750);
+			retried = await fixture.run([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): record malformed acknowledgement",
+				"--json",
+			]);
+			retriedEnvelope = parseCliProcessJson<{
+				error?: { code?: string };
+				data?: { task_id?: string; task_state?: string };
+			}>(retried);
+		}
+		const taskId = retriedEnvelope.data?.task_id;
+		const inspected = await fixture.run([
+			"status",
+			"--task-id",
+			taskId ?? "task_missing",
+			"--json",
+		]);
+		const inspectedEnvelope = parseCliProcessJson<{
+			data?: {
+				task_state?: string;
+				next_action?: { id?: string };
+				blockers?: readonly string[];
+			};
+		}>(inspected);
+
+		expect({
+			retriedErrorCode: retriedEnvelope.error?.code,
+			taskState: inspectedEnvelope.data?.task_state,
+			nextAction: inspectedEnvelope.data?.next_action?.id,
+			blockersExcludeRemoteOutage:
+				!(inspectedEnvelope.data?.blockers ?? []).includes("remote_unavailable"),
+		}).toEqual({
+			retriedErrorCode: "worker_launch_protocol_failed",
+			taskState: "repair_needed",
+			nextAction: "run_doctor",
+			blockersExcludeRemoteOutage: true,
+		});
 	});
 
 	test(
@@ -492,12 +1041,20 @@ interface Fixture {
 	readonly clone: string;
 	readonly stateRoot: string;
 	readonly env: NodeJS.ProcessEnv;
+	readonly checkMarker: string;
+	readonly checkLog: string;
 	readonly shimMarker: string;
 	readonly shimLog: string;
 	run(args: readonly string[]): Promise<CliProcessResult>;
 	begin(path: string): Promise<string>;
 	owner(args: readonly string[]): Promise<CliProcessResult>;
 	interruptComplete(transactionId: string): Promise<void>;
+	killDuringLaunch(
+		transactionId: string,
+		summary: string,
+		until: "claimed" | "acknowledged",
+	): Promise<void>;
+	releaseCheck(): Promise<void>;
 	git(...args: string[]): string;
 	gitBare(...args: string[]): string;
 	remoteRefs(): string;
@@ -508,6 +1065,8 @@ async function createFixture(
 	options: {
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
+		readonly privateLaunchTimeoutMs?: number;
+		readonly privateChildMode?: "malformed_ack";
 		readonly profile?: string;
 		readonly shimMode?: string;
 	} = {},
@@ -532,6 +1091,8 @@ async function createCloneFixture(
 	options: {
 		readonly activate?: boolean;
 		readonly blockingCheck?: boolean;
+		readonly privateLaunchTimeoutMs?: number;
+		readonly privateChildMode?: "malformed_ack";
 		readonly profile?: string;
 		readonly shimMode?: string;
 	},
@@ -542,6 +1103,7 @@ async function createCloneFixture(
 	const shimMarker = join(root, `${name}-shim-marker`);
 	const shimLog = join(root, `${name}-shim-log`);
 	const checkMarker = join(root, `${name}-check-marker`);
+	const checkLog = join(root, `${name}-check-log`);
 	git(root, "clone", bare, clone);
 	git(clone, "config", "user.name", "Vault Acceptance Test");
 	git(clone, "config", "user.email", "vault-acceptance@example.invalid");
@@ -564,9 +1126,11 @@ async function createCloneFixture(
 		await writeFile(
 			join(clone, "vault-check.ts"),
 			[
+				'import { appendFile, writeFile } from "node:fs/promises";',
 				'import { existsSync } from "node:fs";',
-				'import { writeFile } from "node:fs/promises";',
 				"const marker = process.env.VAULT_GIT_CHECK_MARKER;",
+				"const log = process.env.VAULT_GIT_CHECK_LOG;",
+				'if (log) await appendFile(log, "worker\\n");',
 				'if (marker) { await writeFile(marker, "checking\\n"); while (!existsSync([marker, ".release"].join(""))) await Bun.sleep(10); }',
 			].join("\n"),
 		);
@@ -611,9 +1175,21 @@ async function createCloneFixture(
 		VAULT_GIT_REMOTE: "origin",
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_TEST_HARNESS: "1",
 		VAULT_GIT_SHIM_LOG: shimLog,
+		VAULT_GIT_CHECK_LOG: checkLog,
 		...(options.shimMode ? { VAULT_GIT_SHIM_MODE: options.shimMode } : {}),
 		...(options.blockingCheck ? { VAULT_GIT_CHECK_MARKER: checkMarker } : {}),
+		...(options.privateLaunchTimeoutMs === undefined
+			? {}
+			: {
+					VAULT_GIT_TEST_PRIVATE_LAUNCH_TIMEOUT_MS: String(
+						options.privateLaunchTimeoutMs,
+					),
+				}),
+		...(options.privateChildMode === undefined
+			? {}
+			: { VAULT_GIT_TEST_PRIVATE_CHILD_MODE: options.privateChildMode }),
 	};
 	const repositoryIdentity = (
 		await resolveVaultRepositoryIdentity({
@@ -692,18 +1268,61 @@ async function createCloneFixture(
 		child.kill("SIGKILL");
 		await new Promise<void>((resolveChild) => child.once("close", () => resolveChild()));
 	};
+	// Kill the foreground through the ordinary launch path -- no --capability-fd,
+	// so launchBackgroundCompletion actually runs and the detached worker exists.
+	const killDuringLaunch = async (
+		transactionId: string,
+		summary: string,
+		until: "claimed" | "acknowledged",
+	): Promise<void> => {
+		const child = spawn(
+			process.execPath,
+			[
+				"run",
+				cliPath,
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				summary,
+				"--json",
+			],
+			{ cwd: packageRoot, env, stdio: ["ignore", "pipe", "pipe"] },
+		);
+		try {
+			await waitForTaskState(
+				stateRoot,
+				until === "claimed"
+					? (state) => state === "claimed" || state === "launching"
+					: (state) => state === "in_progress",
+				10_000,
+			);
+		} catch {
+			// The kill is the point of this helper. Losing the race to the target
+			// state still leaves a dead parent, which the caller's assertions cover.
+		} finally {
+			child.kill("SIGKILL");
+			await new Promise<void>((resolveChild) =>
+				child.once("close", () => resolveChild()),
+			);
+		}
+	};
 	return {
 		root,
 		bare,
 		clone,
 		stateRoot,
 		env,
+		checkMarker,
+		checkLog,
 		shimMarker,
 		shimLog,
 		run,
 		begin,
 		owner,
 		interruptComplete,
+		killDuringLaunch,
+		releaseCheck: () => writeFile(`${checkMarker}.release`, "release\n"),
 		git: (...args) => git(clone, ...args),
 		gitBare: (...args) => git(bare, ...args),
 		remoteRefs: () => remoteRefs(bare),
@@ -882,6 +1501,42 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 		await Bun.sleep(10);
 	}
 	throw new Error(`timed out waiting for ${path}`);
+}
+
+/** Read every durable task record the private state root currently holds. */
+async function readTaskStates(
+	stateRoot: string,
+): Promise<readonly { taskId: string; state: string; phase: string }[]> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const repositories = await readdir(managerRoot).catch(() => []);
+	const states: { taskId: string; state: string; phase: string }[] = [];
+	for (const repository of repositories) {
+		const tasks = join(managerRoot, repository, "tasks");
+		for (const taskId of await readdir(tasks).catch(() => [])) {
+			const source = await readFile(
+				join(tasks, taskId, "current.json"),
+				"utf8",
+			).catch(() => "");
+			if (!source) continue;
+			const record = JSON.parse(source) as { state: string; phase: string };
+			states.push({ taskId, state: record.state, phase: record.phase });
+		}
+	}
+	return states;
+}
+
+async function waitForTaskState(
+	stateRoot: string,
+	matches: (state: string) => boolean,
+	timeoutMs: number,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const states = await readTaskStates(stateRoot);
+		if (states.some((task) => matches(task.state))) return;
+		await Bun.sleep(10);
+	}
+	throw new Error("timed out waiting for durable task state");
 }
 
 function gitShimSource(): string {

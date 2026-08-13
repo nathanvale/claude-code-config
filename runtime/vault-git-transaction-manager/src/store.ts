@@ -80,6 +80,7 @@ export class VaultGitLegacyActivationRecordError extends Error {
 export type VaultGitDurabilityTarget =
 	| "history"
 	| "current"
+	| "task_claim"
 	| "capability"
 	| "doctor_token"
 	| "checker_admission"
