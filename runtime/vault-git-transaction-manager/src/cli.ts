@@ -101,6 +101,7 @@ import {
 	type VaultGitTaskTransitionFence,
 } from "./task-store.ts";
 import {
+	VAULT_GIT_LAUNCH_ACK_WINDOW_MS,
 	VAULT_GIT_TASK_HEARTBEAT_STALE_MS,
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
@@ -1627,7 +1628,8 @@ async function launchBackgroundCompletion(input: EmitContext & {
 }): Promise<number> {
 	// One foreground budget covers receipt loading, stale-launch recovery,
 	// replacement launch, and acknowledgement. Recovery must not reset it.
-	const acknowledgementDeadline = input.backgroundRuntime.now() + 1_500;
+	const acknowledgementDeadline =
+		input.backgroundRuntime.now() + VAULT_GIT_LAUNCH_ACK_WINDOW_MS;
 	const loaded = await input.composition.store.load();
 	if (
 		loaded.status !== "loaded" ||
@@ -1751,7 +1753,9 @@ async function launchBackgroundCompletion(input: EmitContext & {
 			heartbeatAt: null,
 			checkpoint: null,
 			launchGeneration,
-			launchExpiresAt: new Date(launchedAt.getTime() + 1_500).toISOString(),
+			launchExpiresAt: new Date(
+				launchedAt.getTime() + VAULT_GIT_LAUNCH_ACK_WINDOW_MS,
+			).toISOString(),
 			workerPid: null,
 			workerProcessIdentity: null,
 			launchAttempt: state.launchAttempt + 1,
@@ -2373,7 +2377,8 @@ async function executeBackgroundWorkerCompletion(
 			readCapability: (descriptor) => readCapability(descriptor),
 			acknowledge: async (acknowledgement) => {
 				let loaded = await taskStore.loadByTaskId(acknowledgement.taskId);
-				const registrationDeadline = performance.now() + 1_500;
+				const registrationDeadline =
+					performance.now() + VAULT_GIT_LAUNCH_ACK_WINDOW_MS;
 				while (
 					loaded.status === "loaded" &&
 					loaded.state.state === "launching" &&

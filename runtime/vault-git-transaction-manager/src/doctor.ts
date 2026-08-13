@@ -17,6 +17,7 @@ import type {
 } from "./model.ts";
 import {
 	VaultRepositoryIdentityUnavailableError,
+	type VaultGitLocalCommitInspection,
 	type VaultGitRepositoryPort,
 	type VaultGitRuntimePort,
 } from "./ports.ts";
@@ -276,12 +277,7 @@ export async function diagnoseVaultGitTransaction(
 		if (localCommit.status === "failed") {
 			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
 		}
-		if (
-			localCommit.status !== "ok" ||
-			localCommit.parents.length !== 1 ||
-			localCommit.parents[0] !== receipt.localMainHead ||
-			!hasTransactionTrailer(localCommit.message, receipt.transactionId)
-		) {
+		if (!isResumedLocalCommit(localCommit, receipt)) {
 			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
 		}
 		if (receipt.host !== options.runtime.host()) {
@@ -361,12 +357,7 @@ export async function diagnoseVaultGitTransaction(
 			if (commit.status === "failed") {
 				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
 			}
-			if (
-				commit.status === "ok" &&
-				commit.parents.length === 1 &&
-				commit.parents[0] === receipt.localMainHead &&
-				hasTransactionTrailer(commit.message, receipt.transactionId)
-			) {
+			if (isResumedLocalCommit(commit, receipt)) {
 				return report("repairable", receipt.phase, "local_commit_recovered", "same_input_safe", "run_repair", summaries.resume, receipt.diagnosticsReference, { ...common, repairAction: "resume" });
 			}
 		}
@@ -467,10 +458,31 @@ async function reconcileInterruptedTakeover(
 	return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "lease_generation_stale" });
 }
 
-function hasTransactionTrailer(message: string, transactionId: string): boolean {
+export function hasTransactionTrailer(
+	message: string,
+	transactionId: string,
+): boolean {
 	return message
 		.split(/\r?\n/)
 		.some((line) => line === `Vault-Transaction: ${transactionId}`);
+}
+
+/**
+ * Whether a local commit is the well-formed resumed event commit for this
+ * transaction: a single-parent commit sitting exactly on the receipt's local
+ * main head and carrying the transaction trailer. Doctor and Repair must agree
+ * on this predicate; owning it here keeps the recovery verdict single-sourced.
+ */
+export function isResumedLocalCommit(
+	commit: VaultGitLocalCommitInspection,
+	receipt: { readonly localMainHead: string; readonly transactionId: string },
+): boolean {
+	return (
+		commit.status === "ok" &&
+		commit.parents.length === 1 &&
+		commit.parents[0] === receipt.localMainHead &&
+		hasTransactionTrailer(commit.message, receipt.transactionId)
+	);
 }
 
 /**

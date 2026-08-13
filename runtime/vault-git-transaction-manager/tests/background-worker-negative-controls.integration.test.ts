@@ -16,8 +16,11 @@ afterEach(async () => {
 describe("background worker negative controls", () => {
 	for (const control of [
 		{
+			// The exclusive-link guard that fences worker-uniqueness now lives in
+			// the shared durablePublishExclusive core in store.ts (task-store's
+			// publishExclusiveJson calls it); mutate it there, not in task-store.
 			name: "worker-uniqueness",
-			file: "src/task-store.ts",
+			file: "src/store.ts",
 			testFile: "tests/task-store.test.ts",
 			mutate: (source: string) =>
 				replaceRequired(
