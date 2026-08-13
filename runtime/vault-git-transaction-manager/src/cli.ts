@@ -154,7 +154,6 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"task-repair.ts",
 	"task-state.ts",
 	"task-lifecycle.ts",
-	"task-reconciliation.ts",
 	"task-store.ts",
 	"task-worker.ts",
 	"worker-policy.ts",
