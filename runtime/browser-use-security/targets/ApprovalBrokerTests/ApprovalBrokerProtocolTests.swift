@@ -246,4 +246,66 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
             )
         )
     }
+
+    func testBindingSelectionCommandOwnsPrivatePickerInvocationAndReturnsOnlyGrant() throws {
+        let brokerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ApprovalBroker/ApprovalBroker.swift")
+        let source = try String(contentsOf: brokerURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "static func bindingSelectionGrant("))
+        let end = try XCTUnwrap(
+            source.range(of: "static func write(", range: start.upperBound..<source.endIndex)
+        )
+        let body = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(body.contains(#""binding-selection""#))
+        XCTAssertTrue(body.contains(#""--expected-candidate-digest", expectedDigest"#))
+        XCTAssertTrue(body.contains("let admittedSupervisorURL = try admittedEmbeddedSupervisor("))
+        XCTAssertTrue(body.contains("process.executableURL = admittedSupervisorURL"))
+        XCTAssertFalse(body.contains("process.executableURL = URL(fileURLWithPath: supervisorPath)"))
+        XCTAssertTrue(body.contains("startDraining(output.fileHandleForReading"))
+        XCTAssertTrue(body.contains("startDraining(errors.fileHandleForReading"))
+        XCTAssertTrue(body.contains("completed.wait(timeout: .now() + .seconds(300))"))
+        XCTAssertTrue(body.contains("stopTimedOutProcess(process, completed: completed)"))
+        XCTAssertTrue(body.contains("outputResult.isUsable"))
+        XCTAssertTrue(body.contains("errorResult.isUsable"))
+        XCTAssertTrue(body.contains("selection[\"candidate_set_digest\"] as? String == expectedDigest"))
+        XCTAssertTrue(body.contains("ApprovalBroker.issueBindingSelectionGrant("))
+        XCTAssertFalse(body.contains("title"))
+        XCTAssertFalse(body.contains("username"))
+
+        let admissionStart = try XCTUnwrap(
+            source.range(of: "private static func admittedEmbeddedSupervisor(")
+        )
+        let admissionEnd = try XCTUnwrap(
+            source.range(of: "private static func startDraining(", range: admissionStart.upperBound..<source.endIndex)
+        )
+        let admissionBody = String(source[admissionStart.lowerBound..<admissionEnd.lowerBound])
+        XCTAssertTrue(admissionBody.contains("Bundle.main.bundleURL"))
+        XCTAssertTrue(admissionBody.contains(#".appendingPathComponent("Contents", isDirectory: true)"#))
+        XCTAssertTrue(admissionBody.contains(#".appendingPathComponent("Helpers", isDirectory: true)"#))
+        XCTAssertTrue(admissionBody.contains("guard callerPath == expectedURL.path"))
+        XCTAssertTrue(admissionBody.contains("SecStaticCodeCreateWithPath(expectedURL as CFURL"))
+        XCTAssertTrue(admissionBody.contains("SecRequirementCreateWithString("))
+        XCTAssertTrue(admissionBody.contains("SecStaticCodeCheckValidity(code, [], requirement)"))
+        XCTAssertTrue(source.contains(
+            #"identifier \"com.nathanvow.browser-use-environment-auth.supervisor\""#
+        ))
+        XCTAssertTrue(source.contains(#"certificate leaf[subject.OU] = \"6428AK7884\""#))
+
+        let drainStart = try XCTUnwrap(source.range(of: "private static func startDraining("))
+        let selectionStart = try XCTUnwrap(source.range(of: "static func bindingSelectionGrant("))
+        let supportBody = String(source[drainStart.lowerBound..<selectionStart.lowerBound])
+        XCTAssertTrue(source.contains("private static let selectionPipeByteLimit = 1_048_576"))
+        XCTAssertTrue(supportBody.contains("DispatchQueue.global(qos: .userInitiated).async"))
+        XCTAssertTrue(supportBody.contains("handle.read(upToCount: selectionPipeReadSize)"))
+        XCTAssertTrue(supportBody.contains("process.terminate()"))
+        XCTAssertTrue(supportBody.contains("Darwin.kill(process.processIdentifier, SIGKILL)"))
+        XCTAssertTrue(supportBody.contains("completed.wait(timeout: .now() + .seconds(5))"))
+
+        let commandStart = try XCTUnwrap(source.range(of: #"case "select-binding":"#))
+        let commandBody = String(source[commandStart.lowerBound...])
+        XCTAssertTrue(commandBody.contains(#"write(["ok": true, "grant": grant])"#))
+        XCTAssertFalse(commandBody.contains(#"write(["ok": true, "candidates":"#))
+    }
 }

@@ -8,17 +8,16 @@
 	  The broker owns a device-bound, non-exportable signing key in the Secure
 	  Enclave and gates create/expand/replace/revoke behind Touch ID user
 	  presence. It receives no OP token, no raw credential, and no browser
-	  channel, so it holds NO network entitlement, NO OP-token keychain group,
-	  and NO broad file access. Its only keychain-access-group is its own private
+	  channel, so it holds NO network entitlement and NO OP-token keychain group.
+	  Its only keychain-access-group is its own private
 	  group scoped to the signing key and issued Human Identity Attestations.
 	-->
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<!-- No outbound network: verifier trust is a pinned local public key. -->
-	<key>com.apple.security.network.client</key>
-	<false/>
-	<key>com.apple.security.network.server</key>
-	<false/>
+	<!--
+	  No App Sandbox: select-binding launches the separately signed local
+	  environment-auth supervisor, whose token custody root is outside an app
+	  container. The broker receives only its secret-free response and never
+	  receives the token, raw item bytes, or a browser channel.
+	-->
 	<!--
 	  Private keychain access group for the device-bound signing key only. Not
 	  the token-retrieval group: the broker never touches the OP token item.

@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	copyFileSync,
-	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -15,7 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { qualificationSourceDigest } from "../skills/test-design/evals/qualification.ts";
+import {
+	createQualificationReceipt,
+	QUALIFICATION_SOURCE_PATHS,
+} from "../skills/test-design/evals/qualification.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
@@ -115,27 +117,14 @@ function createFixture(): Fixture {
 	for (const path of registeredOwnerPaths) {
 		writeRepositoryFile(repository, path);
 	}
-	const qualificationReceiptPath = join(
-		repositoryRoot,
-		"skills/test-design/evals/qualification.json",
-	);
-	if (existsSync(qualificationReceiptPath)) {
-		const receipt = JSON.parse(readFileSync(qualificationReceiptPath, "utf8")) as {
-			sources: string[];
-		};
-		for (const path of receipt.sources) {
-			writeRepositoryFile(repository, path);
-			copyFileSync(join(repositoryRoot, path), join(repository, path));
-		}
-		const fixtureReceipt = {
-			...JSON.parse(readFileSync(qualificationReceiptPath, "utf8")),
-			source_sha256: qualificationSourceDigest(repository),
-		};
-		writeFileSync(
-			join(repository, "skills/test-design/evals/qualification.json"),
-			`${JSON.stringify(fixtureReceipt, null, 2)}\n`,
-		);
+	for (const path of QUALIFICATION_SOURCE_PATHS) {
+		writeRepositoryFile(repository, path);
+		copyFileSync(join(repositoryRoot, path), join(repository, path));
 	}
+	writeFileSync(
+		join(repository, "skills/test-design/evals/qualification.json"),
+		`${JSON.stringify(createQualificationReceipt(repository), null, 2)}\n`,
+	);
 
 	git(repository, ["init", "--quiet"]);
 	git(repository, ["config", "user.name", "Agent Instructions Test"]);

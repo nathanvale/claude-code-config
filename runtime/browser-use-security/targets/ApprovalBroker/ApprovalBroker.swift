@@ -16,6 +16,7 @@
 // Secure Enclave key and LAContext presence check require a signed binary.
 
 import CryptoKit
+import Darwin
 import Foundation
 import LocalAuthentication
 import AppKit
@@ -249,6 +250,34 @@ struct ApprovalBroker {
         return unsigned
     }
 
+    /// Sign one short-lived first-binding selection grant after the native picker.
+    static func issueBindingSelectionGrant(
+        resolutionKey: [String: Any],
+        binding: [String: Any],
+        facts: [String: Any],
+        signingKey: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        let verifierKeyID = hex(SHA256.hash(data: pinnedPublicVerifier(for: signingKey)))
+        var unsigned: [String: Any] = [
+            "grant_id": "selection-\(UUID().uuidString.lowercased())",
+            "resolution_key": resolutionKey,
+            "binding": binding,
+            "facts": facts,
+            "issued_at_epoch_ms": issuedAt,
+            "expires_at_epoch_ms": issuedAt + 90_000,
+            "verifier_key_id": verifierKeyID,
+        ]
+        let canonical = try JSONSerialization.data(
+            withJSONObject: canonicalApprovalValue(unsigned),
+            options: [.withoutEscapingSlashes]
+        )
+        let digest = Data(SHA256.hash(data: canonical))
+        let signature = try signingKey.signature(for: digest)
+        unsigned["signature"] = signature.derRepresentation.base64EncodedString()
+        return unsigned
+    }
+
     /// The pinned public verifier identity: the SEC1 uncompressed (x9.63) public
     /// key bytes verifiers trust — a 65-byte `0x04 || X || Y` point. The
     /// TypeScript verifier requires this encoding (it reads the `0x04` prefix and
@@ -266,6 +295,8 @@ private enum PromotionCommandError: Error {
     case invalidInput
     case candidateDigestMismatch
     case reviewCancelled
+    case selectionNoResponse
+    case selectionAmbiguous
 }
 
 /// The only Keychain item allowed to retain the opaque Secure Enclave handle.
@@ -288,6 +319,44 @@ private struct AdmittedSigningKey {
 }
 
 private enum ApprovalBrokerCommandSupport {
+    private static let embeddedSupervisorName = "browser-use-op-supervisor"
+    private static let embeddedSupervisorRequirement =
+        "anchor apple generic and identifier \"com.nathanvow.browser-use-environment-auth.supervisor\" "
+        + "and certificate leaf[subject.OU] = \"6428AK7884\""
+    private static let selectionPipeByteLimit = 1_048_576
+    private static let selectionPipeReadSize = 64 * 1_024
+
+    private final class CappedPipeCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes = Data()
+        private var exceededLimit = false
+        private var readFailed = false
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            let remaining = max(0, selectionPipeByteLimit - bytes.count)
+            if chunk.count > remaining {
+                exceededLimit = true
+            }
+            if remaining > 0 {
+                bytes.append(contentsOf: chunk.prefix(remaining))
+            }
+        }
+
+        func markReadFailed() {
+            lock.lock()
+            readFailed = true
+            lock.unlock()
+        }
+
+        func snapshot() -> (bytes: Data, isUsable: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (bytes, !exceededLimit && !readFailed)
+        }
+    }
+
     private static let humanIdentityBoundFactKeys: Set<String> = [
         "service_id",
         "auth_context",
@@ -314,6 +383,12 @@ private enum ApprovalBrokerCommandSupport {
     private static let bindingKeys: Set<String> = [
         "service_id", "auth_context", "allowed_origins", "allowed_login_paths",
         "vault_id", "item_id", "allowed_auth_methods", "binding_revision",
+    ]
+    private static let bindingSelectionFactKeys: Set<String> = [
+        "run_id", "service_id", "origin", "vault_id", "candidate_set_digest",
+    ]
+    private static let bindingSelectionPrivateOwnerKeys: Set<String> = [
+        "supervisor_path", "op_path", "config_root",
     ]
 
     private static func signingKeyItemQuery() throws -> [String: Any] {
@@ -792,6 +867,230 @@ private enum ApprovalBrokerCommandSupport {
         )
     }
 
+    private static func admittedPrivateOwnerPath(_ value: Any?) -> String? {
+        guard let path = value as? String,
+              path.hasPrefix("/"),
+              path.utf8.count <= 2_048,
+              !path.contains("\0"),
+              URL(fileURLWithPath: path).standardizedFileURL.path == path
+        else { return nil }
+        return path
+    }
+
+    /// Admit only the signed supervisor nested inside this exact broker bundle.
+    ///
+    /// The request-carried path is evidence, not authority. The process target
+    /// comes from `Bundle.main`, and its Apple-issued signing identity is pinned
+    /// before any private picker arguments are dispatched.
+    private static func admittedEmbeddedSupervisor(
+        callerPath: String
+    ) throws -> URL {
+        let expectedURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Helpers", isDirectory: true)
+            .appendingPathComponent(embeddedSupervisorName, isDirectory: false)
+            .standardizedFileURL
+        guard callerPath == expectedURL.path else {
+            throw PromotionCommandError.invalidInput
+        }
+
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(expectedURL as CFURL, [], &staticCode) == errSecSuccess,
+              let code = staticCode
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            embeddedSupervisorRequirement as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess,
+              let requirement
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        guard SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess else {
+            throw PromotionCommandError.invalidInput
+        }
+        return expectedURL
+    }
+
+    private static func startDraining(
+        _ handle: FileHandle,
+        into capture: CappedPipeCapture,
+        group: DispatchGroup
+    ) {
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            do {
+                while let chunk = try handle.read(upToCount: selectionPipeReadSize),
+                      !chunk.isEmpty {
+                    capture.append(chunk)
+                }
+            } catch {
+                capture.markReadFailed()
+            }
+        }
+    }
+
+    private static func stopTimedOutProcess(
+        _ process: Process,
+        completed: DispatchSemaphore
+    ) {
+        process.terminate()
+        if completed.wait(timeout: .now() + .seconds(5)) == .timedOut {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            _ = completed.wait(timeout: .now() + .seconds(5))
+        }
+    }
+
+    static func bindingSelectionGrant(
+        request: [String: Any]
+    ) throws -> [String: Any] {
+        guard
+            Set(request.keys) == Set(["resolution_key", "facts", "candidate_count", "private_owner"]),
+            let resolutionKey = request["resolution_key"] as? [String: Any],
+            Set(resolutionKey.keys) == bindingResolutionKeys,
+            let facts = request["facts"] as? [String: Any],
+            Set(facts.keys) == bindingSelectionFactKeys,
+            let candidateCount = request["candidate_count"] as? Int,
+            candidateCount > 0,
+            candidateCount <= 1_000,
+            let privateOwner = request["private_owner"] as? [String: Any],
+            Set(privateOwner.keys) == bindingSelectionPrivateOwnerKeys,
+            let supervisorPath = admittedPrivateOwnerPath(privateOwner["supervisor_path"]),
+            let opPath = admittedPrivateOwnerPath(privateOwner["op_path"]),
+            let configRoot = admittedPrivateOwnerPath(privateOwner["config_root"]),
+            let runID = facts["run_id"] as? String,
+            !runID.isEmpty,
+            let serviceID = facts["service_id"] as? String,
+            (resolutionKey["service_id"] as? String) == serviceID,
+            let vaultID = facts["vault_id"] as? String,
+            !vaultID.isEmpty,
+            let origin = facts["origin"] as? String,
+            let originComponents = URLComponents(string: origin),
+            originComponents.scheme == "https",
+            originComponents.host != nil,
+            originComponents.user == nil,
+            originComponents.password == nil,
+            originComponents.path.isEmpty,
+            originComponents.query == nil,
+            originComponents.fragment == nil,
+            originComponents.string == origin,
+            let expectedDigest = facts["candidate_set_digest"] as? String,
+            expectedDigest.count == 64,
+            expectedDigest.allSatisfy({ $0.isHexDigit }),
+            resolutionKey["auth_context"] as? String == "interactive-login"
+        else { throw PromotionCommandError.invalidInput }
+        for field in ["binding_ref", "service_id", "environment", "profile"] {
+            guard let value = resolutionKey[field] as? String,
+                  !value.isEmpty,
+                  value.utf8.count <= 1_024
+            else { throw PromotionCommandError.invalidInput }
+        }
+
+        let admittedSupervisorURL = try admittedEmbeddedSupervisor(
+            callerPath: supervisorPath
+        )
+
+        let process = Process()
+        process.executableURL = admittedSupervisorURL
+        process.arguments = [
+            "binding-selection",
+            "--config-root", configRoot,
+            "--op-path", opPath,
+            "--vault-id", vaultID,
+            "--origin", origin,
+            "--expected-candidate-digest", expectedDigest,
+            "--candidate-count", String(candidateCount),
+        ]
+        process.environment = ["TMPDIR": configRoot]
+        let output = Pipe()
+        let errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        let completed = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in completed.signal() }
+        try process.run()
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
+        let outputCapture = CappedPipeCapture()
+        let errorCapture = CappedPipeCapture()
+        let drains = DispatchGroup()
+        startDraining(output.fileHandleForReading, into: outputCapture, group: drains)
+        startDraining(errors.fileHandleForReading, into: errorCapture, group: drains)
+        if completed.wait(timeout: .now() + .seconds(300)) == .timedOut {
+            stopTimedOutProcess(process, completed: completed)
+            try? output.fileHandleForReading.close()
+            try? errors.fileHandleForReading.close()
+            _ = drains.wait(timeout: .now() + .seconds(5))
+            throw PromotionCommandError.selectionNoResponse
+        }
+        guard drains.wait(timeout: .now() + .seconds(5)) == .success else {
+            try? output.fileHandleForReading.close()
+            try? errors.fileHandleForReading.close()
+            throw PromotionCommandError.selectionNoResponse
+        }
+        let outputResult = outputCapture.snapshot()
+        let errorResult = errorCapture.snapshot()
+        guard outputResult.isUsable,
+              errorResult.isUsable,
+              let envelope = try? JSONSerialization.jsonObject(with: outputResult.bytes) as? [String: Any]
+        else { throw PromotionCommandError.selectionNoResponse }
+        if process.terminationStatus != 0 || envelope["ok"] as? Bool != true {
+            let rejection = envelope["rejection"] as? [String: Any]
+            switch rejection?["code"] as? String {
+            case "presence-cancelled":
+                throw PromotionCommandError.reviewCancelled
+            case "selection-candidates-drifted":
+                throw PromotionCommandError.candidateDigestMismatch
+            case "selection-ambiguous":
+                throw PromotionCommandError.selectionAmbiguous
+            default:
+                throw PromotionCommandError.selectionNoResponse
+            }
+        }
+        guard Set(envelope.keys) == Set(["schema_version", "ok", "selection"]),
+              envelope["schema_version"] as? Int == 1,
+              let selection = envelope["selection"] as? [String: Any],
+              Set(selection.keys) == Set(["selected_item", "candidate_set_digest"]),
+              selection["candidate_set_digest"] as? String == expectedDigest,
+              let item = selection["selected_item"] as? [String: Any],
+              Set(item.keys) == Set(["item_id", "vault_id", "origins", "login_paths", "supported_methods", "state"]),
+              item["vault_id"] as? String == vaultID,
+              item["state"] as? String == "active",
+              let itemID = item["item_id"] as? String,
+              !itemID.isEmpty,
+              let itemOrigins = item["origins"] as? [String],
+              itemOrigins.contains(origin),
+              let loginPaths = item["login_paths"] as? [String],
+              let methods = item["supported_methods"] as? [String],
+              !methods.isEmpty,
+              methods.allSatisfy({ $0 == "password" || $0 == "otp" })
+        else { throw PromotionCommandError.invalidInput }
+        let binding: [String: Any] = [
+            "service_id": serviceID,
+            "auth_context": "interactive-login",
+            "allowed_origins": [origin],
+            "allowed_login_paths": loginPaths,
+            "vault_id": vaultID,
+            "item_id": itemID,
+            "allowed_auth_methods": methods,
+            "binding_revision": 1,
+        ]
+        let admittedKey = try loadSigningKey(
+            signingReason: "Sign this one-use Browser Use login selection"
+        )
+        return try ApprovalBroker.issueBindingSelectionGrant(
+            resolutionKey: resolutionKey,
+            binding: binding,
+            facts: facts,
+            signingKey: admittedKey.key
+        )
+    }
+
     static func write(_ value: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes]) else {
             exit(20)
@@ -817,7 +1116,7 @@ private enum ApprovalBrokerCommandSupport {
 enum ApprovalBrokerCommand {
     static func main() {
         guard CommandLine.arguments.count == 2 else {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, migrate-key, verifier, promote, attest, or bind mode"])
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, migrate-key, verifier, promote, attest, bind, or select-binding mode"])
             exit(20)
         }
         do {
@@ -884,11 +1183,30 @@ enum ApprovalBrokerCommand {
                     key: admittedKey.key
                 )
                 ApprovalBrokerCommandSupport.write(["ok": true, "receipt": receipt])
+            case "select-binding":
+                let input = FileHandle.standardInput.readDataToEndOfFile()
+                guard
+                    input.count <= 1_048_576,
+                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
+                else { throw PromotionCommandError.invalidInput }
+                let grant = try ApprovalBrokerCommandSupport.bindingSelectionGrant(
+                    request: request
+                )
+                ApprovalBrokerCommandSupport.write(["ok": true, "grant": grant])
             default:
                 throw PromotionCommandError.invalidInput
             }
+        } catch PromotionCommandError.candidateDigestMismatch {
+            ApprovalBrokerCommandSupport.writeFailure(code: "selection-candidates-drifted", message: "the ordered login candidate set changed before selection")
+            exit(20)
+        } catch PromotionCommandError.selectionNoResponse {
+            ApprovalBrokerCommandSupport.writeFailure(code: "selection-no-response", message: "the local binding selection did not return a usable response")
+            exit(20)
+        } catch PromotionCommandError.selectionAmbiguous {
+            ApprovalBrokerCommandSupport.writeFailure(code: "selection-ambiguous", message: "the local binding selection was ambiguous")
+            exit(20)
         } catch PromotionCommandError.reviewCancelled {
-            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "the human reviewer cancelled promotion")
+            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "the human reviewer cancelled authorization")
             exit(20)
         } catch BrokerError.userPresenceUnavailable {
             ApprovalBrokerCommandSupport.writeFailure(code: "biometric-capability-missing", message: "Touch ID user presence is unavailable")

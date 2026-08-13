@@ -25,9 +25,18 @@ import {
 import {
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 } from "./browser-use-auth-model";
+import {
+	applyAuthTransition,
+	beginAuthTransaction,
+} from "./browser-use-auth-transaction";
 import type { BrowserUseVaultItemEvidence } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseBindingSelectionGrant,
+	BrowserUseBindingSelectionRequest,
+} from "./browser-use-binding-selection";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
-import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
+import { type RunStoreDeps, createSharedRun, loadSharedRun } from "./browser-use-runs";
+import { encodeDurableRecord } from "./browser-use-schemas";
 import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
@@ -1003,6 +1012,62 @@ async function makeStore(): Promise<{
 	};
 }
 
+async function installBlockedSelectionRun(
+	store: Awaited<ReturnType<typeof makeStore>>,
+	runId: string,
+	runState: BrowserUseSharedRun["state"] = "awaiting-approval",
+): Promise<void> {
+	const started = beginAuthTransaction({
+		binding: {
+			run_id: runId,
+			handoff_evidence_id: "handoff-1",
+			lane_id: "agent-browser",
+			entry_mode: "freeform",
+			environment: "agent-chrome",
+			profile: "default",
+			service_id: "github",
+			auth_context: "interactive-login",
+			origin: "https://github.com",
+			target_id: "target-1",
+			page_id: "page-1",
+			frame_id: "frame-1",
+		},
+		method: "password",
+		attempt_limit: 1,
+		attempts_already_consumed: 0,
+	});
+	if (!started.ok) throw new Error("auth fixture failed to start");
+	const prepared = applyAuthTransition(started.fragment, {
+		type: "pre-auth-proved",
+	});
+	if (!prepared.ok) throw new Error("auth fixture failed to prepare");
+	const blocked = applyAuthTransition(prepared.fragment, {
+		type: "blocked",
+		cause: "ambiguous-binding-selection",
+	});
+	if (!blocked.ok) throw new Error("auth fixture failed to block");
+	const created = await createSharedRun(
+		store.deps,
+		blockedRun(runId, "request-binding-selection-grant", {
+			state: runState,
+		}),
+	);
+	if (!created.ok) throw new Error(`selection run create failed: ${created.code}`);
+	const loaded = await loadSharedRun(store.deps, runId);
+	if (!loaded.ok) throw new Error("selection run load failed");
+	await store.deps.fs.writeFileDurable(
+		store.deps.paths.state.runFile(runId),
+		encodeDurableRecord("shared-run", {
+			...loaded.payload,
+			auth_fragment: {
+				schema_version: blocked.fragment.schema_version,
+				fragment: blocked.fragment,
+			},
+		}),
+		0o600,
+	);
+}
+
 function evidenceItem(
 	itemId: string,
 	overrides: Partial<BrowserUseVaultItemEvidence> = {},
@@ -1015,6 +1080,31 @@ function evidenceItem(
 		supported_methods: ["password"],
 		state: "active",
 		...overrides,
+	};
+}
+
+function selectionGrantForTest(
+	request: BrowserUseBindingSelectionRequest,
+	itemId: string,
+): BrowserUseBindingSelectionGrant {
+	return {
+		grant_id: "grant-selection-test",
+		resolution_key: request.resolution_key,
+		binding: {
+			service_id: request.facts.service_id,
+			auth_context: "interactive-login",
+			allowed_origins: [request.facts.origin],
+			allowed_login_paths: [],
+			vault_id: request.facts.vault_id,
+			item_id: itemId,
+			allowed_auth_methods: ["password", "otp"],
+			binding_revision: 1,
+		},
+		facts: request.facts,
+		issued_at_epoch_ms: 1_000,
+		expires_at_epoch_ms: 91_000,
+		verifier_key_id: "verifier-1",
+		signature: "signed-selection",
 	};
 }
 
@@ -2347,37 +2437,376 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		expect(result.exitCode).toBe(2);
 	});
 
-	test("the candidate set projects with ordinals; signing stays broker-owned", async () => {
-		const runtime = makeRuntime({
-			authTokenRetrieval: fakePort({
-				listLoginItems: async () => ({
-					ok: true,
-					// A stale second candidate proves per-item state projects
-					// faithfully, not just the default.
-					items: [evidenceItem("item-1"), evidenceItem("item-2", { state: "moved" })],
-				}),
+	test("a vault without an exact --run is a usage error", async () => {
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(2);
+	});
+
+	test("the selection continuation admits only its awaiting-approval run state", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection-wrong-state", "awaiting-auth");
+		let ceremonyCalls = 0;
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-wrong-state",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async () => {
+						ceremonyCalls += 1;
+						throw new Error("wrong-state run reached the ceremony");
+					},
+				},
 			}),
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_run_context_invalid" },
+		});
+		expect(ceremonyCalls).toBe(0);
+	});
+
+	test("seven private candidates become one signed selection and one binding write without descriptor output", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection");
+
+		const candidates = Array.from({ length: 7 }, (_, index) =>
+			evidenceItem(`item-${index + 1}`, {
+				origins: ["https://github.com"],
+				login_paths: ["/login"],
+			}),
+		);
+		let listCalls = 0;
+		let exactReads = 0;
+		let ceremonyCalls = 0;
+		let reserveCalls = 0;
+		const privateTitle = "GitHub private title";
+		const privateUsername = "private-user@example.test";
+		let issuedGrant: BrowserUseBindingSelectionGrant | undefined;
+		const runtime = makeRuntime({
+			env: store.env,
+			authTokenRetrieval: fakePort({
+				listLoginItems: async () => {
+					listCalls += 1;
+					return { ok: true, items: candidates };
+				},
+				getLoginItem: async ({ item_id }) => {
+					exactReads += 1;
+					const item = candidates.find((candidate) => candidate.item_id === item_id);
+					return item === undefined
+						? { ok: false, rejection: rejection("item-missing") }
+						: { ok: true, item };
+				},
+			}),
+			bindingSelectionCeremony: {
+				requestBindingSelection: async (input) => {
+					ceremonyCalls += 1;
+					expect(input.candidate_count).toBe(7);
+					// Descriptors exist only inside this fake native owner.
+					expect(privateTitle).toContain("GitHub");
+					expect(privateUsername).toContain("@");
+					issuedGrant = {
+						grant_id: "grant-selection-1",
+						resolution_key: input.resolution_key,
+						binding: {
+							service_id: "github",
+							auth_context: "interactive-login",
+							allowed_origins: ["https://github.com"],
+							allowed_login_paths: ["/login"],
+							vault_id: "vault-1",
+							item_id: "item-6",
+							allowed_auth_methods: ["password"],
+							binding_revision: 1,
+						},
+						facts: input.facts,
+						issued_at_epoch_ms: 1_000,
+						expires_at_epoch_ms: 2_000,
+						verifier_key_id: "verifier-1",
+						signature: "signed-selection",
+					};
+					return { ok: true, grant: issuedGrant };
+				},
+			},
+			bindingSelectionGrantVerifier: {
+				verifyStored: async (grant) => ({
+					ok: true,
+					grant: grant as BrowserUseBindingSelectionGrant,
+				}),
+				verifyAndReserve: async ({ grant }) => {
+					reserveCalls += 1;
+					return { ok: true, grant: grant as BrowserUseBindingSelectionGrant };
+				},
+			},
 		});
 		const result = await runForTest(
-			["auth", "request-binding-selection-grant", "--vault-id", "vault-1", "--json"],
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection",
+				"--json",
+			],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
 		const envelope = envelopeOf(result.stdout);
 		expect(envelope.data.evaluation).toMatchObject({
-			status: "selection-candidates-projected",
+			status: "binding-active",
 			detail: {
-				vault_id: "vault-1",
-				candidate_count: 2,
-				candidates: [
-					{ ordinal: 1, item_id: "item-1", item_state: "active" },
-					{ ordinal: 2, item_id: "item-2", item_state: "moved" },
-				],
+				binding_ref: "github",
+				revision: 1,
 			},
 		});
-		expect(envelope.continuation.next_action_id).toBe(
-			"acquire-native-capability",
+		expect(envelope.continuation.next_action_id).toBe("inspect-auth-readiness");
+		expect({ ceremonyCalls, reserveCalls, listCalls, exactReads }).toEqual({
+			ceremonyCalls: 1,
+			reserveCalls: 1,
+			listCalls: 2,
+			exactReads: 1,
+		});
+		expect(issuedGrant?.binding.item_id).toBe("item-6");
+		expect(result.stdout).not.toContain(privateTitle);
+		expect(result.stdout).not.toContain(privateUsername);
+		expect(result.stderr).not.toContain(privateTitle);
+		expect(result.stderr).not.toContain(privateUsername);
+
+		const replay = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection",
+				"--json",
+			],
+			runtime,
 		);
+		expect(envelopeOf(replay.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_binding_already_recorded" },
+		});
+		expect({ ceremonyCalls, reserveCalls, listCalls, exactReads }).toEqual({
+			ceremonyCalls: 1,
+			reserveCalls: 1,
+			listCalls: 2,
+			exactReads: 1,
+		});
+		const catalogIndex = JSON.parse(
+			await readFile(
+				join(
+					store.deps.paths.resolution.roots.state,
+					"binding-catalog",
+					"active.json",
+				),
+				"utf8",
+			),
+		) as { generation: number; active: unknown[] };
+		expect(catalogIndex).toMatchObject({ generation: 1 });
+		expect(catalogIndex.active).toHaveLength(1);
+	});
+
+	test("a selected item that moved before the exact read reserves no binding", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection-moved");
+		const candidate = evidenceItem("item-1", {
+			origins: ["https://github.com"],
+			login_paths: [],
+			supported_methods: ["password", "otp"],
+		});
+		let exactReads = 0;
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-moved",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({
+					listLoginItems: async () => ({ ok: true, items: [candidate] }),
+					getLoginItem: async () => {
+						exactReads += 1;
+						return { ok: true, item: { ...candidate, state: "moved" } };
+					},
+				}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async (request) => ({
+						ok: true,
+						grant: selectionGrantForTest(request, candidate.item_id),
+					}),
+				},
+				bindingSelectionGrantVerifier: {
+					verifyStored: async (grant) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+					verifyAndReserve: async ({ grant }) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+				},
+			}),
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_item_drifted" },
+		});
+		expect(exactReads).toBe(1);
+		expect(
+			await store.deps.fs.lstat(
+				join(store.deps.paths.resolution.roots.state, "binding-catalog"),
+			),
+		).toBeUndefined();
+	});
+
+	test("cancel and post-selection candidate reorder stay blocked with no catalog mutation", async () => {
+		const store = await makeStore();
+		await installBlockedSelectionRun(store, "run-selection-cancel");
+		const candidates = [
+			evidenceItem("item-1", {
+				origins: ["https://github.com"],
+				login_paths: [],
+				supported_methods: ["password", "otp"],
+			}),
+			evidenceItem("item-2", {
+				origins: ["https://github.com"],
+				login_paths: [],
+				supported_methods: ["password", "otp"],
+			}),
+		];
+		let exactReads = 0;
+		const cancelled = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-cancel",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({
+					listLoginItems: async () => ({ ok: true, items: candidates }),
+					getLoginItem: async () => {
+						exactReads += 1;
+						return { ok: true, item: candidates[0] };
+					},
+				}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async () => ({
+						ok: false,
+						rejection: {
+							code: "presence-cancelled",
+							message: "selection cancelled",
+						},
+					}),
+				},
+				bindingSelectionGrantVerifier: {
+					verifyStored: async () => ({ ok: false, code: "not_reached" }),
+					verifyAndReserve: async () => ({ ok: false, code: "not_reached" }),
+				},
+			}),
+		);
+		expect(envelopeOf(cancelled.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "presence-cancelled" },
+		});
+		expect(exactReads).toBe(0);
+		expect(
+			await store.deps.fs.lstat(
+				join(store.deps.paths.resolution.roots.state, "binding-catalog"),
+			),
+		).toBeUndefined();
+
+		const driftStore = await makeStore();
+		await installBlockedSelectionRun(driftStore, "run-selection-drift");
+		let listCalls = 0;
+		let driftExactReads = 0;
+		const drifted = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-1",
+				"--run",
+				"run-selection-drift",
+				"--json",
+			],
+			makeRuntime({
+				env: driftStore.env,
+				authTokenRetrieval: fakePort({
+					listLoginItems: async () => {
+						listCalls += 1;
+						return {
+							ok: true,
+							items: listCalls === 1 ? candidates : [...candidates].reverse(),
+						};
+					},
+					getLoginItem: async () => {
+						driftExactReads += 1;
+						return { ok: true, item: candidates[0] };
+					},
+				}),
+				bindingSelectionCeremony: {
+					requestBindingSelection: async (input) => ({
+						ok: true,
+						grant: {
+							...selectionGrantForTest(input, "item-1"),
+							grant_id: "grant-drift-1",
+						},
+					}),
+				},
+				bindingSelectionGrantVerifier: {
+					verifyStored: async (grant) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+					verifyAndReserve: async ({ grant }) => ({
+						ok: true,
+						grant: grant as BrowserUseBindingSelectionGrant,
+					}),
+				},
+			}),
+		);
+		expect(envelopeOf(drifted.stdout).data.evaluation).toMatchObject({
+			status: "selection-blocked",
+			detail: { refusal_code: "selection_candidates_drifted" },
+		});
+		expect({ listCalls, driftExactReads }).toEqual({
+			listCalls: 2,
+			driftExactReads: 0,
+		});
+		expect(
+			await driftStore.deps.fs.lstat(
+				join(driftStore.deps.paths.resolution.roots.state, "binding-catalog"),
+			),
+		).toBeUndefined();
 	});
 });
 

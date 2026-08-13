@@ -39,11 +39,13 @@ describe("multi-agent smoke library", () => {
 			"smoke-runner-executes",
 			"heal-skill-reachable",
 			"test-design-mutation-route",
+			"test-design-runner-sensitive-route",
+			"test-design-simple-unit-route",
 			"test-design-run-only-negative",
 			"test-design-pairwise-frozen",
 		] as const;
 
-		expect(SMOKE_TESTS).toHaveLength(27);
+		expect(SMOKE_TESTS).toHaveLength(29);
 		for (const testId of taskSmokeIds) {
 			expect(SMOKE_TESTS.map((smokeTest) => smokeTest.id)).toContain(testId);
 			expect(getSmokeTest(testId).expectations.claude.whoAmI).toBe("claude");
@@ -101,6 +103,79 @@ describe("multi-agent smoke library", () => {
 				}),
 			).toSatisfy((assertions) => assertions.every((assertion) => assertion.ok));
 		}
+	});
+
+	test("test-design canaries distinguish runner-sensitive from simple-unit work", () => {
+		for (const harness of ["claude", "codex"] as const) {
+			expect(
+				evaluateOutput(
+					getSmokeTest("test-design-runner-sensitive-route"),
+					harness,
+					{
+						whoAmI: harness,
+						runnerProfileSelected: true,
+						runnerEnvelopeApplied: true,
+						activeWorkflow: "implementation",
+					},
+				),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
+			expect(
+				evaluateOutput(getSmokeTest("test-design-simple-unit-route"), harness, {
+					whoAmI: harness,
+					selectedProfiles: "none",
+					runnerEnvelopeApplied: false,
+					activeWorkflow: "implementation",
+				}),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
+		}
+		const falseSelection = evaluateOutput(
+			getSmokeTest("test-design-runner-sensitive-route"),
+			"codex",
+			{
+				whoAmI: "codex",
+				runnerProfileSelected: false,
+				runnerEnvelopeApplied: true,
+				activeWorkflow: "implementation",
+			},
+		);
+		expect(
+			falseSelection.find(
+				(assertion) => assertion.key === "runnerProfileSelected",
+			)?.ok,
+		).toBe(false);
+
+		const runnerTrace = getSmokeTest("test-design-runner-sensitive-route")
+			.runtime?.traceProof;
+		const simpleUnitTrace = getSmokeTest("test-design-simple-unit-route").runtime
+			?.traceProof;
+		expect(runnerTrace?.profileRelativePath).toBe(
+			"references/runner-execution.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/process-and-cli.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/state-concurrency-recovery.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/runtime-ci-platform.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/browser-and-ui.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/installation-host-hosted.md",
+		);
+		expect(simpleUnitTrace?.profileRelativePath).toBe(
+			"references/pattern-library.md",
+		);
+		expect(simpleUnitTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/runner-execution.md",
+		);
 	});
 
 	test("boundary expectations stay harness-specific where intended", () => {
