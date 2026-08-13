@@ -57,6 +57,10 @@ Each verifier reads the doc and the artifact and forms **its own reading before 
 
 This shape is deliberate. A judge that sees a claim and rates it scores plausibility rather than correctness; committing first drops false positives sharply where ground truth exists (arXiv 2607.05904). Scanners are also barred from verdict vocabulary — judges score confidently-worded findings 0.27-0.36 higher regardless of truth (arXiv 2606.09863), so `observation` fields state what the doc says and what the artifact does, and stop there.
 
+**Three verdicts, not two.** `confirmed`, `refuted`, and `misfiled` — a real defect reported at the wrong location. A negative control planted two false claims: the verifier confirmed one, and refused the other while stating in its own words that a real defect existed at a different line than the scanner had blamed. A binary schema threw that away. `misfiled` keeps the defect and records where it actually is.
+
+The scanner is also told plainly that **the doc is the fault site**. When a doc quotes an identifier the artifact does not have, the doc's wording is wrong — not the artifact. Blaming the artifact is what got that finding discarded.
+
 ## Report
 
 Broken references first, judged findings second under an explicit caveat, then **what was not checkable and why**. Counts per doc, including zeros.

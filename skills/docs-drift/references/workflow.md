@@ -47,13 +47,28 @@ const FINDINGS = {
   required: ['findings'],
 }
 
+// Three states, not two. A negative control planted two false claims; the
+// verifier confirmed one and refused the other — while noting in its own words
+// that a real defect existed at a different location than the scanner reported.
+// A binary schema discards that. `misfiled` keeps the defect and records where
+// it actually is.
 const VERDICT = {
   type: 'object',
   properties: {
-    refuted: { type: 'boolean', description: 'true when this is not drift' },
+    verdict: {
+      type: 'string',
+      enum: ['confirmed', 'misfiled', 'refuted'],
+      description:
+        'confirmed = drift, reported at the right location. misfiled = a real defect exists, but this finding names the wrong file, line, or fault site. refuted = not drift.',
+    },
     why: { type: 'string' },
+    actualLocation: {
+      type: 'string',
+      description:
+        'Required when verdict is "misfiled": file:line where the defect actually is, and one line on what is wrong there.',
+    },
   },
-  required: ['refuted', 'why'],
+  required: ['verdict', 'why'],
 }
 
 // `args` can arrive as a real object or as a JSON string, depending on how the
@@ -83,7 +98,7 @@ const referenceFindings = (await resolveReferences(root)).map((f) => ({
   ...f,
   target: 'filesystem',
   confidence: 'deterministic',
-  verdict: { refuted: false, why: 'path does not resolve on disk' },
+  verdict: { verdict: 'confirmed', why: 'path does not resolve on disk' },
 }))
 
 const results = await pipeline(
@@ -104,6 +119,18 @@ Check ONE document against its verification target.
 Read the document. Read every artifact listed above — in full, not by grep.
 For each factual assertion the document makes about those artifacts, decide
 whether the artifact still does what the document says.
+
+Pay attention to exact identifier strings the document quotes: artifact names,
+environment names, job names, input names. Those are the assertions an artifact
+settles definitively.
+
+THE DOC IS THE FAULT SITE. You are auditing the document, not the artifact.
+When a doc quotes an identifier the artifact does not have, the defect is the
+doc's wording — set \`code\` to the artifact line holding the CORRECT value, and
+say in the observation what the doc names versus what that line actually says.
+Never report the artifact as needing a change. If two artifacts have similar
+names, be explicit about which one the doc is describing; naming the wrong one
+gets a real finding thrown away.
 
 Write every observation as a neutral two-part statement — what the doc states,
 what the artifact does — and stop there. Do not add a verdict, and do not use
@@ -137,12 +164,22 @@ STEP 2 — compare. Another process reported:
   Doc states: ${f.claim}
   Observation: ${f.observation}
 
-Does YOUR step-1 reading match that observation? Refute it when your own reading
-disagrees, the doc is correct, the claim is aspirational rather than factual, or
-the wording is awkward without asserting anything false.
+Does YOUR step-1 reading match that observation? Choose one verdict:
 
-Default to refuted=true when uncertain. A survivor must be a doc stating
-something the artifact contradicts today, confirmed by your own reading.`,
+  confirmed — the doc states something the artifact contradicts today, and the
+    finding names the right location. Your own reading must show this.
+  misfiled — a real defect IS present, but this finding points at the wrong
+    file, line, or fault site (for example: it blames the artifact when the
+    doc's wording is what is wrong, or it cites a similarly-named artifact).
+    Set actualLocation to where the defect really is. Do NOT discard a real
+    defect over a bookkeeping error.
+  refuted — not drift. Your reading disagrees, the doc is correct, the claim is
+    aspirational rather than factual, or the wording is awkward without
+    asserting anything false.
+
+Default to refuted when uncertain — but before you do, ask whether a real
+defect exists somewhere near what was reported. If it does, that is misfiled,
+not refuted.`,
           { label: `verify:${doc.split('/').pop()}`, phase: 'Verify', schema: VERDICT },
         ).then((v) => ({ ...f, target: artifacts.join(', '), confidence: 'judged', verdict: v })),
       ),
@@ -150,15 +187,14 @@ something the artifact contradicts today, confirmed by your own reading.`,
 )
 
 // Barrier earned: dedup needs every doc at once.
-const judged = results
-  .flat()
-  .filter(Boolean)
-  .filter((f) => f.verdict && !f.verdict.refuted)
+const verified = results.flat().filter(Boolean)
+const judged = verified.filter((f) => f.verdict?.verdict === 'confirmed')
+const misfiled = verified.filter((f) => f.verdict?.verdict === 'misfiled')
 
 const confirmed = [...referenceFindings, ...judged]
 
 log(
-  `${confirmed.length} confirmed (${referenceFindings.length} deterministic, ${judged.length} judged) across ${targets.length} docs; ${unverifiable.length} not checkable from this repo`,
+  `${confirmed.length} confirmed (${referenceFindings.length} deterministic, ${judged.length} judged), ${misfiled.length} misfiled, across ${targets.length} docs; ${unverifiable.length} not checkable from this repo`,
 )
 
 phase('Synthesise')
@@ -167,6 +203,9 @@ const report = await agent(
 
 CONFIRMED FINDINGS:
 ${JSON.stringify(confirmed, null, 2)}
+
+MISFILED — real defects reported at the wrong location:
+${JSON.stringify(misfiled, null, 2)}
 
 NOT CHECKABLE FROM THIS REPO:
 ${JSON.stringify(unverifiable, null, 2)}
@@ -180,6 +219,9 @@ Three sections, in this order:
   2. "Judged findings" — confidence:'judged'. These passed an LLM verifier that
      runs near 0.65 AUROC on this class of check. Introduce with one line saying
      they need human confirmation. Omit the section if empty.
+  2b. "Misfiled" — a verifier found a real defect but the finding named the
+     wrong location. Report each using its actualLocation, not the reported one.
+     Omit the section if empty.
   3. "Not checkable from this repo" — list each doc and its reason verbatim.
      Say plainly that these were NOT scanned and that zero findings for them
      means nothing. Never omit this section when the list is non-empty.
@@ -191,7 +233,7 @@ each produced, including zeros. Do not propose edits — this is report-only.`,
   { label: 'synthesise', phase: 'Synthesise' },
 )
 
-return { confirmed, unverifiable, docsChecked: targets.map(([d]) => d), report }
+return { confirmed, misfiled, unverifiable, docsChecked: targets.map(([d]) => d), report }
 ```
 
 ## Reading the manifest
