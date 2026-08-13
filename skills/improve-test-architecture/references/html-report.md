@@ -15,10 +15,20 @@ When slowness, CI duration, isolation, concurrency, parallelism, projects, or sh
 
 - Map discovery, transform, setup, import, test, teardown, and report stages.
 - Show slowest-file or slowest-group evidence before recommending parallelism or sharding.
-- Show measured duration, lifecycle owner, isolation, concurrency, shared resources, open handles, resource contention, retries, skips, flakes, and retained diagnostic surface.
-- Separate cold-start from steady-state cost. Account for projects, shards, missing or duplicate shard receipts, and merge ownership.
+- Show measured duration for each stage or suite group.
+- Name lifecycle ownership and isolation boundaries.
+- Show concurrency and shared-resource evidence.
+- Show open handles and resource contention.
+- Show retries, skips, flakes, and retained diagnostics.
+- Separate cold-start from steady-state cost.
+- Account for projects and shards.
+- Flag missing or duplicate shard receipts.
+- Name receipt merge ownership.
 - Distinguish proof value from elapsed cost for each stage or suite group.
-- Name each optimization candidate, supporting evidence, expected runtime impact, confidence risk, rollback signal, and remaining blind spots.
+- Name each optimization candidate.
+- Link its supporting evidence.
+- State expected runtime impact and confidence risk.
+- Give its rollback signal and remaining blind spots.
 
 Open the report locally. Report its absolute path in the active conversation.
 

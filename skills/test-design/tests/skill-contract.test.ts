@@ -396,5 +396,30 @@ describe("agent-native testing skill contract", () => {
 			expect(scenario.prompt.length).toBeGreaterThan(30);
 			expect(scenario.reject).toBeTypeOf("boolean");
 		}
+		expect(
+			Object.fromEntries(
+				testDesignV2QualificationCases.map((scenario) => [
+					scenario.id,
+					scenario.reject,
+				]),
+			),
+		).toEqual({
+			"persistent-watch": true,
+			"concurrency-axes": true,
+			"runtime-portability": true,
+			"timeout-cleanup": true,
+			"human-reporter": true,
+			"compact-output": true,
+			"selector-count": true,
+			"random-seed": true,
+			"mock-leakage": true,
+			"execution-versus-typecheck": true,
+			"affected-only": true,
+			"coverage-meaning": true,
+			"cli-consumers": true,
+			"production-workflow": true,
+			"slow-suite-optimization": true,
+			"read-only-selection-gate": false,
+		});
 	});
 });
