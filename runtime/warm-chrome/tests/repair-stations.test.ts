@@ -431,12 +431,12 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 		expect(run.exitCode).toBe(0);
 		expect(run.stdout).toContain("--profile-only");
 		expect(run.stdout).toContain(
-			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
+			"Repair Agent Chrome identity and profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
 		);
 		expectNoProcessAffectingCalls(fixture);
 	});
 
-	test("missing profile is created 0700 with the five disabled policy flags", async () => {
+	test("missing profile is created 0700 with Agent Chrome identity and the five disabled policy flags", async () => {
 		const root = await makeScratchProfileRoot();
 		try {
 			const profile = join(root, "explicit-profile");
@@ -464,7 +464,10 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 			) as Record<string, unknown>;
 			expect(preferences).toMatchObject({
 				credentials_enable_service: false,
-				profile: { password_manager_enabled: false },
+				profile: {
+					name: "Agent Chrome",
+					password_manager_enabled: false,
+				},
 				autofill: { profile_enabled: false, credit_card_enabled: false },
 				sync: { requested: false },
 			});
@@ -655,7 +658,7 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 		}
 	});
 
-	test("existing Preferences keeps unrelated JSON bytes while merging the five flags", async () => {
+	test("existing Preferences keeps unrelated JSON bytes while merging Agent Chrome identity and the five flags", async () => {
 		const root = await makeScratchProfileRoot();
 		try {
 			const profile = join(root, "explicit-profile");
@@ -689,7 +692,11 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 			const preferences = JSON.parse(output) as Record<string, unknown>;
 			expect(preferences).toMatchObject({
 				unrelated: { marker: "keep-me" },
-				profile: { theme: "dark", password_manager_enabled: false },
+				profile: {
+					name: "Agent Chrome",
+					theme: "dark",
+					password_manager_enabled: false,
+				},
 				autofill: {
 					address_hint: "home",
 					profile_enabled: false,

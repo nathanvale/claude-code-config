@@ -25,6 +25,7 @@ import {
 } from "./cli.ts";
 import {
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
+	WARM_CHROME_PROFILE_DIRECTORY,
 	type WarmChromeRuntimeActionId,
 } from "./model.ts";
 import {
@@ -309,6 +310,7 @@ export function createLaunchCommandHandler(
 				chromeBin: invocation.chromeBin,
 				port: invocation.port,
 				profileDir,
+				profileDirectory: WARM_CHROME_PROFILE_DIRECTORY,
 				startupUrl: WARM_CHROME_LAUNCH_STARTUP_URL,
 			});
 		} catch {

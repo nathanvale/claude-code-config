@@ -85,8 +85,9 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `package.json`: bin, exports, `test` and `typecheck` scripts, workspace
   facade contract.
 - `src/model.ts`: contract id, schema version, command ids, exit code `20`,
-  runtime-action ids, the `no_adapter_fallback` constraint id, and the closed
-  check and repair reason-detail unions plus repair mutation ids.
+  dedicated profile directory/name constants, runtime-action ids, the
+  `no_adapter_fallback` constraint id, and the closed check and repair
+  reason-detail unions plus repair mutation ids.
 - `src/command-contract.ts`: facade contract entries per command, flags,
   exit-code meanings, result contract, action affordances, preview notes,
   Command Discovery Tree projection.
@@ -96,8 +97,9 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `src/branch-station-evidence.ts`: evidence manifest — station tests attach
   envelope evidence; missing or contradicting evidence is a drift finding.
 - `src/runtime.ts`: the injectable runtime seam (env, listener probe, profile
-  stat, spawn handle, SingletonLock probe), `WarmChromeRuntimeError`, process
-  command parsing, and the websocket/listener redaction helpers.
+  stat, spawn handle with explicit Chrome profile-directory selection,
+  SingletonLock probe), `WarmChromeRuntimeError`, process command parsing, and
+  the websocket/listener redaction helpers.
 - `src/proof.ts`: the single check proof chain — loopback assertion, bounded
   attach probe, listener identity, default-profile foreignness (R6c),
   payload validation, CDP round-trips (headless and isolated-context rejects),

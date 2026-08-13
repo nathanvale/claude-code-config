@@ -34,6 +34,20 @@ export const WARM_CHROME_CLI_NAME = "warm-chrome" as const;
 export const WARM_CHROME_DEFAULT_PROFILE_DIR = "~/.agent-warm-profile" as const;
 
 /**
+ * Chrome profile directory selected inside the dedicated user-data directory.
+ *
+ * @defaultValue "Default"
+ */
+export const WARM_CHROME_PROFILE_DIRECTORY = "Default" as const;
+
+/**
+ * Human-visible identity for the dedicated automation profile.
+ *
+ * @defaultValue "Agent Chrome"
+ */
+export const WARM_CHROME_PROFILE_NAME = "Agent Chrome" as const;
+
+/**
  * Default CDP port when neither `--port`/`--endpoint` nor `WARM_CHROME_CDP_PORT`
  * is supplied.
  *

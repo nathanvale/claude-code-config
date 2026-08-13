@@ -92,7 +92,7 @@ const repairFlags = {
 	"--profile-only": {
 		type: "boolean",
 		description:
-			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
+			"Repair Agent Chrome identity and profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
 	},
 } as const satisfies WarmChromeCommandContract["flags"];
 

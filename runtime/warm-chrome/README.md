@@ -79,8 +79,17 @@ from the `9222` convention.
 profile path, runs without the browser-entry proof chain or a CDP listener, and
 returns no endpoint authority. It checks `SingletonLock` liveness and refuses
 while a live Chrome holds the profile. It writes only policy-clean profile state
-after filesystem, ownership, saved-login, and symlink checks; any unproven or
-unsafe condition fails closed with a typed refusal and manual step.
+after filesystem, ownership, saved-login, and symlink checks. That state names
+the visible profile `Agent Chrome` and disables Chrome credential capture. Any
+unproven or unsafe condition fails closed with a typed refusal and manual step.
+
+`launch` selects Chrome's `Default` profile directory explicitly. Profile-only
+provisioning persists the visible `Agent Chrome` name. The dedicated user-data
+directory distinguishes this browser from everyday Chrome; Browser Connect
+remains the machine identity boundary. Everyday Chrome still opens from the
+normal macOS Google Chrome app and uses its ordinary profile store. This package
+does not install a second app bundle; Agent Chrome uses the same signed binary
+with separate profile state and launch authority.
 
 No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
 help as `--help`.

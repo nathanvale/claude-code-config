@@ -500,6 +500,7 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		// writes_browser_state pin: the spawn seam ran exactly once.
 		expect(fixture.calls.spawnChrome).toBe(1);
 		expect(fixture.calls.ensureProfileDir).toBe(1);
+		expect(fixture.calls.spawnInputs[0]?.profileDirectory).toBe("Default");
 		expect(envelope.status).toBe("ok");
 	});
 

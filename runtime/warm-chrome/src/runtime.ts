@@ -190,6 +190,7 @@ export type LaunchChromeInput = {
 	chromeBin: string;
 	port: string;
 	profileDir: string;
+	profileDirectory: string;
 	startupUrl: string;
 };
 
@@ -255,6 +256,7 @@ export function createDefaultRuntime(
 				[
 					`--remote-debugging-port=${input.port}`,
 					`--user-data-dir=${input.profileDir}`,
+					`--profile-directory=${input.profileDirectory}`,
 					"--no-first-run",
 					"--no-default-browser-check",
 					input.startupUrl,
