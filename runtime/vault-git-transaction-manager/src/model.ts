@@ -8,6 +8,7 @@ export const VAULT_GIT_ACTIVATION_STOPPED_ACTIONS = [
 
 /** Non-secret host configuration fields required for live activation identity. */
 export const VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS = [
+	"host_identity",
 	"ssh_identity_file",
 	"ssh_public_key",
 	"ssh_known_hosts",
@@ -113,7 +114,7 @@ const ACTIVATION_NEXT_ACTION: Record<
 	configuration_missing: {
 		id: "configure_activation_identity",
 		summary:
-			"Configure VAULT_GIT_SSH_IDENTITY_FILE_PATH, VAULT_GIT_SSH_PUBLIC_KEY_PATH, and VAULT_GIT_SSH_KNOWN_HOSTS_PATH for this host using its dedicated repository-scoped SSH identity and reviewed owner-only known_hosts, then rerun vault-git doctor --json.",
+			"Configure a stable VAULT_GIT_HOST plus VAULT_GIT_SSH_IDENTITY_FILE_PATH, VAULT_GIT_SSH_PUBLIC_KEY_PATH, and VAULT_GIT_SSH_KNOWN_HOSTS_PATH for this host using its dedicated repository-scoped SSH identity and reviewed owner-only known_hosts, then rerun vault-git doctor --json.",
 	},
 	admission_missing: {
 		id: "review_prepared",
