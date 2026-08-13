@@ -389,6 +389,49 @@ describe("activation authority", () => {
 		});
 	});
 
+	for (const invalidField of ["recordedAt", "capturedAt"] as const) {
+		test(`continuation fails closed for invalid ${invalidField}`, async () => {
+			const fixture = await authorityFixture({
+				wrapStore(store) {
+					const receipt = closedReceipt({
+						recordedAt: invalidField === "recordedAt"
+							? "not-a-timestamp"
+							: "2026-08-08T00:00:00.000Z",
+					});
+					return {
+						...store,
+						async load() {
+							return {
+								status: "loaded" as const,
+								receipt,
+								history: [receipt],
+								historyPaths: ["fixture-receipt.json"],
+							};
+						},
+						async readPreparedEvidence() {
+							const evidence = await store.readPreparedEvidence();
+							return invalidField === "capturedAt" && evidence
+								? { ...evidence, capturedAt: "not-a-timestamp" }
+								: evidence;
+						},
+					};
+				},
+			});
+			await fixture.store.publishPreparedEvidence(fixture.evidence);
+			await fixture.store.admitActivation({
+				schemaVersion: 2,
+				evidenceId: fixture.evidence.evidenceId,
+				admittedAt: "2026-08-11T00:00:00.000Z",
+				note: "fixture admission",
+			});
+
+			expect(await fixture.authority.validate("continuation")).toEqual({
+				status: "denied",
+				reason: "revalidation_unavailable",
+			});
+		});
+	}
+
 	test("continuation fails closed when current receipt state conflicts", async () => {
 		let conflict = false;
 		const fixture = await authorityFixture({

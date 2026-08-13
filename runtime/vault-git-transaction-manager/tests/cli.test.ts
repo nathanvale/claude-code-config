@@ -687,6 +687,7 @@ describe("vault-git CLI composition", () => {
 					},
 					spawnWorker: () => 100,
 					readProcessIdentity: () => "replacement-identity",
+					stopUnacknowledgedWorker() {},
 					async stopExpiredWorker() {
 						monotonicMs += 1_000;
 						return true;
@@ -702,6 +703,79 @@ describe("vault-git CLI composition", () => {
 		});
 		expect(sleptMs).toBe(500);
 		expect(monotonicMs).toBe(1_500);
+	});
+
+	test("stops a spawned worker when process identity registration fails", async () => {
+		let state = taskState();
+		const stoppedPids: number[] = [];
+		const base = fakeComposition(fakeEngine(), {
+			async load() {
+				return { status: "loaded", receipt: activeReceipt(), history: [], historyPaths: [] };
+			},
+			async readCapability() {
+				return new Uint8Array([1, 2, 3]);
+			},
+		});
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: {
+				repositoryId: "task-store-fixture",
+				paths: { repositoryRoot: "/private", claims: "/private/claims", tasks: "/private/tasks" },
+				claimPath: () => "/private/claims/receipt",
+				async claimOrJoin() {
+					return { status: "created", launch: "winner", state };
+				},
+				async load() { return { status: "loaded", state }; },
+				async loadByTaskId() { return { status: "loaded", state }; },
+				async materializeClaimState() { return { status: "loaded", state }; },
+				async transition(_taskId, expectedRevision, changes) {
+					expect(expectedRevision).toBe(state.revision);
+					state = {
+						...state,
+						...changes,
+						revision: state.revision + 1,
+					} as VaultGitTaskState;
+					return { status: "transitioned", state };
+				},
+			},
+		};
+		let monotonicMs = 0;
+		const run = await runVaultGitForTest(
+			[
+				"complete",
+				"--transaction-id",
+				activeReceipt().transactionId ?? "missing",
+				"--summary",
+				"docs(vault): register worker",
+				"--json",
+			],
+			{
+				composition,
+				backgroundCompletionRuntime: {
+					now: () => monotonicMs,
+					async sleep(milliseconds) {
+						monotonicMs += milliseconds;
+					},
+					spawnWorker: () => 101,
+					readProcessIdentity() {
+						throw new Error("identity unavailable");
+					},
+					stopUnacknowledgedWorker(pid) {
+						stoppedPids.push(pid);
+					},
+					async stopExpiredWorker() {
+						throw new Error("expired worker stop not expected");
+					},
+				},
+			},
+		);
+
+		expect(stoppedPids).toEqual([101]);
+		expect(run.exitCode).toBe(1);
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			error: { code: "worker_launch_failed" },
+			data: { task_state: "repair_needed" },
+		});
 	});
 
 	test("projects lease_generation verbatim in public task JSON", async () => {

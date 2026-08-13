@@ -17,6 +17,7 @@ import {
 	defineVaultGitCommandContracts,
 	parseVaultGitInvocation,
 	projectVaultGitCommandDiscoveryTree,
+	vaultGitActions,
 	vaultGitContractEntries,
 	vaultGitContracts,
 } from "../src/command-contract.ts";
@@ -44,6 +45,12 @@ const contractOptions = {
 } as const;
 
 describe("vault-git command contract", () => {
+	test("keeps Doctor continuation guidance recovery-neutral", () => {
+		expect(vaultGitActions.find(({ id }) => id === "run_doctor")?.summary).toBe(
+			"Run authority-free Doctor, then follow its reported next action.",
+		);
+	});
+
 	test("declares the complete facade-owned public surface", () => {
 		expect(Object.keys(vaultGitContracts)).toEqual([...VAULT_GIT_COMMANDS]);
 		expect(vaultGitContractEntries.map(([command]) => command)).toEqual([

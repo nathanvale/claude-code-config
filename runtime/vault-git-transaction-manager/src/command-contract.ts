@@ -123,7 +123,7 @@ function actionSummary(id: VaultGitNextActionId): string {
 	if (id === "prepare_fresh") return "Prepare fresh V2 evidence, then return to human review.";
 	if (id === "configure_activation_identity") return "Configure the required host activation identity paths, then rerun Doctor.";
 	if (id === "inspect_configured_vault") return "Inspect the configured vault and its live activation dependencies.";
-	if (id === "run_doctor") return "Run authority-free Doctor, then retry explicit preparation.";
+	if (id === "run_doctor") return "Run authority-free Doctor, then follow its reported next action.";
 	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
 	if (id === "change_input") return "Correct the command arguments and retry parsing.";
 	return `Continue with the ${id.replaceAll("_", " ")} action.`;

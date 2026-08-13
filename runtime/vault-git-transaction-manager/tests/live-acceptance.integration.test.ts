@@ -1618,7 +1618,8 @@ async function killWorkerForTask(
 		}
 		throw error;
 	}
-	while (Date.now() < deadline) {
+	const exitDeadline = Date.now() + timeoutMs;
+	while (Date.now() < exitDeadline) {
 		try {
 			process.kill(workerPid, 0);
 		} catch (error) {

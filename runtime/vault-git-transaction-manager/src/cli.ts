@@ -330,6 +330,7 @@ export interface VaultGitBackgroundCompletionRuntime {
 	readonly sleep: (milliseconds: number) => Promise<void>;
 	readonly spawnWorker: typeof spawnBackgroundWorker;
 	readonly readProcessIdentity: (pid: number) => string;
+	readonly stopUnacknowledgedWorker: (pid: number) => void;
 	readonly stopExpiredWorker: typeof stopExpiredUnacknowledgedWorker;
 }
 
@@ -1740,14 +1741,16 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		});
 		state = launching.state;
 		launchWinner = launching.status === "transitioned";
+		let spawnedWorkerPid: number | null = null;
 		if (launchWinner) try {
-			const workerPid = input.backgroundRuntime.spawnWorker(
+			spawnedWorkerPid = input.backgroundRuntime.spawnWorker(
 				input.composition,
 				loaded.receipt.receiptId,
 				state.taskId,
 				launchGeneration,
 				input.args,
 			);
+			const workerPid = spawnedWorkerPid;
 			const workerProcessIdentity = input.backgroundRuntime.readProcessIdentity(workerPid);
 			const registered = await taskStore.transition(state.taskId, state.revision, {
 				state: "launching",
@@ -1761,11 +1764,15 @@ async function launchBackgroundCompletion(input: EmitContext & {
 				workerProcessIdentity,
 			});
 			if (registered.status !== "transitioned") {
-				stopUnacknowledgedWorker(workerPid);
+				input.backgroundRuntime.stopUnacknowledgedWorker(workerPid);
 			} else {
 				state = registered.state;
 			}
+			spawnedWorkerPid = null;
 		} catch {
+			if (spawnedWorkerPid !== null) {
+				input.backgroundRuntime.stopUnacknowledgedWorker(spawnedWorkerPid);
+			}
 			await transitionTaskUntilSettled(taskStore, state.taskId, {
 				state: "repair_needed",
 				phase: "terminal",
@@ -2026,6 +2033,7 @@ const DEFAULT_BACKGROUND_COMPLETION_RUNTIME: VaultGitBackgroundCompletionRuntime
 	sleep: (milliseconds) => Bun.sleep(milliseconds),
 	spawnWorker: spawnBackgroundWorker,
 	readProcessIdentity: readVaultGitProcessIdentity,
+	stopUnacknowledgedWorker,
 	stopExpiredWorker: stopExpiredUnacknowledgedWorker,
 };
 
