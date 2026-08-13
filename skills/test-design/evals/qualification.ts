@@ -38,26 +38,29 @@ export const QUALIFICATION_SOURCE_PATHS = [
 	"skills/test-design/tests/skill-contract.test.ts",
 ] as const;
 
+/** Qualification proofs whose pass state the receipt records. @internal */
+export const RESULT_KEYS = [
+	"deterministic",
+	"pairwise_claude_two_consecutive",
+	"pairwise_codex_two_consecutive",
+	"mutation_claude",
+	"mutation_codex",
+	"runner_sensitive_claude",
+	"runner_sensitive_codex",
+	"simple_unit_claude",
+	"simple_unit_codex",
+	"run_only_claude",
+	"run_only_codex",
+	"missing_skill_claude",
+	"missing_skill_codex",
+] as const;
+
 type QualificationReceipt = {
 	schema_version: 1;
 	generated_by: "skills/test-design/evals/qualification.ts";
 	source_sha256: string;
 	sources: string[];
-	results: {
-		deterministic: true;
-		pairwise_claude_two_consecutive: true;
-		pairwise_codex_two_consecutive: true;
-		mutation_claude: true;
-		mutation_codex: true;
-		runner_sensitive_claude: true;
-		runner_sensitive_codex: true;
-		simple_unit_claude: true;
-		simple_unit_codex: true;
-		run_only_claude: true;
-		run_only_codex: true;
-		missing_skill_claude: true;
-		missing_skill_codex: true;
-	};
+	results: { [Key in (typeof RESULT_KEYS)[number]]: true };
 };
 
 /**
@@ -79,21 +82,9 @@ export function createQualificationReceipt(
 		generated_by: "skills/test-design/evals/qualification.ts",
 		source_sha256: qualificationSourceDigest(root),
 		sources: [...QUALIFICATION_SOURCE_PATHS],
-		results: {
-			deterministic: true,
-			pairwise_claude_two_consecutive: true,
-			pairwise_codex_two_consecutive: true,
-			mutation_claude: true,
-			mutation_codex: true,
-			runner_sensitive_claude: true,
-			runner_sensitive_codex: true,
-			simple_unit_claude: true,
-			simple_unit_codex: true,
-			run_only_claude: true,
-			run_only_codex: true,
-			missing_skill_claude: true,
-			missing_skill_codex: true,
-		},
+		results: Object.fromEntries(
+			RESULT_KEYS.map((key) => [key, true]),
+		) as QualificationReceipt["results"],
 	};
 }
 
@@ -159,21 +150,7 @@ function verifyReceipt(): { ok: boolean; reason: string } {
 			reason: error instanceof Error ? error.message : "qualification source check failed",
 		};
 	}
-	const resultKeys = [
-		"deterministic",
-		"pairwise_claude_two_consecutive",
-		"pairwise_codex_two_consecutive",
-		"mutation_claude",
-		"mutation_codex",
-		"runner_sensitive_claude",
-		"runner_sensitive_codex",
-		"simple_unit_claude",
-		"simple_unit_codex",
-		"run_only_claude",
-		"run_only_codex",
-		"missing_skill_claude",
-		"missing_skill_codex",
-	];
+	const resultKeys = [...RESULT_KEYS];
 	const results = receipt.results as Record<string, unknown>;
 	if (!exactKeys(results, resultKeys) || resultKeys.some((key) => results[key] !== true)) {
 		return { ok: false, reason: "qualification receipt has incomplete results" };

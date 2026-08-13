@@ -438,10 +438,9 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 			skillId: "test-design",
 			profileRelativePath: "references/runner-execution.md",
 			profileChallengeField: "profileQualificationChallenge",
-			forbiddenProfileRelativePaths: [
-				"references/browser-and-ui.md",
-				"references/installation-host-hosted.md",
-			],
+			forbiddenProfileRelativePaths: profiles
+				.filter((profile) => profile !== "runner-execution")
+				.map((profile) => `references/${profile}.md`),
 		},
 	},
 };
