@@ -390,9 +390,15 @@ export function parseBrowserUseArgv(
 	}
 	if (command === "auth-request-binding-selection-grant") {
 		const vaultId = stringField(flagValues["--vault-id"]);
+		const runId = stringField(flagValues["--run"]);
 		if (!vaultId || vaultId.startsWith("--")) {
 			throw usageError(
 				"auth request-binding-selection-grant requires --vault-id <id>.",
+			);
+		}
+		if (!runId || runId.startsWith("--")) {
+			throw usageError(
+				"auth request-binding-selection-grant requires --run <id>.",
 			);
 		}
 	}

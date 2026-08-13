@@ -10,6 +10,7 @@
 	},
 	"scripts": {
 		"build:unsigned": "xcodebuild -project BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/xcode CODE_SIGNING_ALLOWED=NO build",
+		"install:binding-selection-local": "bun run scripts/install-binding-selection-capability.ts",
 		"test": "bun test ./tests/*.test.ts",
 		"test:protocol": "xcodebuild -project BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/xcode CODE_SIGNING_ALLOWED=NO test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"

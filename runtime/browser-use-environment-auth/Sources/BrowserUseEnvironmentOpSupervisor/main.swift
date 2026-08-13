@@ -13,11 +13,21 @@ private enum SupervisorArguments {
         opPath: String,
         operation: EnvironmentOpMetadataOperation
     )
+    case bindingSelection(BindingSelectionRequest)
     case validate(validatorDescriptor: Int32, opPath: String)
     case install(TokenInstallRequest)
     case remove(configRoot: String)
     case status(TokenStatusRequest)
     case deliver(DeliveryRequest)
+}
+
+private struct BindingSelectionRequest {
+    let configRoot: String
+    let opPath: String
+    let vaultID: String
+    let origin: String
+    let expectedDigest: String
+    let expectedCount: Int
 }
 
 private struct TokenInstallRequest {
@@ -209,6 +219,32 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
             opPath: opPath,
             operation: operation
         )
+    case "binding-selection":
+        guard options.count == 6,
+              let configRoot = options["--config-root"],
+              let opPath = options["--op-path"],
+              let vaultID = options["--vault-id"],
+              let rawOrigin = options["--origin"],
+              let expectedDigest = options["--expected-candidate-digest"],
+              let rawCount = options["--candidate-count"],
+              let expectedCount = Int(rawCount),
+              expectedCount > 0,
+              expectedCount <= 1_000,
+              safeCoordinate(vaultID),
+              expectedDigest.count == 64,
+              expectedDigest.allSatisfy({ $0.isHexDigit }),
+              normalizedOrigin(rawOrigin) == rawOrigin
+        else { return nil }
+        return .bindingSelection(
+            BindingSelectionRequest(
+                configRoot: configRoot,
+                opPath: opPath,
+                vaultID: vaultID,
+                origin: rawOrigin,
+                expectedDigest: expectedDigest,
+                expectedCount: expectedCount
+            )
+        )
     case "validate":
         guard options.count == 2,
               let rawDescriptor = options["--validator-fd"],
@@ -380,6 +416,7 @@ private let helpText = """
 Usage:
   browser-use-op-supervisor admit --op-path <absolute-path>
   browser-use-op-supervisor metadata --config-root <absolute-path> --op-path <absolute-path> --operation <name>
+  browser-use-op-supervisor binding-selection --config-root <absolute-path> --op-path <absolute-path> --vault-id <id> --origin <origin> --expected-candidate-digest <sha256> --candidate-count <count>
   browser-use-op-supervisor validate --validator-fd <fd> --op-path <absolute-path>
   browser-use-op-supervisor install --config-root <absolute-path> --op-path <absolute-path> --input <stdin|prompt> --replace <true|false>
   browser-use-op-supervisor remove --config-root <absolute-path>
@@ -389,6 +426,7 @@ Usage:
 Commands:
   admit      Check the fixed official OP path without reading a token.
   metadata   Execute one admitted projected metadata operation.
+  binding-selection  Show one local descriptor-private picker and return only the selected redacted evidence.
   validate   Validate one token received through an inherited socket.
   install    Read hidden or piped input and atomically install validated custody.
   remove     Remove only the exact admitted local custody file.
@@ -1195,6 +1233,28 @@ case let .metadata(configRoot, opPath, operation):
         let result = EnvironmentOpSupervisor.executeAdmittedMetadata(
             executablePath: opPath,
             operation: operation,
+            tokenDescriptor: tokenDescriptor
+        )
+        let decoded = try? JSONSerialization.jsonObject(with: result)
+            as? [String: Any]
+        emit(result, exitCode: decoded?["ok"] as? Bool == true ? 0 : 20)
+    } catch let cause as TokenCustodyCause {
+        emit(rejection(cause.rawValue), exitCode: 20)
+    } catch {
+        emit(rejection("token-custody-unavailable"), exitCode: 20)
+    }
+case let .bindingSelection(request):
+    do {
+        let tokenDescriptor = try openEnvironmentTokenDescriptor(
+            configRoot: request.configRoot
+        )
+        defer { _ = Darwin.close(tokenDescriptor) }
+        let result = EnvironmentOpSupervisor.executeAdmittedBindingSelection(
+            executablePath: request.opPath,
+            vaultID: request.vaultID,
+            origin: request.origin,
+            expectedDigest: request.expectedDigest,
+            expectedCount: request.expectedCount,
             tokenDescriptor: tokenDescriptor
         )
         let decoded = try? JSONSerialization.jsonObject(with: result)

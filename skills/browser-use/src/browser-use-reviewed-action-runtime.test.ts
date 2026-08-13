@@ -1,10 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmod, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runForTest } from "./browser-use";
 import { createProductionBrowserUseRuntime } from "./browser-use-runtime";
+import {
+	type BrowserUseBindingSelectionGrant,
+	type BrowserUseBindingSelectionRequest,
+	bindingSelectionGrantDigestOf,
+} from "./browser-use-binding-selection";
 import { reviewedActionApprovalFactsDigest } from "./browser-use-reviewed-action-approval";
 import { parseJson } from "./browser-use-test-helpers";
 
@@ -48,6 +63,81 @@ async function verifierFixture() {
 }
 
 describe("production Reviewed Action verifier wiring", () => {
+	test("verifies and durably reserves one signed binding selection grant", async () => {
+		const fixture = await verifierFixture();
+		const runtime = await createProductionBrowserUseRuntime({ env: fixture.env });
+		const request: BrowserUseBindingSelectionRequest = {
+			resolution_key: {
+				binding_ref: "github",
+				service_id: "github",
+				auth_context: "interactive-login",
+				environment: "agent-chrome",
+				profile: "default",
+			},
+			facts: {
+				run_id: "run-selection",
+				service_id: "github",
+				origin: "https://github.com",
+				vault_id: "vault-1",
+				candidate_set_digest: "0123456789abcdef".repeat(4),
+			},
+			candidate_count: 7,
+		};
+		const issuedAt = runtime.now() - 1_000;
+		const unsigned: Omit<BrowserUseBindingSelectionGrant, "signature"> = {
+			grant_id: "selection-runtime-1",
+			resolution_key: request.resolution_key,
+			binding: {
+				service_id: "github",
+				auth_context: "interactive-login",
+				allowed_origins: ["https://github.com"],
+				allowed_login_paths: [],
+				vault_id: "vault-1",
+				item_id: "item-6",
+				allowed_auth_methods: ["password", "otp"],
+				binding_revision: 1,
+			},
+			facts: request.facts,
+			issued_at_epoch_ms: issuedAt,
+			expires_at_epoch_ms: issuedAt + 90_000,
+			verifier_key_id: fixture.identity.key_id,
+		};
+		const grant: BrowserUseBindingSelectionGrant = {
+			...unsigned,
+			signature: sign(
+				"sha256",
+				Buffer.from(bindingSelectionGrantDigestOf(unsigned), "hex"),
+				fixture.privateKey,
+			).toString("base64"),
+		};
+		const verifier = runtime.bindingSelectionGrantVerifier;
+		expect(verifier).toBeDefined();
+		if (verifier === undefined) throw new Error("selection verifier was absent");
+		expect(
+			await verifier.verifyAndReserve({
+				grant,
+				expected: request,
+				at_epoch_ms: runtime.now(),
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			await verifier.verifyAndReserve({
+				grant,
+				expected: request,
+				at_epoch_ms: runtime.now(),
+			}),
+		).toEqual({ ok: false, code: "grant_consumed" });
+		const reservation = await lstat(
+			join(
+				fixture.env.XDG_STATE_HOME,
+				"browser-use",
+				"binding-selection-grants",
+				"selection-runtime-1",
+			),
+		);
+		expect(reservation.mode & 0o777).toBe(0o600);
+	});
+
 	test("loads one owner-only XDG verifier pin and verifies a real P-256 receipt offline", async () => {
 		const fixture = await verifierFixture();
 		const runtime = await createProductionBrowserUseRuntime({ env: fixture.env });
@@ -109,6 +199,7 @@ describe("production Reviewed Action verifier wiring", () => {
 		});
 		expect(runtime.runbookHumanIdentityAttestation).toBeDefined();
 		expect(runtime.runbookAuthenticatedStateProof).toBeUndefined();
+		expect(runtime.bindingSelectionCeremony).toBeUndefined();
 
 		await chmod(fixture.verifierPath, 0o644);
 		const unpinned = await createProductionBrowserUseRuntime({

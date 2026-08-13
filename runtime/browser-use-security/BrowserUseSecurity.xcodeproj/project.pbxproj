@@ -279,7 +279,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.approval-broker";
 				PRODUCT_NAME = ApprovalBroker;
 			};
@@ -294,7 +294,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.approval-broker";
 				PRODUCT_NAME = ApprovalBroker;
 			};
