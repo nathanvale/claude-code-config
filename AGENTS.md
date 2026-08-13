@@ -25,8 +25,8 @@
 - Read relevant files before acting.
 - Concrete implementation request: act.
 - Analysis-only or brainstorming request: ask before implementing.
-- Low-risk ambiguity: assume; state it.
-- High-risk ambiguity: ask one question.
+- Ambiguity: assume and state low-risk choices; ask one question for high-risk choices.
+- In Codex, when one genuine yes/no approval blocks an otherwise-ready task, invoke `agent-plugin-playground:agent-attention` automatically; keep multi-choice or unclear decisions in Codex.
 - Execute in small, reviewable steps.
 - Test meaningful changes.
 - Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.
