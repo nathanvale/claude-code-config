@@ -37,6 +37,12 @@ The canonical matrix uses static state classes in dedicated cells. Point each
 reference state at its dedicated cell. Let the driver force Path pseudo-states,
 unless the selector spec names a static Path state cell.
 
+For item-bearing overlays, open Portal UI and Path sequentially. Require paired
+visible specimens and settled captures for default, hover, held pointer press,
+keyboard focus, selected, disabled, and destructive item states when supported.
+Bind each overlay to its trigger through the component's ARIA relationship. A
+closed trigger or open popup without item-state evidence is incomplete.
+
 ## Read Pseudo-State Evidence
 
 `CSS.forcePseudoState` can leave Emotion hover or focus-visible paint unchanged
