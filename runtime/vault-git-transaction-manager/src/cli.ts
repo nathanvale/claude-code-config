@@ -106,7 +106,6 @@ import {
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
 	type VaultGitBackgroundCompletionRuntime as VaultGitTaskLifecycleRuntime,
-	type VaultGitTaskLifecycleRole,
 } from "./task-lifecycle.ts";
 import { parseVaultGitTaskWorkerAcknowledgement } from "./task-state.ts";
 import {
@@ -330,6 +329,8 @@ export interface VaultGitCliOptions {
 	readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
 	/** Background completion process and monotonic-time seams for focused tests. */
 	readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
+	/** Environment for role dispatch; tests inject worker env without mutating process.env. */
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Process and monotonic-time operations used by foreground task acknowledgement. */
@@ -380,19 +381,10 @@ function isRuntimeInvocation(
 function resolveVaultGitTaskLifecycleDispatch(
 	environment: NodeJS.ProcessEnv,
 ): VaultGitTaskLifecycleDispatch {
-	const role: VaultGitTaskLifecycleRole =
-		environment.VAULT_GIT_TASK_ID &&
-		environment.VAULT_GIT_TASK_LAUNCH_GENERATION
-			? "worker"
-			: "launcher";
-	return role === "worker"
-		? {
-				role,
-				taskId: environment.VAULT_GIT_TASK_ID as string,
-				launchGeneration:
-					environment.VAULT_GIT_TASK_LAUNCH_GENERATION as string,
-			}
-		: { role };
+	const taskId = environment.VAULT_GIT_TASK_ID;
+	const launchGeneration = environment.VAULT_GIT_TASK_LAUNCH_GENERATION;
+	if (!taskId || !launchGeneration) return { role: "launcher" };
+	return { role: "worker", taskId, launchGeneration };
 }
 
 /** Captured in-process CLI result. */
@@ -945,7 +937,7 @@ export async function main(
 		});
 	}
 	const taskLifecycleDispatch = resolveVaultGitTaskLifecycleDispatch(
-		process.env,
+		options.env ?? process.env,
 	);
 
 	try {
@@ -1061,6 +1053,7 @@ export async function runVaultGitForTest(
 		readonly launchPrivate?: boolean;
 		readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
 		readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
+		readonly env?: NodeJS.ProcessEnv;
 	} = {},
 ): Promise<VaultGitCliRun> {
 	const stdout = new BufferWriter();
@@ -1084,6 +1077,7 @@ export async function runVaultGitForTest(
 		...(options.backgroundCompletionRuntime
 			? { backgroundCompletionRuntime: options.backgroundCompletionRuntime }
 			: {}),
+		...(options.env ? { env: options.env } : {}),
 	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
@@ -1736,10 +1730,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		});
 		return emitPayload({ ...input, payload, success: false, errorCode: "task_input_mismatch" });
 	}
-	const state =
-		lifecycleOutcome.kind === "settled"
-			? lifecycleOutcome.state
-			: lifecycleOutcome.state;
+	const state = lifecycleOutcome.state;
 	if (!state) {
 		const payload = createVaultGitLifecycleResult({
 			command: "complete",

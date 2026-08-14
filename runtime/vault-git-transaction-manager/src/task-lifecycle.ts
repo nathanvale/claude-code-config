@@ -241,9 +241,6 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 			if (current.status !== "loaded") {
 				return { kind: "refused", reason: "worker_lost" };
 			}
-			if (current.state.phase === "terminal") {
-				return { kind: "settled", state: current.state };
-			}
 			// A superseded launch generation must never terminalize the attempt that
 			// replaced it, so the fence refuses instead of retrying onto a new revision.
 			if (
@@ -252,6 +249,9 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 					input.fence.expectedLaunchGeneration
 			) {
 				return { kind: "refused", reason: "worker_lost" };
+			}
+			if (current.state.phase === "terminal") {
+				return { kind: "settled", state: current.state };
 			}
 			const transitioned = await options.store.transition(
 				input.taskId,
@@ -386,7 +386,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 			const current = await options.store.loadByTaskId(state.taskId);
 			if (current.status !== "loaded") break;
 			state = current.state;
-			if (state.state === "repair_needed" || state.state === "unknown") break;
+			if (state.phase === "terminal") break;
 		}
 		if (state.phase === "terminal" || state.state === "in_progress") {
 			return { kind: "settled", state };

@@ -192,6 +192,49 @@ describe("Task Lifecycle", () => {
 		expect(await freshLoad(fixture)).toEqual(before);
 	});
 
+	test("stale launch generation cannot re-terminalize an already-terminal attempt", async () => {
+		const fixture = await createFixture("stale-terminal", "worker");
+		const running = await arrangeInProgressLaunch(fixture.store);
+		const terminalized = await fixture.lifecycle.terminalize({
+			taskId: running.taskId,
+			advance: terminalAdvance("worker_lost"),
+			fence: { expectedLaunchGeneration: LAUNCH_GENERATION },
+		});
+		if (terminalized.kind !== "settled") throw new Error("fixture terminalization refused");
+		const before = await freshLoad(fixture);
+
+		const outcome = await fixture.lifecycle.terminalize({
+			taskId: running.taskId,
+			advance: terminalAdvance("receipt_conflict"),
+			fence: {
+				expectedLaunchGeneration:
+					"launch_55555555555555555555555555555555",
+			},
+		});
+
+		expect(outcome).toEqual({ kind: "refused", reason: "worker_lost" });
+		expect(await freshLoad(fixture)).toEqual(before);
+	});
+
+	test("same-generation terminalization re-entry stays settled", async () => {
+		const fixture = await createFixture("terminal-reentry", "worker");
+		const running = await arrangeInProgressLaunch(fixture.store);
+		const terminalized = await fixture.lifecycle.terminalize({
+			taskId: running.taskId,
+			advance: terminalAdvance("worker_lost"),
+			fence: { expectedLaunchGeneration: LAUNCH_GENERATION },
+		});
+		if (terminalized.kind !== "settled") throw new Error("fixture terminalization refused");
+
+		const outcome = await fixture.lifecycle.terminalize({
+			taskId: running.taskId,
+			advance: terminalAdvance("worker_lost"),
+			fence: { expectedLaunchGeneration: LAUNCH_GENERATION },
+		});
+
+		expect(outcome).toEqual({ kind: "settled", state: terminalized.state });
+	});
+
 	test("recovery CAS loser cannot register or terminalize a worker", async () => {
 		const stateRoot = await scratchRoot("recovery-loser");
 		const first = createFixtureAt(stateRoot, "recovery-loser", "launcher");
@@ -271,6 +314,7 @@ describe("Task Lifecycle", () => {
 			reason: "worker_launch_protocol_failed",
 			state: lastObserved.state,
 		});
+		expect(fixture.runtime.stoppedUnacknowledged).toEqual([]);
 	});
 
 	test("invalid recovery clock leaves the expired launch untouched", async () => {
@@ -326,6 +370,7 @@ interface FakeRuntime extends VaultGitBackgroundCompletionRuntime<null> {
 		args: readonly string[];
 	}>;
 	readonly stoppedExpired: Array<{ pid: number | null; identity: string | null }>;
+	readonly stoppedUnacknowledged: number[];
 	onSleep: () => Promise<void>;
 	onStopExpired: () => boolean;
 }
@@ -361,6 +406,7 @@ function createFixtureAt(
 		sleptMs: 0,
 		spawned: [],
 		stoppedExpired: [],
+		stoppedUnacknowledged: [],
 		onSleep: async () => {},
 		onStopExpired: () => true,
 		now() {
@@ -379,7 +425,9 @@ function createFixtureAt(
 			if (pid !== 101) throw new Error("unexpected worker pid");
 			return "c".repeat(64);
 		},
-		stopUnacknowledgedWorker() {},
+		stopUnacknowledgedWorker(pid) {
+			runtime.stoppedUnacknowledged.push(pid);
+		},
 		async stopExpiredWorker(pid, identity) {
 			runtime.stoppedExpired.push({ pid, identity });
 			return runtime.onStopExpired();
