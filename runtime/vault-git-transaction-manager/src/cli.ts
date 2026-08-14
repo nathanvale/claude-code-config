@@ -1739,17 +1739,28 @@ async function launchBackgroundCompletion(input: EmitContext & {
 	const state =
 		lifecycleOutcome.kind === "settled"
 			? lifecycleOutcome.state
-			: await loadCompletionTaskState(taskStore, loaded.receipt.receiptId);
+			: lifecycleOutcome.state;
 	if (!state) {
-		return emitBackgroundCapabilityReadFailure(
-			input,
-			loaded.receipt.phase,
-			lifecycleOutcome.kind === "refused"
-				? lifecycleOutcome.reason === "capability_missing"
-					? "capability_missing"
-					: "receipt_conflict"
-				: "receipt_conflict",
-		);
+		const payload = createVaultGitLifecycleResult({
+			command: "complete",
+			outcome: "refused",
+			phase: loaded.receipt.phase,
+			write_permission: "denied",
+			changed_state: "none",
+			retry_safety: "operator_required",
+			blockers: ["worker_launch_protocol_failed"],
+			transaction_id: loaded.receipt.transactionId,
+			next_action: action(
+				"run_doctor",
+				"Run doctor to inspect the unacknowledged worker launch.",
+			),
+		});
+		return emitPayload({
+			...input,
+			payload,
+			success: false,
+			errorCode: "worker_launch_protocol_failed",
+		});
 	}
 	if (state.phase === "terminal") {
 		const payload = payloadForRuntime("complete", { kind: "task", value: state }, input.now());
@@ -1764,10 +1775,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		lifecycleOutcome.kind === "refused" ||
 		state.state !== "in_progress"
 	) {
-		const blocker =
-			lifecycleOutcome.kind === "refused"
-				? lifecycleOutcome.reason
-				: "worker_launch_protocol_failed";
+		const blocker = "worker_launch_protocol_failed";
 		const payload = createVaultGitLifecycleResult({
 			command: "complete",
 			outcome: "refused",
@@ -1810,14 +1818,6 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		next_action: action("inspect_status", "Inspect this task for durable progress."),
 	});
 	return emitPayload({ ...input, payload, success: true, errorCode: "" });
-}
-
-async function loadCompletionTaskState(
-	store: VaultGitTaskStore,
-	receiptId: string,
-): Promise<import("./model.ts").VaultGitTaskState | null> {
-	const loaded = await store.load(receiptId);
-	return loaded.status === "loaded" ? loaded.state : null;
 }
 
 function emitBackgroundCapabilityReadFailure(

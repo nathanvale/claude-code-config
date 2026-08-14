@@ -43,6 +43,7 @@ export type VaultGitTaskLifecycleOutcome =
 	| {
 			readonly kind: "refused";
 			readonly reason: VaultGitTaskLifecycleRefusalReason;
+			readonly state?: VaultGitTaskState;
 	  };
 
 /** Launcher ownership decision retained between independently testable verbs. */
@@ -55,6 +56,7 @@ export type VaultGitTaskLifecycleAdmissionOutcome =
 	| {
 			readonly kind: "refused";
 			readonly reason: VaultGitTaskLifecycleRefusalReason;
+			readonly state?: VaultGitTaskState;
 	  };
 
 /** Process and monotonic-time effects required by launcher choreography. */
@@ -153,7 +155,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 		}
 		return {
 			kind: "settled",
-			launch: admission.launch,
+			launch: admission.state.state === "claimed" ? "winner" : admission.launch,
 			state: admission.state,
 		};
 	}
@@ -161,16 +163,22 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 	async function recoverExpiredLaunch(
 		outcome: VaultGitTaskLifecycleAdmissionOutcome,
 	): Promise<VaultGitTaskLifecycleAdmissionOutcome> {
-		const launchExpiresAt =
-			outcome.kind === "settled" && outcome.state.launchExpiresAt !== null
-				? Date.parse(outcome.state.launchExpiresAt)
-				: Number.NaN;
 		if (
 			outcome.kind === "refused" ||
 			outcome.launch !== "joined" ||
-			outcome.state.state !== "launching" ||
+			outcome.state.state !== "launching"
+		) {
+			return outcome;
+		}
+		const launchExpiresAt =
+			outcome.state.launchExpiresAt === null
+				? Number.NaN
+				: Date.parse(outcome.state.launchExpiresAt);
+		const observedAt = options.recordedAt().getTime();
+		if (
 			!Number.isFinite(launchExpiresAt) ||
-			launchExpiresAt > options.recordedAt().getTime()
+			!Number.isFinite(observedAt) ||
+			launchExpiresAt > observedAt
 		) {
 			return outcome;
 		}
@@ -180,6 +188,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 		);
 		if (!stopped) return outcome;
 		const state = outcome.state;
+		const recoveredAt = new Date(observedAt).toISOString();
 		const recovered = await options.store.transition(
 			state.taskId,
 			state.revision,
@@ -187,7 +196,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 				? {
 						state: "claimed",
 						phase: "admitted",
-						updatedAt: options.recordedAt().toISOString(),
+						updatedAt: recoveredAt,
 						heartbeatAt: null,
 						checkpoint: null,
 						launchGeneration: null,
@@ -198,7 +207,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 				: {
 						state: "repair_needed",
 						phase: "terminal",
-						updatedAt: options.recordedAt().toISOString(),
+						updatedAt: recoveredAt,
 						heartbeatAt: null,
 						checkpoint: null,
 						launchGeneration: state.launchGeneration,
@@ -262,10 +271,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 		launchGeneration: string,
 		args: readonly string[],
 	): Promise<VaultGitTaskLifecycleAdmissionOutcome> {
-		if (
-			outcome.kind === "refused" ||
-			(outcome.launch !== "winner" && outcome.state.state !== "claimed")
-		) {
+		if (outcome.kind === "refused" || outcome.launch !== "winner") {
 			return outcome;
 		}
 		const launchedAt = options.recordedAt();
@@ -359,9 +365,11 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 				return { kind: "settled", launch: "joined", state: terminal.state };
 			}
 			const current = await options.store.loadByTaskId(state.taskId);
-			return current.status === "loaded"
-				? { kind: "settled", launch: "joined", state: current.state }
-				: { kind: "refused", reason: "worker_launch_failed" };
+			return {
+				kind: "refused",
+				reason: "worker_launch_failed",
+				...(current.status === "loaded" ? { state: current.state } : {}),
+			};
 		}
 	}
 
@@ -383,7 +391,11 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 		if (state.phase === "terminal" || state.state === "in_progress") {
 			return { kind: "settled", state };
 		}
-		return { kind: "refused", reason: "worker_launch_protocol_failed" };
+		return {
+			kind: "refused",
+			reason: "worker_launch_protocol_failed",
+			state,
+		};
 	}
 
 	async function launch(
@@ -398,7 +410,7 @@ export function createVaultGitTaskLifecycle<SpawnContext>(
 		const recovered = await recoverExpiredLaunch(admission);
 		if (recovered.kind === "refused") return recovered;
 		const registered =
-			recovered.launch === "winner" || recovered.state.state === "claimed"
+			recovered.launch === "winner"
 				? await registerWorker(
 						recovered,
 						input.createLaunchGeneration(),

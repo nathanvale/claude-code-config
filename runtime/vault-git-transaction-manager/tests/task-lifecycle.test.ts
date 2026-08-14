@@ -174,7 +174,120 @@ describe("Task Lifecycle", () => {
 		});
 	});
 
-	test("concurrent admits publish one launch winner and one joiner", async () => {
+	test("stale launch generation cannot terminalize the current worker", async () => {
+		const fixture = await createFixture("stale-generation", "worker");
+		const running = await arrangeInProgressLaunch(fixture.store);
+		const before = await freshLoad(fixture);
+
+		const outcome = await fixture.lifecycle.terminalize({
+			taskId: running.taskId,
+			advance: terminalAdvance("worker_lost"),
+			fence: {
+				expectedLaunchGeneration:
+					"launch_55555555555555555555555555555555",
+			},
+		});
+
+		expect(outcome).toEqual({ kind: "refused", reason: "worker_lost" });
+		expect(await freshLoad(fixture)).toEqual(before);
+	});
+
+	test("recovery CAS loser cannot register or terminalize a worker", async () => {
+		const stateRoot = await scratchRoot("recovery-loser");
+		const first = createFixtureAt(stateRoot, "recovery-loser", "launcher");
+		const second = createFixtureAt(stateRoot, "recovery-loser", "launcher");
+		await arrangeExpiredLaunch(first.store, 1);
+		first.runtime.wallTimeMs = Date.parse("2026-08-14T00:02:00.000Z");
+		second.runtime.wallTimeMs = first.runtime.wallTimeMs;
+
+		const firstAdmission = await first.lifecycle.admit(claimInput());
+		const secondAdmission = await second.lifecycle.admit(claimInput());
+		const firstRecovery = await first.lifecycle.recoverExpiredLaunch(firstAdmission);
+		const secondRecovery = await second.lifecycle.recoverExpiredLaunch(secondAdmission);
+
+		expect(firstRecovery).toMatchObject({
+			kind: "settled",
+			launch: "winner",
+			state: { state: "claimed" },
+		});
+		expect(secondRecovery).toMatchObject({
+			kind: "settled",
+			launch: "joined",
+			state: { state: "claimed" },
+		});
+		const secondRegistration = await second.lifecycle.registerWorker(
+			secondRecovery,
+			"launch_55555555555555555555555555555555",
+			["complete"],
+		);
+		const firstRegistration = await first.lifecycle.registerWorker(
+			firstRecovery,
+			LAUNCH_GENERATION,
+			["complete"],
+		);
+
+		expect(secondRegistration).toEqual(secondRecovery);
+		expect(second.runtime.spawned).toEqual([]);
+		expect(first.runtime.spawned).toHaveLength(1);
+		expect(firstRegistration).toMatchObject({
+			kind: "settled",
+			launch: "winner",
+			state: { state: "launching", phase: "admitted" },
+		});
+		expect(await freshLoad(first)).toMatchObject({
+			status: "loaded",
+			state: { state: "launching", phase: "admitted" },
+		});
+	});
+
+	test("acknowledgement deadline refusal carries the last observed state", async () => {
+		const fixture = await createFixture("deadline-state");
+		const admitted = await fixture.lifecycle.admit(claimInput());
+		if (admitted.kind === "refused") throw new Error("fixture admission refused");
+		fixture.runtime.onSleep = async () => {
+			await fixture.store.transition(admitted.state.taskId, admitted.state.revision, {
+				state: "launching",
+				phase: "admitted",
+				updatedAt: "2026-08-14T00:00:30.000Z",
+				heartbeatAt: null,
+				checkpoint: null,
+				launchGeneration: LAUNCH_GENERATION,
+				launchExpiresAt: "2026-08-14T00:00:31.500Z",
+				workerPid: 99,
+				workerProcessIdentity: "d".repeat(64),
+				launchAttempt: 1,
+			});
+		};
+
+		const outcome = await fixture.lifecycle.acknowledge(
+			admitted.state,
+			fixture.runtime.now() + 10,
+		);
+		const lastObserved = await freshLoad(fixture);
+		if (lastObserved.status !== "loaded") throw new Error("fixture state unavailable");
+
+		expect(outcome).toEqual({
+			kind: "refused",
+			reason: "worker_launch_protocol_failed",
+			state: lastObserved.state,
+		});
+	});
+
+	test("invalid recovery clock leaves the expired launch untouched", async () => {
+		const fixture = await createFixture("invalid-clock");
+		await arrangeExpiredLaunch(fixture.store, 1);
+		fixture.runtime.wallTimeMs = Number.NaN;
+		const admission = await fixture.lifecycle.admit(claimInput());
+		const before = await freshLoad(fixture);
+
+		const outcome = await fixture.lifecycle.recoverExpiredLaunch(admission);
+
+		expect(outcome).toEqual(admission);
+		expect(fixture.runtime.stoppedExpired).toEqual([]);
+		expect(await freshLoad(fixture)).toEqual(before);
+	});
+
+	test("concurrent claimed admissions remain launchable", async () => {
 		const stateRoot = await scratchRoot("concurrent");
 		const first = createFixtureAt(stateRoot, "concurrent", "launcher");
 		const second = createFixtureAt(stateRoot, "concurrent", "launcher");
@@ -188,7 +301,7 @@ describe("Task Lifecycle", () => {
 			outcomes.map((outcome) =>
 				outcome.kind === "settled" ? outcome.launch : outcome.reason,
 			),
-		).toEqual(expect.arrayContaining(["winner", "joined"]));
+		).toEqual(["winner", "winner"]);
 		expect(
 			new Set(
 				outcomes.flatMap((outcome) =>
@@ -319,6 +432,37 @@ async function arrangeExpiredLaunch(
 		workerProcessIdentity: "d".repeat(64),
 		launchAttempt,
 	});
+}
+
+async function arrangeInProgressLaunch(store: VaultGitTaskStore) {
+	const admitted = await store.claimOrJoin(claimInput());
+	if (admitted.status === "refused") throw new Error("fixture admission refused");
+	const launching = await store.transition(admitted.state.taskId, admitted.state.revision, {
+		state: "launching",
+		phase: "admitted",
+		updatedAt: "2026-08-14T00:00:30.000Z",
+		heartbeatAt: null,
+		checkpoint: null,
+		launchGeneration: LAUNCH_GENERATION,
+		launchExpiresAt: "2026-08-14T00:00:45.000Z",
+		workerPid: 99,
+		workerProcessIdentity: "d".repeat(64),
+		launchAttempt: 1,
+	});
+	if (launching.status !== "transitioned") throw new Error("fixture launch lost");
+	const running = await store.transition(launching.state.taskId, launching.state.revision, {
+		state: "in_progress",
+		phase: "running",
+		updatedAt: "2026-08-14T00:00:31.000Z",
+		heartbeatAt: "2026-08-14T00:00:31.000Z",
+		checkpoint: "checking",
+		launchGeneration: LAUNCH_GENERATION,
+		launchExpiresAt: null,
+		workerPid: 99,
+		workerProcessIdentity: "d".repeat(64),
+	});
+	if (running.status !== "transitioned") throw new Error("fixture acknowledgement lost");
+	return running.state;
 }
 
 async function acknowledgeRegisteredWorker(store: VaultGitTaskStore): Promise<void> {
