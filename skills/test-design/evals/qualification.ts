@@ -51,6 +51,8 @@ export const RESULT_KEYS = [
 	"simple_unit_codex",
 	"run_only_claude",
 	"run_only_codex",
+	"boundary_escalation_claude",
+	"boundary_escalation_codex",
 	"missing_skill_claude",
 	"missing_skill_codex",
 ] as const;
@@ -213,6 +215,7 @@ async function qualify(): Promise<void> {
 		await requirePass("test-design-runner-sensitive-route", harness);
 		await requirePass("test-design-simple-unit-route", harness);
 		await requirePass("test-design-run-only-negative", harness);
+		await requirePass("test-design-boundary-escalation", harness);
 		await requireMissingSkillRed(harness);
 	}
 	const receipt = createQualificationReceipt();

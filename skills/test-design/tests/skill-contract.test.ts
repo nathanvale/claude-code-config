@@ -5,6 +5,7 @@ import {
 	testDesignScenarioFactors,
 	type TestDesignScenario,
 	testDesignV2QualificationCases,
+	testDesignV3QualificationCases,
 } from "../evals/smoke-definitions.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "../../..");
@@ -227,8 +228,11 @@ describe("agent-native testing skill contract", () => {
 		}
 	});
 
-	test("requires a visible complete brief before edits and preserves workflow owners", () => {
+	test("routes briefs proportionally and preserves workflow owners", () => {
 		const testDesign = parseSkill(testDesignPath).body;
+		for (const route of ["full", "lightweight", "no-new-brief"]) {
+			expect(testDesign).toContain(route);
+		}
 		for (const field of [
 			"Behaviour:",
 			"Seam and proof layer:",
@@ -240,14 +244,32 @@ describe("agent-native testing skill contract", () => {
 		]) {
 			expect(testDesign).toContain(field);
 		}
+		for (const field of [
+			"Behaviour being corrected:",
+			"Existing test and focused command:",
+			"How the existing test goes RED:",
+			"Still unproved:",
+		]) {
+			expect(testDesign).toContain(field);
+		}
 		for (const owner of handbacks) expect(testDesign).toContain(`\`${owner}\``);
 		expect(testDesign).toContain("active conversation");
 		expect(testDesign).toContain("return to the current workflow");
-		expect(testDesign).toContain("new, changed, or disputed seam");
+		for (const escalation of ["seam", "oracle", "fixture", "harness", "claim"]) {
+			expect(testDesign).toContain(escalation);
+		}
 		expect(testDesign).toContain("read only the selected profile references");
+		expect(testDesign).toContain("executable focused command");
+		expect(testDesign).toContain("non-zero test count");
+			expect(testDesign).toContain("observed failing regression");
+			expect(testDesign).toContain("disposable perturbation");
+			expect(testDesign).toMatch(
+				/no-new-brief[^\n]*no repository-test artifact changes[\s\S]{0,120}active workflow\s+owns the existing regression proof/u,
+			);
+			expect(testDesign).toMatch(/candidate\s+selection does not approve/u);
 		expect(testDesign).not.toContain("Intended test observed by the focused command");
 		expect(testDesign).not.toContain("RED mechanism proved");
-		expect(testDesign).toContain("Brief visible and complete");
+		expect(testDesign).toContain("Selected brief visible and complete");
 		expect(testDesign).toContain("Handback to the active workflow explicit");
 	});
 
@@ -420,6 +442,25 @@ describe("agent-native testing skill contract", () => {
 			"production-workflow": true,
 			"slow-suite-optimization": true,
 			"read-only-selection-gate": false,
+		});
+	});
+
+	test("freezes proportional routing, focused-command, and RED decisions", () => {
+		expect(testDesignV3QualificationCases).toHaveLength(6);
+		expect(
+			Object.fromEntries(
+				testDesignV3QualificationCases.map((scenario) => [
+					scenario.id,
+					scenario.reject,
+				]),
+			),
+		).toEqual({
+			"vague-focused-command": true,
+			"zero-test-selection": true,
+			"observed-regression-red": false,
+			"missing-perturbation-red": true,
+			"lightweight-changed-oracle": true,
+			"no-brief-with-test-edit": true,
 		});
 	});
 });

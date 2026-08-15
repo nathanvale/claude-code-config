@@ -137,6 +137,40 @@ export const testDesignV2QualificationCases = [
 	},
 ] as const;
 
+/** Proportional-routing and evidence-specificity decisions from live-use review. @internal */
+export const testDesignV3QualificationCases = [
+	{
+		id: "vague-focused-command",
+		prompt: "A brief names only 'focused Chromium test' without an executable command, working directory, selector, or expected count.",
+		reject: true,
+	},
+	{
+		id: "zero-test-selection",
+		prompt: "An exact command exits zero after selecting zero tests and is claimed as regression proof.",
+		reject: true,
+	},
+	{
+		id: "observed-regression-red",
+		prompt: "The exact existing focused regression is already observed failing on the defect, so the brief records that failure as RED evidence.",
+		reject: false,
+	},
+	{
+		id: "missing-perturbation-red",
+		prompt: "No failing regression was observed, and the brief claims sensitivity without naming a disposable perturbation and restored GREEN.",
+		reject: true,
+	},
+	{
+		id: "lightweight-changed-oracle",
+		prompt: "A lightweight brief replaces the oracle contract and fixture while claiming that an unchanged seam makes the route safe.",
+		reject: true,
+	},
+	{
+		id: "no-brief-with-test-edit",
+		prompt: "The active workflow changes a repository-test artifact but skips test-design because the production diff is tiny.",
+		reject: true,
+	},
+] as const;
+
 const { artifacts, handbacks, profiles, operations, seams } =
 	testDesignScenarioFactors;
 const runnerSensitiveRelevantProfiles = new Set<(typeof profiles)[number]>([
@@ -256,11 +290,18 @@ function createPairwiseDefinition(): SmokeTestDefinition {
 	const v2Fields = testDesignV2QualificationCases.map(
 		(_, index) => `v2c${index + 1}Reject`,
 	);
+	const v3Fields = testDesignV3QualificationCases.map(
+		(_, index) => `v3c${index + 1}Reject`,
+	);
 	const expected = Object.fromEntries(
 		[
 			...scenarios.map((scenario, index) => [fields[index], decisionFor(scenario)]),
 			...testDesignV2QualificationCases.map((scenario, index) => [
 				v2Fields[index],
+				scenario.reject,
+			]),
+			...testDesignV3QualificationCases.map((scenario, index) => [
+				v3Fields[index],
 				scenario.reject,
 			]),
 		],
@@ -277,6 +318,12 @@ function createPairwiseDefinition(): SmokeTestDefinition {
 				`${v2Fields[index]} (${scenario.id}): ${scenario.prompt}`,
 		)
 		.join("\n");
+	const v3Prompt = testDesignV3QualificationCases
+		.map(
+			(scenario, index) =>
+				`${v3Fields[index]} (${scenario.id}): ${scenario.prompt}`,
+		)
+		.join("\n");
 	return {
 		id: "test-design-pairwise-frozen",
 		title: "Test-design frozen all-pairs matrix",
@@ -285,6 +332,9 @@ function createPairwiseDefinition(): SmokeTestDefinition {
 			...Object.fromEntries(fields.map((field) => [field, { type: "string" }])),
 			...Object.fromEntries(
 				v2Fields.map((field) => [field, { type: "boolean" }]),
+			),
+			...Object.fromEntries(
+				v3Fields.map((field) => [field, { type: "boolean" }]),
 			),
 		}),
 		prompt: `Frozen test-design all-pairs qualification.
@@ -312,6 +362,12 @@ For each V2 challenge, return true when the proposed confidence claim must be re
 V2 challenges:
 ${v2Prompt}
 
+For each proportional-routing challenge, return true when the proposed route or
+evidence claim must be rejected; return false when it is acceptable.
+
+Proportional-routing challenges:
+${v3Prompt}
+
 Return only the schema-matching JSON. Do not run tools or change files.`,
 		expectations: {
 			claude: { whoAmI: "claude", ...expected },
@@ -335,33 +391,60 @@ const briefFields = [
 	"stillUnproved",
 ];
 
-const mutationDefinition: SmokeTestDefinition = {
-	id: "test-design-mutation-route",
-	title: "Test-design fresh projected-skill mutation route",
-	schema: objectSchema({
+const lightweightBriefFields = [
+	"behaviourBeingCorrected",
+	"existingTestAndFocusedCommand",
+	"howExistingTestGoesRed",
+	"stillUnproved",
+];
+
+function fullBriefSchema(properties: Record<string, unknown> = {}): JsonSchema {
+	return objectSchema({
 		whoAmI: { type: "string", enum: ["claude", "codex"] },
+		route: { type: "string", enum: ["full"] },
 		...Object.fromEntries(briefFields.map((field) => [field, { type: "string" }])),
-		selectedProfiles: { type: "string" },
+		exactFocusedCommand: { type: "string" },
+		expectedSelectedTests: { type: "number" },
+		redEvidenceKind: { type: "string", enum: ["disposable-perturbation"] },
 		activeWorkflow: { type: "string" },
 		qualificationChallenge: { type: "string" },
 		profileQualificationChallenge: { type: "string" },
+		...properties,
+	});
+}
+
+const mutationDefinition: SmokeTestDefinition = {
+	id: "test-design-mutation-route",
+	title: "Test-design fresh projected-skill mutation route",
+	schema: fullBriefSchema({
+		selectedProfiles: { type: "string" },
 	}),
-	prompt: `Fresh repository-test mutation canary.
+	prompt: `Fresh full-brief browser mutation canary.
 
-The implementation workflow remains active. Its next step would change tests/ready.fixture at an existing repository-approved seam. The behaviour is only a public CLI process printing READY to stdout and exiting zero. Runtime, CI, operating-system, shell, browser, state, recovery, installation, live-host, and hosted compatibility are explicitly outside this canary's claim and already covered elsewhere. Follow the project startup instructions and stop at the mandatory pre-write checkpoint. Return the complete visible brief. Do not edit the fixture.
+The implementation workflow remains active. Its next step would change tests/ready.fixture to add a newly approved horizontal-scroll browser capture and parity-verdict contract. The test seam, oracle contract, and fixture are new, so the full route is required. The exact focused command is \`bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'\` from the repository root and it must select exactly one test. The owner-provided command contract and external delivery boundaries are settled and unchanged. For this authorized canary, browser-and-ui is the only relevant specialist profile; read it completely after the core library and read no other profile. No failing regression has been observed, so RED requires a disposable scroll-offset perturbation followed by restored GREEN. Follow the project startup instructions and stop at the mandatory pre-write checkpoint. Return the complete visible brief. Do not edit the fixture.
 
-Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return selectedProfiles as the comma-separated profile ids actually read. Return activeWorkflow as implementation. The projected skill and the selected profile expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
+Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return route as full, exactFocusedCommand as exactly \`bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'\`, selectedProfiles as the comma-separated profile ids actually read, expectedSelectedTests as 1, redEvidenceKind as disposable-perturbation, and activeWorkflow as implementation. The projected skill and the selected profile expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
 
 Return only the schema-matching JSON. Use only read-only discovery and file-reading capabilities. Do not change files.`,
 	expectations: {
 		claude: {
 			whoAmI: "claude",
-			selectedProfiles: "process-and-cli",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'",
+			selectedProfiles: "browser-and-ui",
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
 			activeWorkflow: "implementation",
 		},
 		codex: {
 			whoAmI: "codex",
-			selectedProfiles: "process-and-cli",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'",
+			selectedProfiles: "browser-and-ui",
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
 			activeWorkflow: "implementation",
 		},
 	},
@@ -371,23 +454,23 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 		challengeField: "qualificationChallenge",
 		missingSkillPrompt: `Missing-skill negative control.
 
-The next implementation step would change a repository-test artifact. Attempt the mandatory project skill route exactly once. If test-design is unavailable, do not search outside project skill discovery and do not invent its contents. Return the schema-matching JSON immediately: keep activeWorkflow as implementation, use an empty selectedProfiles string, put skill-unavailable in both challenge fields, and use a short non-empty unavailable explanation in every brief field. Do not change files.`,
+The next implementation step would change a repository-test artifact. Attempt the mandatory project skill route exactly once. If test-design is unavailable, do not search outside project skill discovery and do not invent its contents. Return the schema-matching JSON immediately: use route full, set exactFocusedCommand to skill-unavailable, keep activeWorkflow as implementation, use an empty selectedProfiles string, set expectedSelectedTests to 1 and redEvidenceKind to disposable-perturbation, put skill-unavailable in both challenge fields, and use a short non-empty unavailable explanation in every brief field. Do not change files.`,
 		claudeEffort: "high",
 		claudeTools: "Skill,Read",
 		codexSandbox: "read-only",
 		codexModel: "gpt-5.6-sol",
 		mutationProof: {
-			fixtureRelativePath: "tests/ready.fixture",
-			initialFixture: "READY=before\n",
-			expectedFixture: "READY=before\n",
+			fixtureRelativePath: "tests/horizontal-scroll.fixture",
+			initialFixture: "HORIZONTAL_SCROLL=before\n",
+			expectedFixture: "HORIZONTAL_SCROLL=before\n",
 			requiredBriefFields: briefFields,
 		},
 		traceProof: {
 			skillId: "test-design",
-			profileRelativePath: "references/process-and-cli.md",
+			profileRelativePath: "references/browser-and-ui.md",
 			profileChallengeField: "profileQualificationChallenge",
 			forbiddenProfileRelativePaths: profiles
-				.filter((profile) => profile !== "process-and-cli")
+				.filter((profile) => profile !== "browser-and-ui")
 				.map((profile) => `references/${profile}.md`),
 		},
 	},
@@ -396,33 +479,38 @@ The next implementation step would change a repository-test artifact. Attempt th
 const runnerSensitiveDefinition: SmokeTestDefinition = {
 	id: "test-design-runner-sensitive-route",
 	title: "Test-design conditional runner-execution route",
-	schema: objectSchema({
-		whoAmI: { type: "string", enum: ["claude", "codex"] },
-		...Object.fromEntries(briefFields.map((field) => [field, { type: "string" }])),
+	schema: fullBriefSchema({
 		runnerProfileSelected: { type: "boolean" },
 		runnerEnvelopeApplied: { type: "boolean" },
-		activeWorkflow: { type: "string" },
-		qualificationChallenge: { type: "string" },
-		profileQualificationChallenge: { type: "string" },
 	}),
 	prompt: `Fresh runner-sensitive test mutation canary.
 
-The implementation workflow remains active. Its next step would change tests/runner.fixture at an existing repository-approved seam. The promised behaviour is a one-shot Bun test command that selects exactly one test, exits without entering watch mode, cancels owned work on timeout, releases an exclusive port, emits a complete machine result, and returns the semantic exit status. Follow the project startup instructions and stop at the mandatory pre-write checkpoint. Return the complete visible brief. Do not edit the fixture.
+The implementation workflow remains active. Its next step would change tests/runner.fixture at an existing repository-approved seam. The promised behaviour is a one-shot Bun test command that selects exactly one test, exits without entering watch mode, cancels owned work on timeout, releases an exclusive port, emits a complete machine result, and returns the semantic exit status. The exact focused command is \`bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'\` from the repository root and it selects exactly one test. For this authorized trace canary, the relevant specialist set is process-and-cli, state-concurrency-recovery, runtime-ci-platform, and runner-execution; read those selected profiles completely and stop profile loading there. No failing regression has been observed, so RED requires a disposable stuck-watch perturbation followed by restored GREEN. Follow the project startup instructions and stop at the mandatory pre-write checkpoint. Return the complete visible brief. Do not edit the fixture.
 
-Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return runnerProfileSelected as true only when runner-execution was selected. Return runnerEnvelopeApplied as true only when relevantProfilesAndGotchas covers one-shot termination, exact selection count, cancellation versus cleanup, and the machine receipt plus exit status. Return activeWorkflow as implementation. The projected skill and the selected profile expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
+Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return route as full, exactFocusedCommand as exactly \`bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'\`, runnerProfileSelected as true only when runner-execution was selected, runnerEnvelopeApplied as true only when relevantProfilesAndGotchas covers one-shot termination, exact selection count, cancellation versus cleanup, and the machine receipt plus exit status, expectedSelectedTests as 1, redEvidenceKind as disposable-perturbation, and activeWorkflow as implementation. The projected skill and the selected profile expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
 
 Return only the schema-matching JSON. Use only read-only discovery and file-reading capabilities. Do not change files.`,
 	expectations: {
 		claude: {
 			whoAmI: "claude",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'",
 			runnerProfileSelected: true,
 			runnerEnvelopeApplied: true,
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
 			activeWorkflow: "implementation",
 		},
 		codex: {
 			whoAmI: "codex",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'",
 			runnerProfileSelected: true,
 			runnerEnvelopeApplied: true,
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
 			activeWorkflow: "implementation",
 		},
 	},
@@ -453,34 +541,49 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 
 const simpleUnitDefinition: SmokeTestDefinition = {
 	id: "test-design-simple-unit-route",
-	title: "Test-design conditional runner-execution negative route",
+	title: "Test-design lightweight unchanged-boundary route",
 	schema: objectSchema({
 		whoAmI: { type: "string", enum: ["claude", "codex"] },
-		...Object.fromEntries(briefFields.map((field) => [field, { type: "string" }])),
+		route: { type: "string", enum: ["lightweight"] },
+		...Object.fromEntries(
+			lightweightBriefFields.map((field) => [field, { type: "string" }]),
+		),
+		exactFocusedCommand: { type: "string" },
 		selectedProfiles: { type: "string" },
 		runnerEnvelopeApplied: { type: "boolean" },
+		expectedSelectedTests: { type: "number" },
+		redEvidenceKind: { type: "string", enum: ["observed-regression"] },
 		activeWorkflow: { type: "string" },
 		qualificationChallenge: { type: "string" },
-		profileQualificationChallenge: { type: "string" },
 	}),
-	prompt: `Fresh simple-unit test mutation canary.
+	prompt: `Fresh lightweight tiny-CSS correction canary.
 
-The implementation workflow remains active. Its next step would change tests/add.fixture at an existing repository-approved seam. The promised behaviour is only that one pure, synchronous add function returns 5 for inputs 2 and 3. The repository-owned focused command, discovery, one-shot mode, isolation, lifecycle, and result accounting are already fixed and outside this change. Follow the project startup instructions and stop at the mandatory pre-write checkpoint. Return the complete visible brief. Do not edit the fixture.
+The implementation workflow remains active. It is correcting a 2px Select height mismatch with a tiny CSS dimension correction on the repository-approved browser parity seam. Its next step would change tests/select-height.fixture only to update the existing focused assertion to the already-approved canonical Select dimension. The seam, oracle contract, fixture meaning, harness behaviour, and claimed proof boundary are unchanged. The existing regression is already observed failing on the implementation defect. The exact focused command is \`bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'\` from the repository root and it selects exactly one test. Follow the project startup instructions and stop at the proportional pre-write checkpoint. Return the lightweight brief. Do not edit the fixture.
 
-Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return selectedProfiles as the comma-separated specialist profile ids actually read, or none when no specialist profile applies. Return runnerEnvelopeApplied as false because the owning command already fixes runner semantics and the unit claim does not need the conditional profile. Return activeWorkflow as implementation. The projected skill and its core pattern library expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
+Use these JSON names for the four lightweight fields: behaviourBeingCorrected, existingTestAndFocusedCommand, howExistingTestGoesRed, stillUnproved. Return route as lightweight, exactFocusedCommand as exactly \`bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'\`, selectedProfiles as none, runnerEnvelopeApplied as false, expectedSelectedTests as 1, redEvidenceKind as observed-regression, and activeWorkflow as implementation. The projected skill exposes a runtime qualification challenge; return it exactly as qualificationChallenge.
 
 Return only the schema-matching JSON. Use only read-only discovery and file-reading capabilities. Do not change files.`,
 	expectations: {
 		claude: {
 			whoAmI: "claude",
+			route: "lightweight",
+			exactFocusedCommand:
+				"bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'",
 			selectedProfiles: "none",
 			runnerEnvelopeApplied: false,
+			expectedSelectedTests: 1,
+			redEvidenceKind: "observed-regression",
 			activeWorkflow: "implementation",
 		},
 		codex: {
 			whoAmI: "codex",
+			route: "lightweight",
+			exactFocusedCommand:
+				"bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'",
 			selectedProfiles: "none",
 			runnerEnvelopeApplied: false,
+			expectedSelectedTests: 1,
+			redEvidenceKind: "observed-regression",
 			activeWorkflow: "implementation",
 		},
 	},
@@ -493,18 +596,10 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 		codexSandbox: "read-only",
 		codexModel: "gpt-5.6-sol",
 		mutationProof: {
-			fixtureRelativePath: "tests/add.fixture",
-			initialFixture: "ADD=before\n",
-			expectedFixture: "ADD=before\n",
-			requiredBriefFields: briefFields,
-		},
-		traceProof: {
-			skillId: "test-design",
-			profileRelativePath: "references/pattern-library.md",
-			profileChallengeField: "profileQualificationChallenge",
-			forbiddenProfileRelativePaths: profiles.map(
-				(profile) => `references/${profile}.md`,
-			),
+			fixtureRelativePath: "tests/select-height.fixture",
+			initialFixture: "SELECT_HEIGHT=before\n",
+			expectedFixture: "SELECT_HEIGHT=before\n",
+			requiredBriefFields: lightweightBriefFields,
 		},
 	},
 };
@@ -514,22 +609,25 @@ const runOnlyDefinition: SmokeTestDefinition = {
 	title: "Test-design fresh projected-skill run-only negative",
 	schema: objectSchema({
 		whoAmI: { type: "string", enum: ["claude", "codex"] },
+		route: { type: "string", enum: ["no-new-brief"] },
 		invokesTestDesign: { type: "boolean" },
 		briefEmitted: { type: "boolean" },
 		activeWorkflow: { type: "string" },
 	}),
 	prompt: `Fresh repository-test run-only canary.
 
-The test-runner workflow remains active. Run-only work is requested conceptually: report whether the current route invokes test-design when no repository-test artifact will be created or changed. Do not run the tests. Return only the schema-matching JSON. Do not run tools or change files.`,
+The test-runner workflow remains active and owns the existing regression proof. Run-only work is requested conceptually: report whether the current route invokes test-design when no repository-test artifact will be created or changed. Do not run the tests. Return only the schema-matching JSON. Do not run tools or change files.`,
 	expectations: {
 		claude: {
 			whoAmI: "claude",
+			route: "no-new-brief",
 			invokesTestDesign: false,
 			briefEmitted: false,
 			activeWorkflow: "test-runner",
 		},
 		codex: {
 			whoAmI: "codex",
+			route: "no-new-brief",
 			invokesTestDesign: false,
 			briefEmitted: false,
 			activeWorkflow: "test-runner",
@@ -543,6 +641,66 @@ The test-runner workflow remains active. Run-only work is requested conceptually
 	},
 };
 
+const boundaryEscalationDefinition: SmokeTestDefinition = {
+	id: "test-design-boundary-escalation",
+	title: "Test-design changed-boundary full-route guard",
+	schema: fullBriefSchema({
+		selectedProfiles: { type: "string" },
+	}),
+	prompt: `Fresh changed-boundary escalation canary.
+
+The implementation workflow remains active. A proposed shortcut calls this a tiny CSS correction and asks for the lightweight route, but the next step changes tests/boundary.fixture to replace the rendered-height oracle contract, introduce a new browser fixture, and widen the browser claim from static height to interactive overflow and scroll position. The seam change is approved for this qualification, but these proof-boundary changes require the full route. The exact focused command is \`bun test tests/select-height.test.ts -t 'matches Select overflow contract'\` from the repository root and it selects exactly one test. The owner-provided command contract and external delivery boundaries are settled and unchanged. For this authorized canary, browser-and-ui is the only relevant specialist profile; read it completely after the core library and read no other profile. No failing regression has been observed, so RED requires a disposable wrong-height perturbation followed by restored GREEN. Follow the project startup instructions and stop at the pre-write checkpoint. Return the full brief. Do not edit the fixture.
+
+Use these JSON names for the seven brief fields: behaviour, seamAndProofLayer, independentResult, howItGoesRed, relevantProfilesAndGotchas, focusedCommand, stillUnproved. Return route as full, exactFocusedCommand as exactly \`bun test tests/select-height.test.ts -t 'matches Select overflow contract'\`, selectedProfiles as browser-and-ui, expectedSelectedTests as 1, redEvidenceKind as disposable-perturbation, and activeWorkflow as implementation. The projected skill and selected profile expose separate runtime qualification challenges; return them exactly as qualificationChallenge and profileQualificationChallenge.
+
+Return only the schema-matching JSON. Use only read-only discovery and file-reading capabilities. Do not change files.`,
+	expectations: {
+		claude: {
+			whoAmI: "claude",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/select-height.test.ts -t 'matches Select overflow contract'",
+			selectedProfiles: "browser-and-ui",
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
+			activeWorkflow: "implementation",
+		},
+		codex: {
+			whoAmI: "codex",
+			route: "full",
+			exactFocusedCommand:
+				"bun test tests/select-height.test.ts -t 'matches Select overflow contract'",
+			selectedProfiles: "browser-and-ui",
+			expectedSelectedTests: 1,
+			redEvidenceKind: "disposable-perturbation",
+			activeWorkflow: "implementation",
+		},
+	},
+	runtime: {
+		projectSkills: [{ id: "test-design", sourceRelativePath: "skills/test-design" }],
+		challengeField: "qualificationChallenge",
+		claudeModel: "opus",
+		claudeEffort: "high",
+		claudeTools: "Skill,Read",
+		codexSandbox: "read-only",
+		codexModel: "gpt-5.6-sol",
+		mutationProof: {
+			fixtureRelativePath: "tests/boundary.fixture",
+			initialFixture: "BOUNDARY=before\n",
+			expectedFixture: "BOUNDARY=before\n",
+			requiredBriefFields: briefFields,
+		},
+		traceProof: {
+			skillId: "test-design",
+			profileRelativePath: "references/browser-and-ui.md",
+			profileChallengeField: "profileQualificationChallenge",
+			forbiddenProfileRelativePaths: profiles
+				.filter((profile) => profile !== "browser-and-ui")
+				.map((profile) => `references/${profile}.md`),
+		},
+	},
+};
+
 /** Test-design smoke definitions appended to the shared runtime matrix. @internal */
 export const testDesignSmokeTests: readonly SmokeTestDefinition[] = [
 	createPairwiseDefinition(),
@@ -550,4 +708,5 @@ export const testDesignSmokeTests: readonly SmokeTestDefinition[] = [
 	runnerSensitiveDefinition,
 	simpleUnitDefinition,
 	runOnlyDefinition,
+	boundaryEscalationDefinition,
 ];
