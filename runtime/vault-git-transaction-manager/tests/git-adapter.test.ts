@@ -1,8 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { statSync, writeFileSync } from "node:fs";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -131,13 +140,14 @@ async function createStagedRecoveryAdapter(
 	});
 }
 
-/** Build a real-Git fixture with one deterministic recovery-boundary mutation. */
-async function createStagedRecoveryRaceFixture(options: {
-	readonly missingWorktree: boolean;
-	readonly isBoundary: (request: VaultGitProcessRequest) => boolean;
-	readonly inject: (repositoryPath: string) => void;
+async function createPreparedStagedRecoveryFixture(options: {
+	readonly candidateContent: string | Uint8Array;
+	readonly createProcess?: (
+		realProcess: VaultGitProcessPort,
+		repositoryPath: string,
+	) => VaultGitProcessPort;
 }) {
-	const root = await mkdtemp(join(tmpdir(), "vault-git-recovery-race-"));
+	const root = await mkdtemp(join(tmpdir(), "vault-git-staged-recovery-"));
 	fixtureRoots.push(root);
 	const repositoryPath = join(root, "repository");
 	git(root, ["init", "--initial-branch=main", repositoryPath]);
@@ -146,26 +156,11 @@ async function createStagedRecoveryRaceFixture(options: {
 	await writeFile(join(repositoryPath, "initial.md"), "initial\n");
 	git(repositoryPath, ["add", "--", "initial.md"]);
 	git(repositoryPath, ["commit", "-m", "initial"]);
-	await writeFile(join(repositoryPath, "candidate.md"), "planned\n");
+	await writeFile(join(repositoryPath, "candidate.md"), options.candidateContent);
 	git(repositoryPath, ["add", "--", "candidate.md"]);
-	const plannedObjectId = git(repositoryPath, [
-		"rev-parse",
-		":candidate.md",
-	]);
-	if (options.missingWorktree) {
-		await rm(join(repositoryPath, "candidate.md"));
-	}
-	let injected = false;
+	const candidateObjectId = git(repositoryPath, ["rev-parse", ":candidate.md"]);
 	const realProcess = createNodeProcessPort();
-	const process: VaultGitProcessPort = {
-		async run(request) {
-			if (!injected && options.isBoundary(request)) {
-				injected = true;
-				options.inject(repositoryPath);
-			}
-			return realProcess.run(request);
-		},
-	};
+	const process = options.createProcess?.(realProcess, repositoryPath) ?? realProcess;
 	const repository = createGitRepositoryAdapter({
 		repositoryPath,
 		repositoryIdentity: "vault-git:v1:fixture",
@@ -180,9 +175,37 @@ async function createStagedRecoveryRaceFixture(options: {
 	}
 	return {
 		plan: prepared.plan,
-		plannedObjectId,
+		candidateObjectId,
 		repository,
 		repositoryPath,
+	};
+}
+
+/** Build a real-Git fixture with one deterministic recovery-boundary mutation. */
+async function createStagedRecoveryRaceFixture(options: {
+	readonly missingWorktree: boolean;
+	readonly isBoundary: (request: VaultGitProcessRequest) => boolean;
+	readonly inject: (repositoryPath: string) => void;
+}) {
+	let injected = false;
+	const fixture = await createPreparedStagedRecoveryFixture({
+		candidateContent: "planned\n",
+		createProcess: (realProcess, repositoryPath) => ({
+			async run(request) {
+				if (!injected && options.isBoundary(request)) {
+					injected = true;
+					options.inject(repositoryPath);
+				}
+				return realProcess.run(request);
+			},
+		}),
+	});
+	if (options.missingWorktree) {
+		await rm(join(fixture.repositoryPath, "candidate.md"));
+	}
+	return {
+		...fixture,
+		plannedObjectId: fixture.candidateObjectId,
 		wasInjected: () => injected,
 	};
 }
@@ -402,15 +425,115 @@ describe("git repository staged recovery safeguards", () => {
 		});
 	});
 
+	test("recovers a staged file containing invalid UTF-8 bytes", async () => {
+		const candidateBytes = Uint8Array.from([
+			0x74,
+			0x65,
+			0x78,
+			0x74,
+			0x0a,
+			0xc3,
+			0x28,
+			0x0a,
+		]);
+		const temporaryModes: number[] = [];
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: candidateBytes,
+			createProcess: (realProcess) => ({
+				async run(request) {
+					if (request.args[0] === "diff") {
+						const temporaryIndexPath = request.env?.GIT_INDEX_FILE;
+						const output = request.args.find((arg) =>
+							arg.startsWith("--output="),
+						);
+						if (temporaryIndexPath) {
+							temporaryModes.push(statSync(temporaryIndexPath).mode & 0o777);
+						}
+						if (output) {
+							temporaryModes.push(
+								statSync(output.slice("--output=".length)).mode & 0o777,
+							);
+						}
+					} else if (request.args[0] === "apply") {
+						const patchPath = request.args.at(-1);
+						if (patchPath) {
+							temporaryModes.push(statSync(patchPath).mode & 0o777);
+						}
+					}
+					return realProcess.run(request);
+				},
+			}),
+		});
+		await rm(join(fixture.repositoryPath, "candidate.md"));
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "recovered",
+		});
+		expect(await readFile(join(fixture.repositoryPath, "candidate.md"))).toEqual(
+			Buffer.from(candidateBytes),
+		);
+		expect(
+			git(fixture.repositoryPath, ["ls-files", "--stage", "--", "candidate.md"]),
+		).toBe("");
+		expect(temporaryModes.length).toBeGreaterThan(0);
+		expect(new Set(temporaryModes)).toEqual(new Set([0o600]));
+		expect(
+			(await readdir(join(fixture.repositoryPath, ".git"))).filter((entry) =>
+				entry.includes(".vault-git-"),
+			),
+		).toEqual([]);
+	});
+
+	test("preserves a timeout when temporary recovery cleanup fails", async () => {
+		let blockedTemporaryRoot: string | null = null;
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: "candidate\n",
+			createProcess: (realProcess) => ({
+				async run(request) {
+					if (blockedTemporaryRoot === null && request.args[0] === "diff") {
+						const temporaryIndexPath = request.env?.GIT_INDEX_FILE;
+						if (!temporaryIndexPath) {
+							throw new Error("missing temporary index path");
+						}
+						blockedTemporaryRoot = dirname(temporaryIndexPath);
+						await chmod(blockedTemporaryRoot, 0o500);
+						return {
+							exitCode: null,
+							stdout: "",
+							stderr: "",
+							timedOut: true,
+						};
+					}
+					return realProcess.run(request);
+				},
+			}),
+		});
+
+		try {
+			expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+				status: "refused",
+				reason: "timed_out",
+			});
+			expect(blockedTemporaryRoot).not.toBeNull();
+			if (blockedTemporaryRoot !== null) {
+				expect(statSync(blockedTemporaryRoot).isDirectory()).toBe(true);
+			}
+		} finally {
+			if (blockedTemporaryRoot !== null) {
+				await chmod(blockedTemporaryRoot, 0o700);
+				await rm(blockedTemporaryRoot, { recursive: true, force: true });
+			}
+		}
+	});
+
 	test("preserves a concurrently replaced owned index entry", async () => {
 		let newerObjectId = "";
 		const fixture = await createStagedRecoveryRaceFixture({
 			missingWorktree: false,
 			isBoundary: ({ args }) =>
-				args[0] === "reset" ||
-				(args[0] === "apply" &&
-					args.includes("--cached") &&
-					args.includes("--reverse")),
+				args[0] === "apply" &&
+				args.includes("--cached") &&
+				args.includes("--reverse"),
 			inject(repositoryPath) {
 				newerObjectId = gitStdin(repositoryPath, "newer\n", [
 					"hash-object",
@@ -446,10 +569,9 @@ describe("git repository staged recovery safeguards", () => {
 		const fixture = await createStagedRecoveryRaceFixture({
 			missingWorktree: true,
 			isBoundary: ({ args }) =>
-				args[0] === "checkout-index" ||
-				(args[0] === "apply" &&
-					!args.includes("--cached") &&
-					!args.includes("--reverse")),
+				args[0] === "apply" &&
+				!args.includes("--cached") &&
+				!args.includes("--reverse"),
 			inject(repositoryPath) {
 				writeFileSync(join(repositoryPath, "candidate.md"), competingContent);
 			},
