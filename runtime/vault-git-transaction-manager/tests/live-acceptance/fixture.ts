@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import {
 	chmod,
+	cp,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -90,6 +91,15 @@ export interface Fixture {
 	unrelatedSnapshot(): Promise<unknown>;
 }
 
+/** One owner-state-isolated public-process view over a prepared real-Git fixture. @internal */
+export interface StateIsolatedFixture {
+	readonly stateRoot: string;
+	readonly env: NodeJS.ProcessEnv;
+	readonly shimMarker: string;
+	cleanup(): Promise<void>;
+	run(args: readonly string[]): Promise<CliProcessResult>;
+}
+
 /** Optional controls for one disposable public-process fixture. @internal */
 interface LiveAcceptanceFixtureOptions {
 	readonly activate?: boolean;
@@ -154,6 +164,46 @@ export async function createSibling(fixture: Fixture, name: string): Promise<Fix
 	return createCloneFixture(fixture.root, fixture.bare, name, {
 		profile: `${name}-profile`,
 	});
+}
+
+/** Fork quiescent receipt state while retaining the source fixture's real Git checkout. @internal */
+export async function createStateIsolatedFixture(
+	fixture: Fixture,
+	ordinal: number,
+): Promise<StateIsolatedFixture> {
+	if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
+		throw new Error("state-isolated fixture ordinal must be a non-negative integer");
+	}
+	const name = `state-isolated-${ordinal}`;
+	const stateRoot = join(fixture.root, `${name}-state`);
+	const shimMarker = join(fixture.root, `${name}-shim-marker`);
+	const shimLog = join(fixture.root, `${name}-shim-log`);
+	await cp(fixture.stateRoot, stateRoot, {
+		recursive: true,
+		force: false,
+		errorOnExist: true,
+	});
+	stateRoots.push(stateRoot);
+	const env: NodeJS.ProcessEnv = {
+		...fixture.env,
+		VAULT_GIT_STATE_ROOT: stateRoot,
+		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_SHIM_LOG: shimLog,
+	};
+	const run = (args: readonly string[]) =>
+		runCliProcess({
+			label: `vault-git ${args.join(" ")}`,
+			argv: ["bun", "run", cliPath, ...args],
+			cwd: packageRoot,
+			env,
+			timeoutMs: 45_000,
+		});
+	let cleanupPromise: Promise<void> | undefined;
+	const cleanup = (): Promise<void> => {
+		cleanupPromise ??= cleanupFixtureState(stateRoot);
+		return cleanupPromise;
+	};
+	return { stateRoot, env, shimMarker, cleanup, run };
 }
 
 async function createCloneFixture(
@@ -450,6 +500,17 @@ async function createCloneFixture(
 			untracked: await readFile(join(clone, "untracked.md"), "hex"),
 		}),
 	};
+}
+
+async function cleanupFixtureState(stateRoot: string): Promise<void> {
+	await terminateFixtureWorkers(stateRoot);
+	removeTrackedPath(stateRoots, stateRoot);
+	await rm(stateRoot, { recursive: true, force: true });
+}
+
+function removeTrackedPath(paths: string[], target: string): void {
+	const index = paths.indexOf(target);
+	if (index >= 0) paths.splice(index, 1);
 }
 
 /** Host and path attacks every workflow must reject without mutation. @internal */
