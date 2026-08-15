@@ -495,7 +495,7 @@ export function createReceiptStore(
 			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, durability);
-			await durablePublishExclusive(paths.current, receipt, durability);
+			await durablePublishReceiptExclusive(paths.current, receipt, durability);
 			return copyCapabilities(capabilities);
 		},
 		async append(receipt) {
@@ -973,15 +973,29 @@ async function durableJson(
 	);
 }
 
-async function durablePublishExclusiveValue(
+/**
+ * Publish `bytes` to `path` so a torn write is never observed: staged temp,
+ * file sync, exclusive link, directory sync. The caller owns the race policy
+ * for a destination that already exists — `onExists` decides that outcome (and
+ * the returned value) when link(2) reports EEXIST, so a throwing writer and a
+ * yield-as-loser writer share one durability sequence. `wrapFailure` names the
+ * unavailability error for the caller's domain.
+ *
+ * Do not sync the parent directory before the exclusive link succeeds: the
+ * link publishes the already-synced inode, and syncing earlier would fence a
+ * destination the loser never wrote.
+ */
+export async function durablePublishExclusive(
 	path: string,
-	value: unknown,
+	bytes: Uint8Array,
 	target: VaultGitDurabilityTarget,
 	durability: VaultGitDurabilityPort,
-): Promise<void> {
-	const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+	onExists: (syncParent: () => Promise<void>) => Promise<boolean>,
+	wrapFailure: (cause: unknown) => Error,
+): Promise<boolean> {
 	const temporary = `${path}.tmp-${randomUUID()}`;
 	let handle: FileHandle | undefined;
+	const syncParent = () => durability.syncDirectory(join(path, ".."), target);
 	try {
 		handle = await open(temporary, "wx", 0o600);
 		await durability.writeTemp(handle, bytes, target);
@@ -991,54 +1005,54 @@ async function durablePublishExclusiveValue(
 		try {
 			await durability.linkExclusive(temporary, path, target);
 		} catch (error) {
-			if (isExists(error)) throw new VaultGitReceiptExistsError();
+			if (isExists(error)) return await onExists(syncParent);
 			throw error;
 		}
-		await durability.syncDirectory(join(path, ".."), target);
+		await syncParent();
+		return true;
 	} catch (error) {
 		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
 		if (error instanceof VaultGitReceiptExistsError) throw error;
-		throw new Error("receipt durability unavailable", { cause: error });
+		throw wrapFailure(error);
+	} finally {
+		await unlink(temporary).catch(() => undefined);
 	}
-	await unlink(temporary).catch(() => undefined);
 }
 
-/**
- * Publish one file only when no file exists at the destination.
- *
- * Preserves the temp-write, file-sync, atomic-publish, parent-sync durability
- * order: link(2) publishes the already-synced inode and fails with EEXIST
- * when a concurrent writer won, so a racing loser can never overwrite.
- */
-async function durablePublishExclusive(
+async function durablePublishExclusiveValue(
+	path: string,
+	value: unknown,
+	target: VaultGitDurabilityTarget,
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	await durablePublishExclusive(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(value)}\n`),
+		target,
+		durability,
+		() => {
+			throw new VaultGitReceiptExistsError();
+		},
+		(cause) => new Error("receipt durability unavailable", { cause }),
+	);
+}
+
+/** Publish the current-receipt file only when no file exists at the head. */
+async function durablePublishReceiptExclusive(
 	path: string,
 	receipt: VaultGitReceipt,
 	durability: VaultGitDurabilityPort,
 ): Promise<void> {
-	const bytes = new TextEncoder().encode(`${JSON.stringify(receipt)}\n`);
-	const temporary = `${path}.tmp-${randomUUID()}`;
-	let handle: FileHandle | undefined;
-	try {
-		handle = await open(temporary, "wx", 0o600);
-		await durability.writeTemp(handle, bytes, "current");
-		await durability.syncFile(handle, "current");
-		await handle.close();
-		handle = undefined;
-		try {
-			await durability.linkExclusive(temporary, path, "current");
-		} catch (error) {
-			if (isExists(error)) throw new VaultGitReceiptExistsError();
-			throw error;
-		}
-		await durability.syncDirectory(join(path, ".."), "current");
-	} catch (error) {
-		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
-		if (error instanceof VaultGitReceiptExistsError) throw error;
-		throw new Error("receipt durability unavailable", { cause: error });
-	}
-	await unlink(temporary).catch(() => undefined);
+	await durablePublishExclusive(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(receipt)}\n`),
+		"current",
+		durability,
+		() => {
+			throw new VaultGitReceiptExistsError();
+		},
+		(cause) => new Error("receipt durability unavailable", { cause }),
+	);
 }
 
 async function durableBytes(

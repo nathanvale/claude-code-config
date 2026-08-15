@@ -98,13 +98,15 @@ import type { VaultGitRepairResult } from "./repair.ts";
 import {
 	createVaultGitTaskStore,
 	type VaultGitTaskStore,
-	type VaultGitTaskTransitionFence,
 } from "./task-store.ts";
 import {
+	createVaultGitTaskLifecycle,
+	VAULT_GIT_LAUNCH_ACK_WINDOW_MS,
 	VAULT_GIT_TASK_HEARTBEAT_STALE_MS,
 	reconcileClosedVaultGitTask,
 	reconcileStaleVaultGitTaskFromDoctor,
-} from "./task-reconciliation.ts";
+	type VaultGitBackgroundCompletionRuntime as VaultGitTaskLifecycleRuntime,
+} from "./task-lifecycle.ts";
 import { parseVaultGitTaskWorkerAcknowledgement } from "./task-state.ts";
 import {
 	createVaultGitTaskWorker,
@@ -148,8 +150,9 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"repair.ts",
 	"repository-identity.ts",
 	"store.ts",
+	"task-repair.ts",
 	"task-state.ts",
-	"task-reconciliation.ts",
+	"task-lifecycle.ts",
 	"task-store.ts",
 	"task-worker.ts",
 	"worker-policy.ts",
@@ -211,6 +214,10 @@ const DEFAULT_TIMEOUTS = {
 	pushMs: 30_000,
 	localMs: 15_000,
 } as const;
+// Stale takeover performs repeated Doctor proof, ledger validation, one push,
+// and outcome reconciliation inside the private child. Its process budget must
+// span the whole ceremony rather than reuse one Git push deadline.
+const STALE_TAKEOVER_PRIVATE_LAUNCH_TIMEOUT_MS = 120_000;
 const LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
 	"dependencies",
 	"devDependencies",
@@ -322,17 +329,13 @@ export interface VaultGitCliOptions {
 	readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
 	/** Background completion process and monotonic-time seams for focused tests. */
 	readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
+	/** Environment for role dispatch; tests inject worker env without mutating process.env. */
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Process and monotonic-time operations used by foreground task acknowledgement. */
-export interface VaultGitBackgroundCompletionRuntime {
-	readonly now: () => number;
-	readonly sleep: (milliseconds: number) => Promise<void>;
-	readonly spawnWorker: typeof spawnBackgroundWorker;
-	readonly readProcessIdentity: (pid: number) => string;
-	readonly stopUnacknowledgedWorker: (pid: number) => void;
-	readonly stopExpiredWorker: typeof stopExpiredUnacknowledgedWorker;
-}
+export type VaultGitBackgroundCompletionRuntime =
+	VaultGitTaskLifecycleRuntime<VaultGitCliComposition>;
 
 /** Human-review action selected by the guarded activation journey. */
 export type VaultGitHumanActivationReviewAction = "review" | "defer" | "revoke";
@@ -361,10 +364,27 @@ type VaultGitRuntimeInvocation = ParsedVaultGitInvocation & {
 	readonly command: Exclude<VaultGitCommand, "commands">;
 };
 
+type VaultGitTaskLifecycleDispatch =
+	| { readonly role: "launcher" }
+	| {
+			readonly role: "worker";
+			readonly taskId: string;
+			readonly launchGeneration: string;
+	  };
+
 function isRuntimeInvocation(
 	invocation: ParsedVaultGitInvocation,
 ): invocation is VaultGitRuntimeInvocation {
 	return invocation.command !== "commands";
+}
+
+function resolveVaultGitTaskLifecycleDispatch(
+	environment: NodeJS.ProcessEnv,
+): VaultGitTaskLifecycleDispatch {
+	const taskId = environment.VAULT_GIT_TASK_ID;
+	const launchGeneration = environment.VAULT_GIT_TASK_LAUNCH_GENERATION;
+	if (!taskId || !launchGeneration) return { role: "launcher" };
+	return { role: "worker", taskId, launchGeneration };
 }
 
 /** Captured in-process CLI result. */
@@ -916,6 +936,9 @@ export async function main(
 			now,
 		});
 	}
+	const taskLifecycleDispatch = resolveVaultGitTaskLifecycleDispatch(
+		options.env ?? process.env,
+	);
 
 	try {
 		if (
@@ -994,6 +1017,7 @@ export async function main(
 			composition,
 			options.readCapability ?? readInheritedCapability,
 			humanActivationReview,
+			taskLifecycleDispatch,
 		);
 		return emitRuntimeResult({
 			invocation,
@@ -1029,6 +1053,7 @@ export async function runVaultGitForTest(
 		readonly launchPrivate?: boolean;
 		readonly humanActivationReview?: VaultGitHumanActivationReviewPort;
 		readonly backgroundCompletionRuntime?: VaultGitBackgroundCompletionRuntime;
+		readonly env?: NodeJS.ProcessEnv;
 	} = {},
 ): Promise<VaultGitCliRun> {
 	const stdout = new BufferWriter();
@@ -1052,6 +1077,7 @@ export async function runVaultGitForTest(
 		...(options.backgroundCompletionRuntime
 			? { backgroundCompletionRuntime: options.backgroundCompletionRuntime }
 			: {}),
+		...(options.env ? { env: options.env } : {}),
 	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
@@ -1582,7 +1608,7 @@ async function launchPrivateInvocation(
 				command: process.execPath,
 				args: childArgs,
 				cwd: composition.repositoryPath,
-				timeoutMs: DEFAULT_TIMEOUTS.pushMs,
+				timeoutMs: STALE_TAKEOVER_PRIVATE_LAUNCH_TIMEOUT_MS,
 			}),
 		};
 	}
@@ -1620,9 +1646,7 @@ async function launchBackgroundCompletion(input: EmitContext & {
 	readonly backgroundRuntime: VaultGitBackgroundCompletionRuntime;
 	readonly stderr: CliWriter;
 }): Promise<number> {
-	// One foreground budget covers receipt loading, stale-launch recovery,
-	// replacement launch, and acknowledgement. Recovery must not reset it.
-	const acknowledgementDeadline = input.backgroundRuntime.now() + 1_500;
+	const acknowledgementStartedAt = input.backgroundRuntime.now();
 	const loaded = await input.composition.store.load();
 	if (
 		loaded.status !== "loaded" ||
@@ -1662,20 +1686,37 @@ async function launchBackgroundCompletion(input: EmitContext & {
 	}
 	const capabilityDigest = createHash("sha256").update(capability).digest("hex");
 	const taskStore = requireTaskStore(input.composition);
-	const admission = await taskStore.claimOrJoin({
-		claimReceiptId: loaded.receipt.receiptId,
-		receiptId: loaded.receipt.receiptId,
-		transactionId: loaded.receipt.transactionId,
-		remote: input.composition.remote,
-		generation: loaded.receipt.leaseGeneration,
-		capabilityDigest,
-		normalizedInput: JSON.stringify({
-			command: "complete",
-			summary: input.invocation.summary,
-		}),
-		recordedAt: new Date(input.now()).toISOString(),
+	const lifecycle = createVaultGitTaskLifecycle({
+		role: "launcher",
+		store: taskStore,
+		runtime: input.backgroundRuntime,
+		spawnContext: input.composition,
+		recordedAt: () => new Date(input.now()),
 	});
-	if (admission.status === "refused") {
+	const lifecycleOutcome = await lifecycle.launch({
+		acknowledgementStartedAt,
+		admission: {
+			claimReceiptId: loaded.receipt.receiptId,
+			receiptId: loaded.receipt.receiptId,
+			receiptRevision: loaded.receipt.revision,
+			transactionId: loaded.receipt.transactionId,
+			remote: input.composition.remote,
+			generation: loaded.receipt.leaseGeneration,
+			capabilityDigest,
+			normalizedInput: JSON.stringify({
+				command: "complete",
+				summary: input.invocation.summary,
+			}),
+			recordedAt: new Date(input.now()).toISOString(),
+		},
+		createLaunchGeneration: () =>
+			`launch_${randomUUID().replaceAll("-", "")}`,
+		args: input.args,
+	});
+	if (
+		lifecycleOutcome.kind === "refused" &&
+		lifecycleOutcome.reason === "task_input_mismatch"
+	) {
 		const payload = createVaultGitLifecycleResult({
 			command: "complete",
 			outcome: "refused",
@@ -1689,130 +1730,28 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		});
 		return emitPayload({ ...input, payload, success: false, errorCode: "task_input_mismatch" });
 	}
-	let state = admission.state;
-	let launchWinner = admission.launch === "winner" || state.state === "claimed";
-	if (
-		admission.launch === "joined" &&
-		state.state === "launching" &&
-		state.launchExpiresAt !== null &&
-		Date.parse(state.launchExpiresAt) <= input.now()
-	) {
-		const stopped = await input.backgroundRuntime.stopExpiredWorker(
-			state.workerPid,
-			state.workerProcessIdentity,
-		);
-		if (stopped) {
-			const recovered = await taskStore.transition(state.taskId, state.revision,
-				state.launchAttempt < 2 ? {
-				state: "claimed",
-				phase: "admitted",
-				updatedAt: new Date(input.now()).toISOString(),
-				heartbeatAt: null,
-				checkpoint: null,
-				launchGeneration: null,
-				launchExpiresAt: null,
-				workerPid: null,
-				workerProcessIdentity: null,
-			} : {
-				state: "repair_needed",
-				phase: "terminal",
-				updatedAt: new Date(input.now()).toISOString(),
-				heartbeatAt: null,
-				checkpoint: null,
-				launchGeneration: state.launchGeneration,
-				launchExpiresAt: null,
-				workerPid: null,
-				workerProcessIdentity: null,
-				terminalResult: {
-					outcome: "refused",
-					phase: "blocked",
-					changedState: "none",
-					blocker: "worker_launch_protocol_failed",
-					retrySafety: "operator_required",
-				},
-			});
-			state = recovered.state;
-			launchWinner = recovered.status === "transitioned" && state.state === "claimed";
-		}
-	}
-	if (launchWinner) {
-		const launchGeneration = `launch_${randomUUID().replaceAll("-", "")}`;
-		const launchedAt = new Date(input.now());
-		const launching = await taskStore.transition(state.taskId, state.revision, {
-			state: "launching",
-			phase: "admitted",
-			updatedAt: launchedAt.toISOString(),
-			heartbeatAt: null,
-			checkpoint: null,
-			launchGeneration,
-			launchExpiresAt: new Date(launchedAt.getTime() + 1_500).toISOString(),
-			workerPid: null,
-			workerProcessIdentity: null,
-			launchAttempt: state.launchAttempt + 1,
+	const state = lifecycleOutcome.state;
+	if (!state) {
+		const payload = createVaultGitLifecycleResult({
+			command: "complete",
+			outcome: "refused",
+			phase: loaded.receipt.phase,
+			write_permission: "denied",
+			changed_state: "none",
+			retry_safety: "operator_required",
+			blockers: ["worker_launch_protocol_failed"],
+			transaction_id: loaded.receipt.transactionId,
+			next_action: action(
+				"run_doctor",
+				"Run doctor to inspect the unacknowledged worker launch.",
+			),
 		});
-		state = launching.state;
-		launchWinner = launching.status === "transitioned";
-		let spawnedWorkerPid: number | null = null;
-		if (launchWinner) try {
-			spawnedWorkerPid = input.backgroundRuntime.spawnWorker(
-				input.composition,
-				loaded.receipt.receiptId,
-				state.taskId,
-				launchGeneration,
-				input.args,
-			);
-			const workerPid = spawnedWorkerPid;
-			const workerProcessIdentity = input.backgroundRuntime.readProcessIdentity(workerPid);
-			const registered = await taskStore.transition(state.taskId, state.revision, {
-				state: "launching",
-				phase: "admitted",
-				updatedAt: new Date(input.now()).toISOString(),
-				heartbeatAt: null,
-				checkpoint: null,
-				launchGeneration,
-				launchExpiresAt: state.launchExpiresAt,
-				workerPid,
-				workerProcessIdentity,
-			});
-			if (registered.status !== "transitioned") {
-				input.backgroundRuntime.stopUnacknowledgedWorker(workerPid);
-			} else {
-				state = registered.state;
-			}
-			spawnedWorkerPid = null;
-		} catch {
-			if (spawnedWorkerPid !== null) {
-				input.backgroundRuntime.stopUnacknowledgedWorker(spawnedWorkerPid);
-			}
-			await transitionTaskUntilSettled(taskStore, state.taskId, {
-				state: "repair_needed",
-				phase: "terminal",
-				updatedAt: new Date(input.now()).toISOString(),
-				heartbeatAt: null,
-				checkpoint: null,
-				launchGeneration,
-				launchExpiresAt: null,
-				workerPid: null,
-				workerProcessIdentity: null,
-				terminalResult: {
-					outcome: "refused",
-					phase: "blocked",
-					changedState: "none",
-					blocker: "worker_launch_failed",
-					retrySafety: "operator_required",
-				},
-			}, { expectedLaunchGeneration: launchGeneration });
-		}
-	}
-	while (
-		state.state !== "in_progress" &&
-		input.backgroundRuntime.now() < acknowledgementDeadline
-	) {
-		await input.backgroundRuntime.sleep(10);
-		const current = await taskStore.loadByTaskId(state.taskId);
-		if (current.status !== "loaded") break;
-		state = current.state;
-		if (state.state === "repair_needed" || state.state === "unknown") break;
+		return emitPayload({
+			...input,
+			payload,
+			success: false,
+			errorCode: "worker_launch_protocol_failed",
+		});
 	}
 	if (state.phase === "terminal") {
 		const payload = payloadForRuntime("complete", { kind: "task", value: state }, input.now());
@@ -1823,7 +1762,11 @@ async function launchBackgroundCompletion(input: EmitContext & {
 			errorCode: state.terminalResult?.blocker ?? "worker_lost",
 		});
 	}
-	if (state.state !== "in_progress") {
+	if (
+		lifecycleOutcome.kind === "refused" ||
+		state.state !== "in_progress"
+	) {
+		const blocker = "worker_launch_protocol_failed";
 		const payload = createVaultGitLifecycleResult({
 			command: "complete",
 			outcome: "refused",
@@ -1831,15 +1774,17 @@ async function launchBackgroundCompletion(input: EmitContext & {
 			write_permission: "denied",
 			changed_state: "none",
 			retry_safety: "operator_required",
-			blockers: ["worker_launch_protocol_failed"],
+			blockers: [blocker],
 			transaction_id: loaded.receipt.transactionId,
 			task_id: state.taskId,
+			task_attempt_number: state.attemptNumber,
+			task_previous_failure: state.previousTerminalResult,
 			task_state: state.state,
 			task_phase: state.phase,
 			lease_generation: state.leaseGeneration,
 			next_action: action("run_doctor", "Run doctor to inspect the unacknowledged worker launch."),
 		});
-		return emitPayload({ ...input, payload, success: false, errorCode: "worker_launch_protocol_failed" });
+		return emitPayload({ ...input, payload, success: false, errorCode: blocker });
 	}
 	const payload = createVaultGitLifecycleResult({
 		command: "complete",
@@ -1851,6 +1796,8 @@ async function launchBackgroundCompletion(input: EmitContext & {
 		blockers: [],
 		transaction_id: state.transactionId,
 		task_id: state.taskId,
+		task_attempt_number: state.attemptNumber,
+		task_previous_failure: state.previousTerminalResult,
 		lease_generation: state.leaseGeneration,
 		task_state: state.state,
 		task_phase: state.phase,
@@ -2135,6 +2082,7 @@ async function executeInvocation(
 	composition: VaultGitCliComposition,
 	readCapability: (descriptor: number) => Promise<Uint8Array>,
 	humanActivationReview: VaultGitHumanActivationReviewPort,
+	taskLifecycleDispatch: VaultGitTaskLifecycleDispatch,
 ): Promise<RuntimeResult> {
 	switch (invocation.command) {
 		case "begin":
@@ -2164,18 +2112,14 @@ async function executeInvocation(
 				}),
 			};
 		case "complete":
-			if (
-				process.env.VAULT_GIT_TASK_ID &&
-				process.env.VAULT_GIT_TASK_LAUNCH_GENERATION
-			) {
+			if (taskLifecycleDispatch.role === "worker") {
 				return {
 					kind: "engine",
 					value: await executeBackgroundWorkerCompletion(
 						invocation as VaultGitRuntimeInvocation & { readonly command: "complete" },
 						composition,
 						readCapability,
-						process.env.VAULT_GIT_TASK_ID,
-						process.env.VAULT_GIT_TASK_LAUNCH_GENERATION,
+						taskLifecycleDispatch,
 					),
 				};
 			}
@@ -2235,6 +2179,11 @@ async function executeInvocation(
 				// CAS race must never discard the diagnosis the operator asked for.
 				await reconcileTaskClosure(composition, value).catch(() => undefined);
 				await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
+				await authorizeTaskRepairForWritingReceipt(
+					composition,
+					invocation.transactionId,
+					value,
+				).catch(() => undefined);
 				return {
 				kind: "doctor",
 					value,
@@ -2275,6 +2224,16 @@ async function executeInvocation(
 					}
 					: { capability: privateBytes }),
 			});
+			if (action === "resume") {
+				composition.runtime.interrupt(
+					"after_repair_receipt_before_task_authorization",
+				);
+				await authorizeTaskRepairForWritingReceipt(
+					composition,
+					invocation.transactionId,
+					value,
+				);
+			}
 			await reconcileTaskClosure(composition, value).catch(() => undefined);
 			return {
 				kind: "repair",
@@ -2294,14 +2253,62 @@ async function executeInvocation(
 	}
 }
 
+async function authorizeTaskRepairForWritingReceipt(
+	composition: VaultGitCliComposition,
+	transactionId: string | undefined,
+	result: VaultGitDoctorResult | VaultGitRepairResult,
+): Promise<void> {
+	const repairResultEligible =
+		result.status === "repaired" && result.state === "active";
+	const doctorResultEligible =
+		result.status === "diagnosed" &&
+		result.state === "repairable" &&
+		result.repairAction === "resume";
+	if (
+		!composition.taskStore ||
+		(!repairResultEligible && !doctorResultEligible) ||
+		result.phase !== "writing" ||
+		!transactionId
+	) return;
+	const receipt = await composition.store.load();
+	if (
+		receipt.status !== "loaded" ||
+		receipt.receipt.phase !== "writing" ||
+		receipt.receipt.transactionId !== transactionId ||
+		receipt.receipt.leaseGeneration === null
+	) {
+		throw new Error("repaired receipt unavailable for task authorization");
+	}
+	const authorization = await composition.taskStore.authorizeRepair({
+		receiptId: receipt.receipt.receiptId,
+		transactionId,
+		leaseGeneration: receipt.receipt.leaseGeneration,
+		repairedReceiptRevision: receipt.receipt.revision,
+		recordedAt: composition.runtime.now().toISOString(),
+	});
+	if (authorization.status === "refused") {
+		throw new Error("repaired task authorization refused");
+	}
+}
+
 async function executeBackgroundWorkerCompletion(
 	invocation: VaultGitRuntimeInvocation & { readonly command: "complete" },
 	composition: VaultGitCliComposition,
 	readCapability: (descriptor: number) => Promise<Uint8Array>,
-	taskId: string,
-	launchGeneration: string,
+	taskLifecycleDispatch: Extract<
+		VaultGitTaskLifecycleDispatch,
+		{ readonly role: "worker" }
+	>,
 ): Promise<VaultGitEngineResult> {
 	const taskStore = requireTaskStore(composition);
+	const { taskId, launchGeneration } = taskLifecycleDispatch;
+	const taskLifecycle = createVaultGitTaskLifecycle({
+		role: taskLifecycleDispatch.role,
+		store: taskStore,
+		runtime: DEFAULT_BACKGROUND_COMPLETION_RUNTIME,
+		spawnContext: composition,
+		recordedAt: () => composition.runtime.now(),
+	});
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
 	try {
 		const worker = createVaultGitCliTaskWorker({
@@ -2310,7 +2317,8 @@ async function executeBackgroundWorkerCompletion(
 			readCapability: (descriptor) => readCapability(descriptor),
 			acknowledge: async (acknowledgement) => {
 				let loaded = await taskStore.loadByTaskId(acknowledgement.taskId);
-				const registrationDeadline = performance.now() + 1_500;
+				const registrationDeadline =
+					performance.now() + VAULT_GIT_LAUNCH_ACK_WINDOW_MS;
 				while (
 					loaded.status === "loaded" &&
 					loaded.state.state === "launching" &&
@@ -2382,42 +2390,53 @@ async function executeBackgroundWorkerCompletion(
 				: result.phase === "push_pending" || result.changedState === "partial"
 					? "unknown"
 					: "repair_needed";
-		await transitionTaskUntilSettled(taskStore, taskId, {
-			state: terminalState,
-			phase: "terminal",
-			updatedAt: composition.runtime.now().toISOString(),
-			heartbeatAt: composition.runtime.now().toISOString(),
-			checkpoint: result.phase,
-			launchGeneration,
-			launchExpiresAt: null,
-			workerPid: process.pid,
-			terminalResult: {
-				outcome: result.status === "inspected" ? "read_only" : result.status,
-				phase: result.phase,
-				changedState: result.changedState,
-				blocker: result.blocker ?? null,
-				retrySafety: result.retrySafety,
+		await taskLifecycle.terminalize({
+			taskId,
+			advance: {
+				state: terminalState,
+				phase: "terminal",
+				updatedAt: composition.runtime.now().toISOString(),
+				heartbeatAt: composition.runtime.now().toISOString(),
+				checkpoint: result.phase,
+				launchGeneration,
+				launchExpiresAt: null,
+				workerPid: process.pid,
+				terminalResult: {
+					outcome:
+						result.status === "inspected" ? "read_only" : result.status,
+					phase: result.phase,
+					changedState: result.changedState,
+					blocker: result.blocker ?? null,
+					retrySafety: result.retrySafety,
+				},
 			},
-		}, { expectedLaunchGeneration: launchGeneration });
+			fence: { expectedLaunchGeneration: launchGeneration },
+		});
 		return result;
 	} catch (error) {
-		await transitionTaskUntilSettled(taskStore, taskId, {
-			state: "repair_needed",
-			phase: "terminal",
-			updatedAt: composition.runtime.now().toISOString(),
-			heartbeatAt: composition.runtime.now().toISOString(),
-			checkpoint: "checking",
-			launchGeneration,
-			launchExpiresAt: null,
-			workerPid: process.pid,
-			terminalResult: {
-				outcome: "refused",
-				phase: "checking",
-				changedState: "none",
-				blocker: "human_required",
-				retrySafety: "operator_required",
-			},
-		}, { expectedLaunchGeneration: launchGeneration }).catch(() => undefined);
+		await taskLifecycle
+			.terminalize({
+				taskId,
+				advance: {
+					state: "repair_needed",
+					phase: "terminal",
+					updatedAt: composition.runtime.now().toISOString(),
+					heartbeatAt: composition.runtime.now().toISOString(),
+					checkpoint: "checking",
+					launchGeneration,
+					launchExpiresAt: null,
+					workerPid: process.pid,
+					terminalResult: {
+						outcome: "refused",
+						phase: "checking",
+						changedState: "none",
+						blocker: "human_required",
+						retrySafety: "operator_required",
+					},
+				},
+				fence: { expectedLaunchGeneration: launchGeneration },
+			})
+			.catch(() => undefined);
 		throw error;
 	} finally {
 		if (heartbeat) clearInterval(heartbeat);
@@ -2493,32 +2512,6 @@ async function updateTaskHeartbeat(
 		workerPid: current.state.workerPid,
 		workerProcessIdentity: current.state.workerProcessIdentity,
 	}).catch(() => undefined);
-}
-
-async function transitionTaskUntilSettled(
-	store: VaultGitTaskStore,
-	taskId: string,
-	input: import("./task-state.ts").VaultGitTaskStateAdvanceInput,
-	fence?: VaultGitTaskTransitionFence,
-): Promise<void> {
-	for (let attempt = 0; attempt < 5; attempt += 1) {
-		const current = await store.loadByTaskId(taskId);
-		if (current.status !== "loaded" || current.state.phase === "terminal") return;
-		// A superseded launch generation must never terminalize the attempt that
-		// replaced it, so the fence refuses instead of retrying onto a new revision.
-		if (
-			fence?.expectedLaunchGeneration !== undefined &&
-			current.state.launchGeneration !== fence.expectedLaunchGeneration
-		) return;
-		const transitioned = await store.transition(
-			taskId,
-			current.state.revision,
-			input,
-			fence,
-		);
-		if (transitioned.status === "transitioned") return;
-	}
-	throw new Error("task terminal transition contention exceeded");
 }
 
 function requireTaskStore(composition: VaultGitCliComposition): VaultGitTaskStore {
@@ -2897,6 +2890,8 @@ function payloadForRuntime(
 			blockers: value.terminalResult?.blocker ? [value.terminalResult.blocker] : [],
 			transaction_id: value.transactionId,
 			task_id: value.taskId,
+			task_attempt_number: value.attemptNumber,
+			task_previous_failure: value.previousTerminalResult,
 			lease_generation: value.leaseGeneration,
 			task_state: value.state,
 			task_phase: value.phase,
@@ -3212,6 +3207,14 @@ function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
 		`retry_safety: ${result.retry_safety}`,
 		...(result.transaction_id ? [`transaction_id: ${result.transaction_id}`] : []),
 		...(result.task_id ? [`task_id: ${result.task_id}`] : []),
+		...(result.task_attempt_number
+			? [`task_attempt_number: ${result.task_attempt_number}`]
+			: []),
+		...(result.task_previous_failure
+			? [
+					`task_previous_failure: ${result.task_previous_failure.blocker ?? result.task_previous_failure.outcome}`,
+				]
+			: []),
 		...(result.task_state ? [`task_state: ${result.task_state}`] : []),
 		...(result.activation_restriction
 			? [renderVaultGitActivationRestriction(result.activation_restriction)]

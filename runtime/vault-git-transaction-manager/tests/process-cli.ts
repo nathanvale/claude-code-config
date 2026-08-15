@@ -30,16 +30,56 @@ const required = (name: string): string => {
 const privateLaunchTimeoutMs = Number(
 	process.env.VAULT_GIT_TEST_PRIVATE_LAUNCH_TIMEOUT_MS,
 );
-if (Number.isFinite(privateLaunchTimeoutMs) && privateLaunchTimeoutMs > 0) {
+const privateRepairLaunchTimeoutMs = Number(
+	process.env.VAULT_GIT_TEST_PRIVATE_REPAIR_LAUNCH_TIMEOUT_MS,
+);
+const privateLegacyRepairLaunchTimeoutMs = Number(
+	process.env.VAULT_GIT_TEST_PRIVATE_LEGACY_REPAIR_LAUNCH_TIMEOUT_MS,
+);
+const isStaleTakeoverParent =
+	process.argv.includes("stale-lease-takeover") &&
+	!process.argv.includes("--capability-fd");
+if (
+	(Number.isFinite(privateLaunchTimeoutMs) && privateLaunchTimeoutMs > 0) ||
+	(Number.isFinite(privateRepairLaunchTimeoutMs) &&
+		privateRepairLaunchTimeoutMs > 0)
+) {
 	const originalSetTimeout = globalThis.setTimeout;
 	globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
 		const [callback, delay, ...callbackArgs] = args;
 		return originalSetTimeout(
 			callback,
-			delay === 30_000 ? privateLaunchTimeoutMs : delay,
+			scaledPrivateLaunchTimeout(delay),
 			...callbackArgs,
 		);
 	}) as typeof globalThis.setTimeout;
+}
+
+function scaledPrivateLaunchTimeout(delay: number | undefined): number | undefined {
+	if (delay === 30_000 && isStaleTakeoverParent) {
+		if (
+			Number.isFinite(privateLegacyRepairLaunchTimeoutMs) &&
+			privateLegacyRepairLaunchTimeoutMs > 0
+		) {
+			return privateLegacyRepairLaunchTimeoutMs;
+		}
+	}
+	if (
+		delay === 30_000 &&
+		Number.isFinite(privateLaunchTimeoutMs) &&
+		privateLaunchTimeoutMs > 0
+	) {
+		return privateLaunchTimeoutMs;
+	}
+	if (
+		delay === 120_000 &&
+		isStaleTakeoverParent &&
+		Number.isFinite(privateRepairLaunchTimeoutMs) &&
+		privateRepairLaunchTimeoutMs > 0
+	) {
+		return privateRepairLaunchTimeoutMs;
+	}
+	return delay;
 }
 
 if (
@@ -48,6 +88,27 @@ if (
 	process.env.VAULT_GIT_TASK_LAUNCH_GENERATION
 ) {
 	process.stdout.write("{malformed-worker-ack");
+	process.exit(0);
+}
+
+if (
+	process.env.VAULT_GIT_TEST_PRIVATE_CHILD_MODE === "delayed_repair_result" &&
+	process.argv.includes("--capability-fd") &&
+	process.argv.includes("stale-lease-takeover")
+) {
+	await Bun.sleep(
+		Number(process.env.VAULT_GIT_TEST_PRIVATE_CHILD_DELAY_MS ?? "100"),
+	);
+	process.stdout.write(
+		JSON.stringify({
+			status: "ok",
+			data: {
+				command: "repair",
+				outcome: "repaired",
+				transaction_state: "superseded",
+			},
+		}),
+	);
 	process.exit(0);
 }
 
@@ -68,6 +129,13 @@ const baseInput = {
 	actor: required("VAULT_GIT_ACTOR"),
 	host: required("VAULT_GIT_HOST"),
 	remote: process.env.VAULT_GIT_REMOTE ?? "origin",
+	...(process.env.VAULT_GIT_TEST_LEASE_DURATION_MS
+		? {
+				leaseDurationMs: Number(
+					process.env.VAULT_GIT_TEST_LEASE_DURATION_MS,
+				),
+			}
+		: {}),
 	privateEntrypointPath: import.meta.path,
 } as const;
 const storeComposition = await createVaultGitCliComposition(baseInput);

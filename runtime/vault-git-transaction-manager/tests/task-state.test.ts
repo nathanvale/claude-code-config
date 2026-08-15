@@ -5,6 +5,7 @@ import {
 	createVaultGitTaskState,
 	parseVaultGitTaskState,
 } from "../src/task-state.ts";
+import { authorizeVaultGitTaskRepair } from "../src/task-repair.ts";
 
 describe("durable task state", () => {
 	test("creates one immutable admitted revision from receipt-scoped input", () => {
@@ -17,6 +18,34 @@ describe("durable task state", () => {
 		});
 
 		expect(state).toEqual({
+			schemaVersion: 2,
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			revision: 1,
+			attemptNumber: 1,
+			state: "claimed",
+			phase: "admitted",
+			recordedAt: "2026-08-12T11:30:00.000Z",
+			updatedAt: "2026-08-12T11:30:00.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: null,
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 0,
+			terminalResult: null,
+			previousTerminalResult: null,
+			repairReentryBlocked: false,
+			repairAuthorization: null,
+		});
+		expect(Object.isFrozen(state)).toBe(true);
+	});
+
+	test("normalizes an exact issue-361 schema-one task as attempt one", () => {
+		const legacy = parseVaultGitTaskState({
 			schemaVersion: 1,
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
@@ -36,7 +65,90 @@ describe("durable task state", () => {
 			launchAttempt: 0,
 			terminalResult: null,
 		});
-		expect(Object.isFrozen(state)).toBe(true);
+
+		expect(legacy).toMatchObject({
+			schemaVersion: 2,
+			attemptNumber: 1,
+			previousTerminalResult: null,
+			repairReentryBlocked: false,
+			repairAuthorization: null,
+		});
+	});
+
+	test("never authorizes an unknown publication attempt", () => {
+		const admitted = createVaultGitTaskState({
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T11:30:00.000Z",
+		});
+		const unknown = advanceVaultGitTaskState(admitted, {
+			state: "unknown",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "partial",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		});
+
+		expect(() => authorizeVaultGitTaskRepair(unknown, {
+			repairedReceiptRevision: 3,
+			bindingDigest: "b".repeat(64),
+			recordedAt: "2026-08-12T11:32:00.000Z",
+		})).toThrow("task repair authorization invalid");
+	});
+
+	test("preserves the no-reentry fence when a legacy unknown is refined", () => {
+		const legacyUnknown = parseVaultGitTaskState({
+			schemaVersion: 1,
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			revision: 7,
+			state: "unknown",
+			phase: "terminal",
+			recordedAt: "2026-08-12T11:30:00.000Z",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			launchGeneration: "launch_44444444444444444444444444444444",
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "partial",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		});
+		expect(legacyUnknown.repairReentryBlocked).toBe(true);
+
+		const refined = advanceVaultGitTaskState(legacyUnknown, {
+			state: "repair_needed",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:32:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "local",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+			},
+		});
+		expect(refined.repairReentryBlocked).toBe(true);
 	});
 
 	test("advances observational progress and a safe terminal result without changing task identity", () => {
@@ -171,7 +283,13 @@ describe("durable task state", () => {
 			revision: unknown.revision + 1,
 			state: "repair_needed",
 			phase: "terminal",
+			repairReentryBlocked: true,
 		});
+		expect(() => authorizeVaultGitTaskRepair(refined, {
+			repairedReceiptRevision: 3,
+			bindingDigest: "b".repeat(64),
+			recordedAt: "2026-08-12T11:33:00.000Z",
+		})).toThrow("task repair authorization invalid");
 		expect(() => advanceVaultGitTaskState(refined, {
 			state: "unknown",
 			phase: "terminal",

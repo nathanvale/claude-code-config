@@ -1102,6 +1102,21 @@ export function createGitRepositoryAdapter(
 
 		hashOwnedPaths,
 
+		async inspectCommitAncestry(ancestor, descendant) {
+			if (
+				!/^[0-9a-f]{40,64}$/.test(ancestor) ||
+				!/^[0-9a-f]{40,64}$/.test(descendant)
+			) {
+				return "failed";
+			}
+			return inspectAncestry(
+				(args) => runGit(args),
+				ancestor,
+				descendant,
+				options.timeouts.localMs,
+			);
+		},
+
 		async inspectLocalCommit(commitId) {
 			if (!/^[0-9a-f]{40,64}$/.test(commitId)) return { status: "missing" };
 			const inspected = await runGit([
