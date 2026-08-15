@@ -239,11 +239,20 @@ describe("vault-git command contract", () => {
 			capabilityRoles: ["diagnostic"],
 		});
 		expect(vaultGitContracts.doctor.summary).toContain(
-			"owner-private task evidence",
+			"owner-private task",
 		);
 		expect(vaultGitContracts.doctor.summary).toContain(
 			"without canonical mutation",
 		);
+		expect(() =>
+			parseVaultGitInvocation([
+				"doctor",
+				"--transaction-id",
+				"txn_00000000000000000000000000000000",
+				"--task-id",
+				"doctor_task_00000000000000000000000000000000",
+			]),
+		).toThrow("either --transaction-id or --task-id");
 	});
 });
 
@@ -728,7 +737,13 @@ function argvForFlag(
 		case "--transaction-id":
 			return [...argv, flag, "txn_00000000000000000000000000000000"];
 		case "--task-id":
-			return [...argv, flag, "task_00000000000000000000000000000000"];
+			return [
+				...argv,
+				flag,
+				command === "doctor"
+					? "doctor_task_00000000000000000000000000000000"
+					: "task_00000000000000000000000000000000",
+			];
 		default:
 			return [...argv, flag];
 	}

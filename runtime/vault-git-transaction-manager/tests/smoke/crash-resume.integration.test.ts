@@ -10,6 +10,7 @@ import {
 	assertWorktreeUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	runDoctorToTerminal,
 } from "./fixture.ts";
 
 setDefaultTimeout(180_000);
@@ -43,7 +44,7 @@ describe("row 3: a stranded transaction is diagnosed in a new process", () => {
 		const transactionId = await fixture.begin("notes/event.md");
 
 		// A separate process reads only the durable receipt and the remote.
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -105,25 +106,25 @@ describe("row 3: a stranded transaction is diagnosed in a new process", () => {
 		// Diagnosis must be a pure function of durable state: two independent
 		// processes reading the same receipt must agree. A finding that drifts
 		// between runs would mean the doctor depends on process-local state.
-		const first = await fixture.run([
+		const first = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
 			"--json",
 		]);
-		const second = await fixture.run([
+		const second = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
 			"--json",
 		]);
 
-		const findingOf = (result: typeof first) =>
-			(
-				parseCliProcessJson(result) as {
-					data?: { finding?: string; phase?: string };
-				}
-			).data;
+		const findingOf = (result: typeof first) => {
+			const data = parseCliProcessJson<{
+				data?: { finding?: string; phase?: string };
+			}>(result).data;
+			return { finding: data?.finding, phase: data?.phase };
+		};
 
 		expect(findingOf(second)).toMatchObject({
 			phase: "writing",

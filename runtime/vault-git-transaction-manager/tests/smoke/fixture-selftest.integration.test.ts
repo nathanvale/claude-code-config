@@ -1,4 +1,9 @@
+import { spawn } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { parseCliProcessJson } from "@side-quest/cli-command-facade/testing";
 
 import {
 	assertLedgerOwner,
@@ -7,6 +12,7 @@ import {
 	assertStructuredCode,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	readSmokeWorkerProcess,
 	readLedgerDocument,
 } from "./fixture.ts";
 
@@ -117,4 +123,89 @@ describe("smoke fixture primitives", () => {
 		await cleanupSmokeFixtures();
 		expect(() => process.kill(prepared.pid, 0)).toThrow();
 	});
+
+	test("cleanup terminates the exact acknowledged detached worker", async () => {
+		const fixture = await mkSmokeFixture();
+		await writeFile(
+			join(fixture.clone, "package.json"),
+			`${JSON.stringify({
+				private: true,
+				scripts: { check: 'bun -e "while (true) await Bun.sleep(1000)"' },
+			})}\n`,
+		);
+		const transactionId = await fixture.begin("notes/event.md");
+		await writeFile(join(fixture.clone, "notes/event.md"), "blocked cleanup worker\n");
+		const accepted = await fixture.run([
+			"complete",
+			"--transaction-id",
+			transactionId,
+			"--summary",
+			"docs(vault): prove smoke worker cleanup",
+			"--json",
+		]);
+		expect(accepted.exitCode).toBe(0);
+		const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(accepted)
+			.data?.task_id;
+		if (!taskId) throw new Error("accepted completion omitted task id");
+		const worker = await readSmokeWorkerProcess(
+			fixture.stateRoot,
+			taskId,
+			10_000,
+		);
+		expect(() => process.kill(worker.pid, 0)).not.toThrow();
+
+		await cleanupSmokeFixtures();
+
+		expect(() => process.kill(worker.pid, 0)).toThrow();
+	});
+
+	test("cleanup refuses a durable PID whose process identity mismatches", async () => {
+		const fixture = await mkSmokeFixture();
+		const unrelated = spawn(
+			process.execPath,
+			["-e", "while (true) await Bun.sleep(1000)"],
+			{ detached: true, stdio: "ignore" },
+		);
+		if (!unrelated.pid) throw new Error("unrelated process omitted pid");
+		const unrelatedPid = unrelated.pid;
+		const taskId = `task_${"a".repeat(32)}`;
+		const history = join(
+			fixture.stateRoot,
+			"vault-git-transaction-manager",
+			"a".repeat(64),
+			"tasks",
+			taskId,
+			"history",
+		);
+		await mkdir(history, { recursive: true });
+		await writeFile(
+			join(history, "000000000001.json"),
+			`${JSON.stringify({
+				taskId,
+				workerPid: unrelatedPid,
+				workerProcessIdentity: "0".repeat(64),
+			})}\n`,
+		);
+		try {
+			await cleanupSmokeFixtures();
+			expect(() => process.kill(unrelatedPid, 0)).not.toThrow();
+		} finally {
+			unrelated.kill("SIGKILL");
+			await waitForProcessExit(unrelatedPid);
+		}
+	});
 });
+
+async function waitForProcessExit(pid: number): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		try {
+			process.kill(pid, 0);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+			throw error;
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error(`test process ${pid} survived cleanup`);
+}

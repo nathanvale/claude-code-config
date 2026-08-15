@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,6 +20,7 @@ import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
+import { createVaultGitDoctorTaskStore } from "../src/doctor-task-store.ts";
 import type {
 	VaultGitReceipt,
 	VaultGitRepairAction,
@@ -44,6 +45,175 @@ const ACTIVATION_EVIDENCE_REFERENCE =
 afterEach(tempDirectories.cleanup);
 
 describe("vault-git CLI composition", () => {
+	test("rejects a Background Doctor delegate without main", async () => {
+		const delegateRoot = await temp("vault-git-doctor-delegate-");
+		const delegatePath = join(delegateRoot, "delegate.ts");
+		await writeFile(delegatePath, "export const unavailable = true;\n");
+
+		const worker = spawnSync(
+			process.execPath,
+			[join(import.meta.dir, "../src/doctor-worker.ts")],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					VAULT_GIT_DOCTOR_TASK_DELEGATE_ENTRYPOINT: delegatePath,
+				},
+			},
+		);
+
+		expect(worker.status).not.toBe(0);
+		expect(worker.stderr).toContain(
+			"Background Doctor delegate main unavailable",
+		);
+	});
+
+	test("maps a failed Doctor spawn without an unhandled child error", async () => {
+		const stateRoot = await temp("vault-git-doctor-spawn-");
+		const repositoryId = "a".repeat(64);
+		let receiptLoads = 0;
+		const composition: VaultGitCliComposition = {
+			...fakeComposition(fakeEngine(), {
+				async load() {
+					receiptLoads += 1;
+					return {
+						status: "loaded",
+						receipt: activeReceipt(),
+						history: [],
+						historyPaths: [],
+					};
+				},
+				async readActivation() {
+					return null;
+				},
+			}),
+			repositoryPath: join(stateRoot, "missing-checkout"),
+			doctorTaskStore: createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId,
+			}),
+		};
+
+		const run = await runVaultGitForTest(["doctor", "--json"], {
+			composition,
+			env: { PATH: process.env.PATH },
+		});
+		await Bun.sleep(0);
+
+		expect(run.exitCode).toBe(1);
+		expect(JSON.parse(run.stdout)).toMatchObject({
+			error: { code: "worker_launch_failed" },
+			data: { blockers: ["worker_launch_failed"] },
+		});
+		expect(receiptLoads).toBe(1);
+	});
+
+	test("terminalizes Background Doctor execution and publication failures", async () => {
+		for (const failurePoint of ["execution", "terminalization"] as const) {
+			const stateRoot = await temp("vault-git-doctor-worker-failure-");
+			const repositoryId = "a".repeat(64);
+			const durableStore = createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId,
+			});
+			const binding = {
+				repositoryId,
+				activationEvidenceId: null,
+				receiptId: `receipt_${"b".repeat(32)}`,
+				receiptRevision: 7,
+				transactionId: `txn_${"c".repeat(32)}`,
+				normalizedInput: '{"command":"doctor"}',
+			} as const;
+			const admitted = await durableStore.claimOrJoin(
+				binding,
+				"1970-01-01T00:00:00.000Z",
+			);
+			const launchGeneration = `doctor_launch_${"d".repeat(32)}`;
+			const launching = await durableStore.transition(
+				admitted.state.taskId,
+				admitted.state.revision,
+				{
+					state: "launching",
+					phase: "admitted",
+					updatedAt: "1970-01-01T00:00:00.000Z",
+					heartbeatAt: null,
+					checkpoint: "local_classified",
+					launchGeneration,
+					launchExpiresAt: "1970-01-01T00:00:02.000Z",
+					workerPid: process.pid,
+					workerProcessIdentity: "f".repeat(64),
+					launchAttempt: 1,
+					terminalResult: null,
+				},
+			);
+			if (launching.status !== "transitioned") throw new Error("launch lost");
+			const doctorTaskStore = {
+				...durableStore,
+				async transition(
+					...args: Parameters<typeof durableStore.transition>
+				) {
+					if (
+						failurePoint === "terminalization" &&
+						args[2].terminalResult?.kind === "doctor_result"
+					) {
+						return { status: "stale" as const, state: launching.state };
+					}
+					return durableStore.transition(...args);
+				},
+			};
+			const engine = fakeEngine({
+				async doctor() {
+					if (failurePoint === "execution") {
+						throw new Error("Doctor execution unavailable");
+					}
+					return {
+						status: "diagnosed",
+						state: "repairable",
+						phase: "writing",
+						finding: "writes_in_progress",
+						changedState: "none",
+						retrySafety: "same_input_safe",
+						nextAction: { id: "run_repair", summary: "Run repair." },
+						diagnosticsReference: "doctor:fixture",
+						transactionId: binding.transactionId,
+						repairAction: "resume",
+					};
+				},
+			});
+			const composition: VaultGitCliComposition = {
+				...fakeComposition(engine),
+				doctorTaskStore,
+			};
+
+			const run = await runVaultGitForTest(["doctor", "--json"], {
+				composition,
+				launchPrivate: false,
+				env: {
+					VAULT_GIT_DOCTOR_TASK_ID: admitted.state.taskId,
+					VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION: launchGeneration,
+				},
+			});
+
+			expect(run.exitCode).toBe(1);
+			expect(JSON.parse(run.stdout).error.code).toBe(
+				"unexpected_runtime_failure",
+			);
+			await expect(
+				durableStore.loadByTaskId(admitted.state.taskId),
+			).resolves.toMatchObject({
+				status: "loaded",
+				state: {
+					state: "unknown",
+					phase: "terminal",
+					terminalResult: {
+						kind: "worker_failure",
+						blocker: "worker_lost",
+					},
+				},
+			});
+		}
+	});
+
 	test("scrubs ambient authority before detached worker launch", () => {
 		expect(
 			projectVaultGitBackgroundWorkerEnvironment({
