@@ -24,6 +24,19 @@ const required = (name: string): string => {
 	return value;
 };
 
+const privateForegroundDelayMs = Number(
+	process.env.VAULT_GIT_TEST_PRIVATE_FOREGROUND_DELAY_MS,
+);
+if (
+	Number.isFinite(privateForegroundDelayMs) &&
+	privateForegroundDelayMs > 0 &&
+	!process.env.VAULT_GIT_TASK_ID &&
+	!process.env.VAULT_GIT_DOCTOR_TASK_ID &&
+	!process.argv.includes("--capability-fd")
+) {
+	await Bun.sleep(privateForegroundDelayMs);
+}
+
 // Production owns one fixed 30-second private-launch deadline today. Scale
 // exact 30-second timers in this fixture; the checker barrier stops before any
 // remote stage, so only the private launcher reaches that deadline in this row.

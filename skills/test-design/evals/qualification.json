@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "skills/test-design/evals/qualification.ts",
-  "source_sha256": "799f79f130795708e621bbf39a5ea2f9573c37d8fe801d139c430321176ccd10",
+  "source_sha256": "d53d5fbb16e5e0a196d12b67a23a574ad9eda7da2a86e96059b7387ec84b515e",
   "sources": [
     "AGENTS.md",
     ".github/workflows/ci.yml",
@@ -39,6 +39,8 @@
     "simple_unit_codex": true,
     "run_only_claude": true,
     "run_only_codex": true,
+    "boundary_escalation_claude": true,
+    "boundary_escalation_codex": true,
     "missing_skill_claude": true,
     "missing_skill_codex": true
   }

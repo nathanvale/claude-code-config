@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	buildSmokeCommand,
@@ -42,10 +42,11 @@ describe("multi-agent smoke library", () => {
 			"test-design-runner-sensitive-route",
 			"test-design-simple-unit-route",
 			"test-design-run-only-negative",
+			"test-design-boundary-escalation",
 			"test-design-pairwise-frozen",
 		] as const;
 
-		expect(SMOKE_TESTS).toHaveLength(29);
+		expect(SMOKE_TESTS).toHaveLength(30);
 		for (const testId of taskSmokeIds) {
 			expect(SMOKE_TESTS.map((smokeTest) => smokeTest.id)).toContain(testId);
 			expect(getSmokeTest(testId).expectations.claude.whoAmI).toBe("claude");
@@ -89,7 +90,12 @@ describe("multi-agent smoke library", () => {
 			expect(
 				evaluateOutput(getSmokeTest("test-design-mutation-route"), harness, {
 					whoAmI: harness,
-					selectedProfiles: "process-and-cli",
+					route: "full",
+					exactFocusedCommand:
+						"bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'",
+					selectedProfiles: "browser-and-ui",
+					expectedSelectedTests: 1,
+					redEvidenceKind: "disposable-perturbation",
 					activeWorkflow: "implementation",
 				}),
 			).toSatisfy((assertions) => assertions.every((assertion) => assertion.ok));
@@ -97,11 +103,43 @@ describe("multi-agent smoke library", () => {
 			expect(
 				evaluateOutput(getSmokeTest("test-design-run-only-negative"), harness, {
 					whoAmI: harness,
+					route: "no-new-brief",
 					invokesTestDesign: false,
 					briefEmitted: false,
 					activeWorkflow: "test-runner",
 				}),
 			).toSatisfy((assertions) => assertions.every((assertion) => assertion.ok));
+		}
+	});
+
+	test("keeps mutation prompts aligned with guarded fixtures", () => {
+		const definition = getSmokeTest("test-design-mutation-route");
+		const fixture = definition.runtime?.mutationProof?.fixtureRelativePath;
+		expect(fixture).toBeDefined();
+		if (!fixture) return;
+		expect(definition.prompt).toContain(fixture);
+	});
+
+	test("changed proof boundaries cannot use the lightweight route", () => {
+		for (const harness of ["claude", "codex"] as const) {
+			expect(
+				evaluateOutput(
+					getSmokeTest("test-design-boundary-escalation"),
+					harness,
+					{
+						whoAmI: harness,
+						route: "full",
+						exactFocusedCommand:
+							"bun test tests/select-height.test.ts -t 'matches Select overflow contract'",
+						selectedProfiles: "browser-and-ui",
+						expectedSelectedTests: 1,
+						redEvidenceKind: "disposable-perturbation",
+						activeWorkflow: "implementation",
+					},
+				),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
 		}
 	});
 
@@ -113,8 +151,13 @@ describe("multi-agent smoke library", () => {
 					harness,
 					{
 						whoAmI: harness,
+						route: "full",
+						exactFocusedCommand:
+							"bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'",
 						runnerProfileSelected: true,
 						runnerEnvelopeApplied: true,
+						expectedSelectedTests: 1,
+						redEvidenceKind: "disposable-perturbation",
 						activeWorkflow: "implementation",
 					},
 				),
@@ -124,8 +167,13 @@ describe("multi-agent smoke library", () => {
 			expect(
 				evaluateOutput(getSmokeTest("test-design-simple-unit-route"), harness, {
 					whoAmI: harness,
+					route: "lightweight",
+					exactFocusedCommand:
+						"bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'",
 					selectedProfiles: "none",
 					runnerEnvelopeApplied: false,
+					expectedSelectedTests: 1,
+					redEvidenceKind: "observed-regression",
 					activeWorkflow: "implementation",
 				}),
 			).toSatisfy((assertions) =>
@@ -170,13 +218,14 @@ describe("multi-agent smoke library", () => {
 		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
 			"references/installation-host-hosted.md",
 		);
-		expect(simpleUnitTrace?.profileRelativePath).toBe(
-			"references/pattern-library.md",
-		);
-		expect(simpleUnitTrace?.forbiddenProfileRelativePaths).toContain(
-			"references/runner-execution.md",
-		);
-	});
+			expect(simpleUnitTrace).toBeUndefined();
+			expect(getSmokeTest("test-design-simple-unit-route").prompt).toContain(
+				"tiny CSS dimension correction",
+			);
+			expect(getSmokeTest("test-design-run-only-negative").prompt).toContain(
+				"owns the existing regression proof",
+			);
+		});
 
 	test("boundary expectations stay harness-specific where intended", () => {
 		const testDef = getSmokeTest("boundary");
@@ -339,6 +388,25 @@ describe("multi-agent smoke library", () => {
 			expect(existsSync(`${project}/.claude/skills/test-design/SKILL.md`)).toBe(
 				true,
 			);
+			const traceProof = getSmokeTest("test-design-mutation-route").runtime
+				?.traceProof;
+			expect(traceProof).toBeDefined();
+			if (!traceProof) return;
+			const selectedProfile = readFileSync(
+				`${project}/.agents/skills/test-design/${traceProof.profileRelativePath}`,
+				"utf8",
+			);
+			expect(selectedProfile).toContain("Runtime profile qualification challenge:");
+			for (const relativePath of traceProof.forbiddenProfileRelativePaths) {
+				const forbiddenProfile = readFileSync(
+					`${project}/.agents/skills/test-design/${relativePath}`,
+					"utf8",
+				);
+				expect(forbiddenProfile).toContain("Runtime profile read sentinel:");
+				expect(forbiddenProfile).not.toContain(
+					"Runtime profile qualification challenge:",
+				);
+			}
 		} finally {
 			cleanupClaude();
 			cleanupCodex();
@@ -379,7 +447,7 @@ describe("multi-agent smoke library", () => {
 							id: "profile-read",
 							name: "Read",
 							input: {
-								file_path: `${project}/.claude/skills/test-design/references/process-and-cli.md`,
+								file_path: `${project}/.claude/skills/test-design/${traceProof.profileRelativePath}`,
 							},
 						},
 					],
@@ -446,7 +514,7 @@ describe("multi-agent smoke library", () => {
 							id: "irrelevant-read",
 							name: "Read",
 							input: {
-								file_path: `${project}/.claude/skills/test-design/references/browser-and-ui.md`,
+								file_path: `${project}/.claude/skills/test-design/references/process-and-cli.md`,
 							},
 						},
 					],
@@ -496,6 +564,28 @@ describe("multi-agent smoke library", () => {
 				challenge,
 				traceProof,
 			}).every((assertion) => assertion.ok),
+		).toBe(true);
+		const failedSelectedReadTrace = [
+			codexTrace.split("\n")[0],
+			JSON.stringify({
+				type: "item.completed",
+				item: {
+					id: "item_failed_selected_read",
+					type: "command_execution",
+					command: "sed selected-profile && rg missing-target",
+					aggregated_output: selectedProfileChallenge,
+					exit_code: 1,
+					status: "failed",
+				},
+			}),
+		].join("\n");
+		expect(
+			evaluateRuntimeTrace({
+				harness: "codex",
+				stdout: failedSelectedReadTrace,
+				challenge,
+				traceProof,
+			}).find((assertion) => assertion.key === "trace:selected-profile-read")?.ok,
 		).toBe(true);
 		const forbiddenProfileRelativePath =
 			traceProof.forbiddenProfileRelativePaths[0];

@@ -55,6 +55,7 @@ describe("owner-controlled activation identities", () => {
 		const facadeRoot = resolve(packageRoot, "../cli-command-facade");
 		const sources = await reachableLocalSources([
 			join(packageRoot, "src", "cli.ts"),
+			join(packageRoot, "src", "doctor-worker.ts"),
 			join(packageRoot, "src", "activation-result.ts"),
 			join(packageRoot, "src", "branch-station-catalog.ts"),
 			join(facadeRoot, "src", "index.ts"),

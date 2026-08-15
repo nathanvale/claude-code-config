@@ -20,6 +20,7 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
+import { readVaultGitProcessIdentity } from "../../src/cli.ts";
 import { VAULT_GIT_LEDGER_REF } from "../../src/model.ts";
 import { createReceiptStore } from "../../src/store.ts";
 import { admitActivationForTest } from "../activation-fixture.ts";
@@ -113,11 +114,55 @@ export interface PreparedSmokeCommand {
 
 /** A subprocess paused after one named durable runtime boundary. */
 export interface PreparedSmokeInterruption extends PreparedSmokeCommand {
+	/** Exact descendant identities observed while the interrupted command was alive. */
+	readonly descendantProcesses: readonly SmokeProcessIdentity[];
 	/** Kill the complete process group at the paused boundary. */
 	kill(): Promise<void>;
 }
 
+/** One exact process identity captured before an injected parent crash. */
+export interface SmokeProcessIdentity {
+	readonly pid: number;
+	readonly identity: string;
+}
+
+/**
+ * Run Doctor and, when it delegates, inspect the accepted task to its durable
+ * terminal diagnosis. This preserves the public foreground/background seam in
+ * smoke rows whose assertion concerns Doctor's authoritative result.
+ */
+export async function runDoctorToTerminal(
+	fixture: Pick<SmokeFixture, "run">,
+	args: readonly string[],
+): Promise<CliProcessResult> {
+	const accepted = await fixture.run(args);
+	if (accepted.exitCode !== 0) return accepted;
+	const acceptedData = parseCliProcessJson<{
+		data?: { task_id?: string; task_state?: string };
+	}>(accepted).data;
+	if (!acceptedData?.task_id || ["closed", "unknown"].includes(acceptedData.task_state ?? "")) {
+		return accepted;
+	}
+
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		const inspection = await fixture.run([
+			"doctor",
+			"--task-id",
+			acceptedData.task_id,
+			"--json",
+		]);
+		const taskState = parseCliProcessJson<{
+			data?: { task_state?: string };
+		}>(inspection).data?.task_state;
+		if (taskState === "closed" || taskState === "unknown") return inspection;
+		await Bun.sleep(25);
+	}
+	throw new Error(`Background Doctor task ${acceptedData.task_id} did not terminate`);
+}
+
 const roots: string[] = [];
+const stateRoots: string[] = [];
 const children = new Set<{
 	readonly child: ChildProcess;
 	readonly detached: boolean;
@@ -174,6 +219,7 @@ async function mkSmokeClone(
 ): Promise<SmokeFixture> {
 	const clone = join(root, name);
 	const stateRoot = join(root, `${name}-state`);
+	stateRoots.push(stateRoot);
 	const profileRoot = join(root, `${name}-profile`);
 	const shimMarker = join(root, `${name}-shim-marker`);
 	const shimLog = join(root, `${name}-shim-log`);
@@ -348,26 +394,18 @@ async function mkSmokeClone(
 				throw new Error("worker launch omitted a valid task id");
 			}
 			await waitForFile(`${gate}.ready`, 30_000);
-			const workerPid = await readWorkerPid(stateRoot, taskId, 10_000);
-			try {
-				process.kill(workerPid, "SIGKILL");
-			} catch (error) {
-				// The worker can exit between reading its pid and signalling it.
-				// That is the state this helper wanted, not a failure.
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-				return;
+			const worker = await readSmokeWorkerProcess(stateRoot, taskId, 10_000);
+			const termination = await terminateMatchingWorkerGroup(
+				worker.pid,
+				worker.identity,
+			);
+			if (termination !== "terminated") {
+				throw new Error(
+					termination === "mismatch"
+						? "durable worker process identity did not match"
+						: "durable worker process was absent before interruption",
+				);
 			}
-			const deadline = Date.now() + 10_000;
-			while (Date.now() < deadline) {
-				try {
-					process.kill(workerPid, 0);
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-					throw error;
-				}
-				await Bun.sleep(10);
-			}
-			throw new Error("interrupted worker did not exit");
 		},
 		prepareAtInterrupt: async (args: readonly string[], point: string) => {
 			const gate = join(root, `${name}-interrupt-${crypto.randomUUID()}`);
@@ -389,6 +427,7 @@ async function mkSmokeClone(
 			child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
 			child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 			await waitForFile(`${gate}.ready`, 10_000);
+			const descendantProcesses = readDescendantProcesses(requiredPid(child));
 			const collect = async (): Promise<CliProcessResult> => {
 				const outcome = await new Promise<{
 					readonly exitCode: number | null;
@@ -412,6 +451,7 @@ async function mkSmokeClone(
 			};
 			return {
 				pid: requiredPid(child),
+				descendantProcesses,
 				trigger: async () => {
 					await writeFile(gate, "continue\n");
 					return collect();
@@ -420,6 +460,11 @@ async function mkSmokeClone(
 					if (!child.pid) throw new Error("interrupted process has no pid");
 					process.kill(-child.pid, "SIGKILL");
 					await collect();
+					await Promise.all(
+						descendantProcesses.map(({ pid, identity }) =>
+							terminateMatchingWorkerGroup(pid, identity),
+						),
+					);
 				},
 			};
 		},
@@ -478,12 +523,12 @@ async function mkSmokeClone(
 	};
 }
 
-/** Read the acknowledged worker's pid from its latest task history revision. */
-async function readWorkerPid(
+/** Read one acknowledged worker only from its latest immutable task revision. @internal */
+export async function readSmokeWorkerProcess(
 	stateRoot: string,
 	taskId: string,
 	timeoutMs: number,
-): Promise<number> {
+): Promise<{ readonly pid: number; readonly identity: string }> {
 	if (!/^task_[0-9a-f]{32}$/.test(taskId)) throw new Error("invalid task id");
 	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
 	const deadline = Date.now() + timeoutMs;
@@ -507,13 +552,19 @@ async function readWorkerPid(
 				const record = JSON.parse(source) as {
 					taskId?: string;
 					workerPid?: number | null;
+					workerProcessIdentity?: string | null;
 				};
 				if (
 					record.taskId === taskId &&
 					Number.isSafeInteger(record.workerPid) &&
-					(record.workerPid as number) > 0
+					(record.workerPid as number) > 0 &&
+					typeof record.workerProcessIdentity === "string" &&
+					/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity)
 				) {
-					return record.workerPid as number;
+					return {
+						pid: record.workerPid as number,
+						identity: record.workerProcessIdentity,
+					};
 				}
 			} catch {
 				// A concurrently published or malformed revision is never authoritative.
@@ -521,7 +572,7 @@ async function readWorkerPid(
 		}
 		await Bun.sleep(10);
 	}
-	throw new Error("timed out waiting for a durable worker pid");
+	throw new Error("timed out waiting for a durable worker process identity");
 }
 
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {
@@ -539,20 +590,190 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
  * Rows call this from `afterEach` so no row inherits another row's state.
  */
 export async function cleanupSmokeFixtures(): Promise<void> {
+	const fixtureStateRoots = stateRoots.splice(0);
+	const fixtureRoots = roots.splice(0);
+	const cleanupErrors: unknown[] = [];
 	const running = [...children];
+	const descendantProcesses: SmokeProcessIdentity[] = [];
+	// Capture descendants, then stop and reap tracked callers before reading
+	// durable state. A caller can acknowledge a worker until it fully exits.
+	for (const { child } of running) {
+		if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+			continue;
+		}
+		try {
+			descendantProcesses.push(...readDescendantProcesses(child.pid));
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+	}
 	for (const { child, detached } of running) {
 		if (child.exitCode !== null || child.signalCode !== null) continue;
 		try {
 			if (detached) process.kill(-requiredPid(child), "SIGKILL");
 			else child.kill("SIGKILL");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+				cleanupErrors.push(error);
+			}
 		}
 	}
-	await Promise.all(running.map(({ child }) => waitForChildClose(child)));
-	await Promise.all(
-		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-	);
+	for (const result of await Promise.allSettled(
+		running.map(({ child }) => waitForChildClose(child)),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled([
+		...fixtureStateRoots.map((stateRoot) => terminateFixtureWorkers(stateRoot)),
+		...descendantProcesses.map(({ pid, identity }) =>
+			terminateMatchingWorkerGroup(pid, identity),
+		),
+	])) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled(
+		fixtureRoots.map((root) => rm(root, { recursive: true, force: true })),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	if (cleanupErrors.length > 0) {
+		throw new AggregateError(cleanupErrors, "smoke fixture cleanup failed");
+	}
+}
+
+async function terminateFixtureWorkers(stateRoot: string): Promise<void> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	for (const repository of await readdir(managerRoot).catch(() => [])) {
+		for (const family of ["tasks", "doctor-tasks"] as const) {
+			const familyRoot = join(managerRoot, repository, family);
+			for (const taskId of await readdir(familyRoot).catch(() => [])) {
+				if (!/^(?:task|doctor_task)_[0-9a-f]{32}$/u.test(taskId)) continue;
+				const worker = await readLatestWorkerRevision(
+					join(familyRoot, taskId, "history"),
+					taskId,
+				);
+				if (worker === null) continue;
+				await terminateMatchingWorkerGroup(worker.pid, worker.identity);
+			}
+		}
+	}
+}
+
+async function readLatestWorkerRevision(
+	historyRoot: string,
+	expectedTaskId: string,
+): Promise<{ readonly pid: number; readonly identity: string } | null> {
+	const latest = (await readdir(historyRoot).catch(() => []))
+		.filter((name) => /^\d{12}\.json$/u.test(name))
+		.sort()
+		.at(-1);
+	if (!latest) return null;
+	const source = await readFile(join(historyRoot, latest), "utf8").catch(() => "");
+	if (!source) return null;
+	try {
+		const record = JSON.parse(source) as Record<string, unknown>;
+		if (
+			record.taskId !== expectedTaskId ||
+			typeof record.workerPid !== "number" ||
+			!Number.isSafeInteger(record.workerPid) ||
+			record.workerPid <= 0 ||
+			typeof record.workerProcessIdentity !== "string" ||
+			!/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity)
+		) {
+			return null;
+		}
+		return {
+			pid: record.workerPid,
+			identity: record.workerProcessIdentity,
+		};
+	} catch {
+		return null;
+	}
+}
+
+async function terminateMatchingWorkerGroup(
+	pid: number,
+	expectedIdentity: string,
+): Promise<"terminated" | "absent" | "mismatch"> {
+	const firstObservation = observeWorkerProcess(pid, expectedIdentity);
+	if (firstObservation !== "matching") return firstObservation;
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		const afterRace = observeWorkerProcess(pid, expectedIdentity);
+		if (afterRace !== "matching") return afterRace;
+		process.kill(pid, "SIGKILL");
+	}
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const observation = observeWorkerProcess(pid, expectedIdentity);
+		if (observation === "absent" || observation === "mismatch") {
+			return "terminated";
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error(`fixture worker ${pid} survived cleanup`);
+}
+
+function observeWorkerProcess(
+	pid: number,
+	expectedIdentity: string,
+): "matching" | "absent" | "mismatch" {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		throw error;
+	}
+	try {
+		return readVaultGitProcessIdentity(pid) === expectedIdentity
+			? "matching"
+			: "mismatch";
+	} catch (error) {
+		try {
+			process.kill(pid, 0);
+		} catch (livenessError) {
+			if ((livenessError as NodeJS.ErrnoException).code === "ESRCH") {
+				return "absent";
+			}
+			throw livenessError;
+		}
+		throw error;
+	}
+}
+
+function readDescendantProcesses(rootPid: number): readonly SmokeProcessIdentity[] {
+	const result = spawnSync("ps", ["-axo", "pid=,ppid="], {
+		encoding: "utf8",
+		env: { ...process.env, LC_ALL: "C" },
+	});
+	if (result.status !== 0) {
+		throw new Error(result.stderr || "failed to inspect smoke process tree");
+	}
+	const childrenByParent = new Map<number, number[]>();
+	for (const line of result.stdout.split("\n")) {
+		const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+		if (!match) continue;
+		const pid = Number(match[1]);
+		const parentPid = Number(match[2]);
+		const children = childrenByParent.get(parentPid) ?? [];
+		children.push(pid);
+		childrenByParent.set(parentPid, children);
+	}
+	const descendants: SmokeProcessIdentity[] = [];
+	const pending = [...(childrenByParent.get(rootPid) ?? [])];
+	while (pending.length > 0) {
+		const pid = pending.shift();
+		if (pid === undefined) continue;
+		pending.push(...(childrenByParent.get(pid) ?? []));
+		try {
+			descendants.push({ pid, identity: readVaultGitProcessIdentity(pid) });
+		} catch {
+			// The descendant exited between the process-tree and identity reads.
+		}
+	}
+	return descendants;
 }
 
 function trackSmokeChild(child: ChildProcess, detached: boolean): ChildProcess {
@@ -569,9 +790,17 @@ function requiredPid(child: ChildProcess): number {
 
 async function waitForChildClose(child: ChildProcess): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
-	await new Promise<void>((resolveChild) =>
-		child.once("close", () => resolveChild()),
-	);
+	await new Promise<void>((resolveChild, rejectChild) => {
+		const onClose = () => {
+			clearTimeout(timeout);
+			resolveChild();
+		};
+		const timeout = setTimeout(() => {
+			child.off("close", onClose);
+			rejectChild(new Error(`smoke process ${child.pid ?? "unknown"} did not exit`));
+		}, 5_000);
+		child.once("close", onClose);
+	});
 }
 
 /**

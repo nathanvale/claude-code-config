@@ -1569,7 +1569,7 @@ function localCommitProbe(repository: FakeRepository): VaultGitRepositoryPort["i
 	Object.assign(repository, {
 		async commitExact(request: Parameters<NonNullable<VaultGitRepositoryPort["commitExact"]>>[0]) {
 			message = request.message;
-			return committed(request);
+			return committed();
 		},
 	});
 	return async (commitId: string) => ({
