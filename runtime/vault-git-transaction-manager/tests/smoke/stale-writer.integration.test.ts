@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -121,6 +121,92 @@ describe("row 10: takeover fences the prior writer", () => {
 			continuation: { next_action_id: "none" },
 		});
 		assertRefsUnchanged(settled, fixture.snapshot());
+
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "smoke-vault",
+		});
+		expect(await store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+			transactionId,
+		});
+	});
+
+	test("recovers staged-only admitted-new evidence after unrelated main advances", async () => {
+		const fixture = await mkSmokeFixture({ leaseDurationMs: 1 });
+		const ownedPath = "notes/recovered-after-quarantine.md";
+		const unrelatedPath = "notes/unrelated-main-advance.md";
+		const preservedBytes = "preserve these staged-only bytes\n";
+		const transactionId = await fixture.begin(ownedPath);
+		await writeFile(join(fixture.clone, ownedPath), preservedBytes);
+		fixture.git("add", "--", ownedPath);
+		await rm(join(fixture.clone, ownedPath));
+
+		const takeover = await fixture.run([
+			"repair",
+			"stale-lease-takeover",
+			"--transaction-id",
+			transactionId,
+			"--prior-writer-stopped",
+			"--json",
+		]);
+		expect(takeover.exitCode).toBe(0);
+
+		await writeFile(join(fixture.clone, unrelatedPath), "later aligned work\n");
+		fixture.git("add", "--", unrelatedPath);
+		fixture.git(
+			"commit",
+			"--only",
+			"-m",
+			"docs: advance main without settling quarantined work",
+			"--",
+			unrelatedPath,
+		);
+		fixture.git("push", "origin", "HEAD:refs/heads/main");
+		const settled = fixture.snapshot();
+		const unrelatedBefore = await Promise.all(
+			["staged.md", "unstaged.md", "untracked.md"].map((path) =>
+				readFile(join(fixture.clone, path), "hex"),
+			),
+		);
+
+		const recovered = await fixture.run([
+			"repair",
+			"reconcile-quarantine",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		]);
+		expect(recovered.exitCode).toBe(0);
+		expect(parseCliProcessJson(recovered)).toMatchObject({
+			status: "ok",
+			data: {
+				outcome: "repaired",
+				transaction_state: "closed",
+				changed_state: "local",
+			},
+		});
+		expect(await readFile(join(fixture.clone, ownedPath), "utf8")).toBe(
+			preservedBytes,
+		);
+		expect(
+			fixture.git("diff", "--cached", "--name-only", "--", ownedPath),
+		).toBe("");
+		expect(fixture.git("status", "--porcelain=v1", "--", ownedPath)).toBe(
+			`?? ${ownedPath}`,
+		);
+		const afterRecovery = fixture.snapshot();
+		expect(afterRecovery.localMain).toBe(settled.localMain);
+		expect(afterRecovery.remoteMain).toBe(settled.remoteMain);
+		expect(afterRecovery.ledgerTip).toBe(settled.ledgerTip);
+		expect(afterRecovery.remoteRefs).toBe(settled.remoteRefs);
+		expect(
+			await Promise.all(
+				["staged.md", "unstaged.md", "untracked.md"].map((path) =>
+					readFile(join(fixture.clone, path), "hex"),
+				),
+			),
+		).toEqual(unrelatedBefore);
 
 		const store = createReceiptStore({
 			stateRoot: fixture.stateRoot,

@@ -3,6 +3,7 @@ import type {
 	VaultGitActivationConfigurationField,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
+	VaultGitStagedRecoveryPlan,
 	VaultGitStateSnapshot,
 	VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
@@ -427,6 +428,16 @@ export interface VaultGitOwnedPathContentHash {
 	readonly contentHash: string | null;
 }
 
+/** Read-only preparation outcome for one staged-only quarantine recovery. */
+export type VaultGitStagedRecoveryPreparation =
+	| { readonly status: "ready"; readonly plan: VaultGitStagedRecoveryPlan }
+	| { readonly status: "refused"; readonly reason: "mismatch" | "timed_out" };
+
+/** Idempotent mutation outcome for one durable staged recovery plan. */
+export type VaultGitStagedRecoveryApplication =
+	| { readonly status: "recovered" }
+	| { readonly status: "refused"; readonly reason: "mismatch" | "timed_out" };
+
 /** Input for one exact local event commit. */
 export interface VaultGitExactCommitRequest {
 	/** Exact local main object admitted at begin. */
@@ -523,6 +534,14 @@ export interface VaultGitRepositoryPort {
 		ancestor: string,
 		descendant: string,
 	) => Promise<"ancestor" | "not_ancestor" | "failed" | "timed_out">;
+	/** Freeze exact staged additions before durable recovery intent is recorded. */
+	readonly prepareStagedRecovery?: (
+		ownedPaths: readonly VaultGitOwnedPathReceipt[],
+	) => Promise<VaultGitStagedRecoveryPreparation>;
+	/** Materialize and unstage only the entries named by a durable recovery plan. */
+	readonly applyStagedRecovery?: (
+		plan: VaultGitStagedRecoveryPlan,
+	) => Promise<VaultGitStagedRecoveryApplication>;
 	/** Build, verify, and install one exact local event commit. */
 	readonly commitExact?: (
 		request: VaultGitExactCommitRequest,

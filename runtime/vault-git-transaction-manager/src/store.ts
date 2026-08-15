@@ -33,6 +33,7 @@ import {
 	type VaultGitCheckerAdmissionRecord,
 	type VaultGitPrivateHygieneResult,
 	type VaultGitReceipt,
+	type VaultGitStagedRecoveryPlan,
 } from "./model.ts";
 
 /**
@@ -211,8 +212,8 @@ export interface VaultGitDoctorProof {
 	readonly issuedAt: string;
 }
 
-/** Append-only host quarantine transition. */
-export interface VaultGitQuarantineRecord {
+/** Fields shared by every append-only host quarantine transition. */
+interface VaultGitQuarantineRecordBase {
 	/** Superseded transaction correlation. */
 	readonly transactionId: string;
 	/** Superseded fencing generation. */
@@ -224,10 +225,21 @@ export interface VaultGitQuarantineRecord {
 	 * proven remote; doctor reconciles it against the observed ledger
 	 * generation before any host write authority returns.
 	 */
-	readonly status: "takeover_pending" | "quarantined" | "reconciled";
 	/** Injected transition timestamp. */
 	readonly recordedAt: string;
 }
+
+/** Append-only host quarantine transition. */
+export type VaultGitQuarantineRecord =
+	| (VaultGitQuarantineRecordBase & {
+			readonly status: "takeover_pending" | "quarantined" | "reconciled";
+	  })
+	| (VaultGitQuarantineRecordBase & {
+			/** Recovery intent persisted before any canonical worktree or index mutation. */
+			readonly status: "recovery_pending";
+			/** Exact staged blobs and unrelated-state fence required for restart. */
+			readonly recoveryPlan: VaultGitStagedRecoveryPlan;
+	  });
 
 /** Valid receipt state loaded from private storage. */
 export interface VaultGitReceiptLoaded {
@@ -1562,23 +1574,61 @@ async function unlinkPrivateFile(path: string): Promise<void> {
 function validateQuarantineRecord(
 	value: unknown,
 ): asserts value is VaultGitQuarantineRecord {
+	const recoveryPending =
+		isRecord(value) && value.status === "recovery_pending";
 	if (
 		!isRecord(value) ||
-		!hasExactKeys(value, [
-			"transactionId",
-			"ledgerGeneration",
-			"status",
-			"recordedAt",
-		]) ||
+		!hasExactKeys(
+			value,
+			recoveryPending
+				? [
+						"transactionId",
+						"ledgerGeneration",
+						"status",
+						"recordedAt",
+						"recoveryPlan",
+					]
+				: ["transactionId", "ledgerGeneration", "status", "recordedAt"],
+		) ||
 		!isTransactionId(value.transactionId) ||
 		!isObjectId(value.ledgerGeneration) ||
 		(value.status !== "takeover_pending" &&
 			value.status !== "quarantined" &&
+			value.status !== "recovery_pending" &&
 			value.status !== "reconciled") ||
-		!isIso(value.recordedAt)
+		!isIso(value.recordedAt) ||
+		(recoveryPending && !isStagedRecoveryPlan(value.recoveryPlan))
 	) {
 		throw new Error("quarantine record invalid");
 	}
+}
+
+function isStagedRecoveryPlan(value: unknown): value is VaultGitStagedRecoveryPlan {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, ["baselineHead", "unrelatedState", "entries"]) ||
+		!isObjectId(value.baselineHead) ||
+		!isUnrelatedState(value.unrelatedState) ||
+		!Array.isArray(value.entries) ||
+		value.entries.length === 0
+	) {
+		return false;
+	}
+	const paths = new Set<string>();
+	for (const entry of value.entries) {
+		if (
+			!isRecord(entry) ||
+			!hasExactKeys(entry, ["path", "objectId", "mode"]) ||
+			!isOwnedPath(entry.path) ||
+			!isObjectId(entry.objectId) ||
+			(entry.mode !== "100644" && entry.mode !== "100755") ||
+			paths.has(entry.path)
+		) {
+			return false;
+		}
+		paths.add(entry.path);
+	}
+	return true;
 }
 
 function isHexDigest(value: unknown): value is string {

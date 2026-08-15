@@ -645,10 +645,55 @@ async function reconcileQuarantine(
 	const marker = await options.store.readQuarantine().catch(() => null);
 	if (
 		!marker ||
-		marker.status !== "quarantined" ||
+		(marker.status !== "quarantined" && marker.status !== "recovery_pending") ||
 		marker.transactionId !== input.transactionId
 	) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+	}
+	let recoveryPlan =
+		marker.status === "recovery_pending" ? marker.recoveryPlan : null;
+	if (
+		recoveryPlan === null &&
+		options.repository.prepareStagedRecovery &&
+		options.repository.applyStagedRecovery
+	) {
+		const prepared = await options.repository.prepareStagedRecovery(
+			receipt.ownedPaths,
+		);
+		if (prepared.status === "ready") {
+			recoveryPlan = prepared.plan;
+			try {
+				await options.store.recordQuarantine({
+					transactionId: marker.transactionId,
+					ledgerGeneration: marker.ledgerGeneration,
+					status: "recovery_pending",
+					recordedAt: options.runtime.now().toISOString(),
+					recoveryPlan,
+				});
+			} catch {
+				return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+			}
+		}
+	}
+	if (recoveryPlan !== null) {
+		if (!options.repository.applyStagedRecovery) {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		}
+		const recovered = await options.repository.applyStagedRecovery(recoveryPlan);
+		if (recovered.status !== "recovered") {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics, "partial");
+		}
+		try {
+			await options.store.recordQuarantine({
+				transactionId: marker.transactionId,
+				ledgerGeneration: marker.ledgerGeneration,
+				status: "reconciled",
+				recordedAt: options.runtime.now().toISOString(),
+			});
+		} catch {
+			return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+		}
+		return repaired(input.action, "closed", receipt.phase, "local", "none", summaries.none, diagnostics);
 	}
 	const identity = await options.repository.resolveCanonicalIdentity().catch(() => null);
 	if (!identity) {

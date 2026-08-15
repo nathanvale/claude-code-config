@@ -5,6 +5,8 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
 	VAULT_GIT_LEDGER_REF,
+	type VaultGitStagedRecoveryEntry,
+	type VaultGitStagedRecoveryPlan,
 	type VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
 import {
@@ -849,6 +851,186 @@ export function createGitRepositoryAdapter(
 		return hashes;
 	};
 
+	const hashRecoveryPath = async (path: string): Promise<string | null> => {
+		const metadata = await lstat(resolve(options.repositoryPath, path)).catch(
+			(error: unknown) =>
+				isMissingFilesystemEntry(error) ? null : Promise.reject(error),
+		);
+		if (metadata === null) return null;
+		if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
+		const hashed = await runGit(["hash-object", "--", path]);
+		if (hashed.timedOut || hashed.exitCode !== 0) {
+			throw new Error("could not hash staged recovery path");
+		}
+		return requireObjectId(hashed.stdout, "staged recovery content");
+	};
+
+	const prepareStagedRecovery = async (
+		ownedPaths: readonly import("./model.ts").VaultGitOwnedPathReceipt[],
+	) => {
+		try {
+			if (
+				ownedPaths.length === 0 ||
+				ownedPaths.some(
+					(entry) => !entry.admittedNewFile || entry.baselineHash !== null,
+				)
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const head = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (head.timedOut) {
+				return { status: "refused", reason: "timed_out" } as const;
+			}
+			if (head.exitCode !== 0) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const baselineHead = requireObjectId(head.stdout, "staged recovery main");
+			const entries: VaultGitStagedRecoveryEntry[] = [];
+			for (const ownedPath of [...ownedPaths].sort((left, right) =>
+				left.path.localeCompare(right.path),
+			)) {
+				if (!(await isSafeOwnedPath(options.repositoryPath, ownedPath.path))) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				if ((await readTreeEntry(runGit, baselineHead, ownedPath.path)) !== null) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const indexEntry = await readIndexEntry(runGit, ownedPath.path);
+				if (
+					indexEntry === null ||
+					(indexEntry.mode !== "100644" && indexEntry.mode !== "100755")
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const worktreeHash = await hashRecoveryPath(ownedPath.path);
+				if (worktreeHash !== null && worktreeHash !== indexEntry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				entries.push({
+					path: ownedPath.path,
+					objectId: indexEntry.objectId,
+					mode: indexEntry.mode,
+				});
+			}
+			return {
+				status: "ready",
+				plan: {
+					baselineHead,
+					unrelatedState: await captureUnrelatedState(
+						entries.map((entry) => entry.path),
+					),
+					entries,
+				},
+			} as const;
+		} catch {
+			return { status: "refused", reason: "mismatch" } as const;
+		}
+	};
+
+	const applyStagedRecovery = async (plan: VaultGitStagedRecoveryPlan) => {
+		try {
+			if (plan.entries.length === 0) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const head = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (head.timedOut) {
+				return { status: "refused", reason: "timed_out" } as const;
+			}
+			if (
+				head.exitCode !== 0 ||
+				requireObjectId(head.stdout, "staged recovery main") !== plan.baselineHead
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const paths = plan.entries.map((entry) => entry.path);
+			if (
+				JSON.stringify(await captureUnrelatedState(paths)) !==
+				JSON.stringify(plan.unrelatedState)
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const checkoutPaths: string[] = [];
+			for (const entry of plan.entries) {
+				if (
+					!(await isSafeOwnedPath(options.repositoryPath, entry.path)) ||
+					(await readTreeEntry(runGit, plan.baselineHead, entry.path)) !== null
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const indexEntry = await readIndexEntry(runGit, entry.path);
+				if (
+					indexEntry !== null &&
+					(indexEntry.objectId !== entry.objectId || indexEntry.mode !== entry.mode)
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const worktreeHash = await hashRecoveryPath(entry.path);
+				if (worktreeHash !== null && worktreeHash !== entry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				if (indexEntry !== null) checkoutPaths.push(entry.path);
+				else if (worktreeHash !== entry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+			}
+			if (checkoutPaths.length > 0) {
+				const checkout = await runGit(
+					["checkout-index", "--force", "-z", "--stdin"],
+					`${checkoutPaths.join("\0")}\0`,
+				);
+				if (checkout.timedOut) {
+					return { status: "refused", reason: "timed_out" } as const;
+				}
+				if (checkout.exitCode !== 0) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+			}
+			for (const entry of plan.entries) {
+				if ((await hashRecoveryPath(entry.path)) !== entry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+			}
+			const reset = await runGit([
+				"reset",
+				"--quiet",
+				plan.baselineHead,
+				"--",
+				...paths.map(literalPathspec),
+			]);
+			if (reset.timedOut) {
+				return { status: "refused", reason: "timed_out" } as const;
+			}
+			if (reset.exitCode !== 0) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			for (const entry of plan.entries) {
+				if (
+					(await readIndexEntry(runGit, entry.path)) !== null ||
+					(await hashRecoveryPath(entry.path)) !== entry.objectId
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+			}
+			if (
+				JSON.stringify(await captureUnrelatedState(paths)) !==
+				JSON.stringify(plan.unrelatedState)
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			return { status: "recovered" } as const;
+		} catch {
+			return { status: "refused", reason: "mismatch" } as const;
+		}
+	};
+
 	return {
 		async inspectSafety() {
 			const hooksPath = await inspectLocalConfig([
@@ -1101,6 +1283,10 @@ export function createGitRepositoryAdapter(
 		captureUnrelatedState,
 
 		hashOwnedPaths,
+
+		prepareStagedRecovery,
+
+		applyStagedRecovery,
 
 		async inspectCommitAncestry(ancestor, descendant) {
 			if (
@@ -1818,6 +2004,48 @@ interface TreeEntry {
 	readonly mode: string;
 	readonly objectId: string;
 	readonly path: string;
+}
+
+async function readIndexEntry(
+	runGit: (
+		args: readonly string[],
+		input?: string,
+		env?: Readonly<Record<string, string>>,
+	) => Promise<VaultGitProcessResult>,
+	path: string,
+): Promise<TreeEntry | null> {
+	const result = await runGit([
+		"ls-files",
+		"--stage",
+		"-z",
+		"--",
+		literalPathspec(path),
+	]);
+	if (result.timedOut || result.exitCode !== 0) {
+		throw new Error("could not inspect staged recovery index entry");
+	}
+	const records = splitNul(result.stdout);
+	if (records.length === 0) return null;
+	if (records.length !== 1) {
+		throw new Error("staged recovery index entry is unmerged");
+	}
+	const record = records[0];
+	const separator = record?.indexOf("\t") ?? -1;
+	if (separator < 0 || !record) {
+		throw new Error("staged recovery index entry is malformed");
+	}
+	const [mode, objectId, stage] = record.slice(0, separator).split(" ");
+	const entryPath = record.slice(separator + 1);
+	if (
+		!mode ||
+		!objectId ||
+		!/^[0-9a-f]{40,64}$/.test(objectId) ||
+		stage !== "0" ||
+		entryPath !== path
+	) {
+		throw new Error("staged recovery index entry is malformed");
+	}
+	return { mode, objectId, path: entryPath };
 }
 
 async function readTreeEntry(

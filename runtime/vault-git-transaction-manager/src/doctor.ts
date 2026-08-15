@@ -203,7 +203,10 @@ export async function diagnoseVaultGitTransaction(
 	if (quarantine?.status === "takeover_pending") {
 		return reconcileInterruptedTakeover(options, quarantine);
 	}
-	if (quarantine?.status === "quarantined") {
+	if (
+		quarantine?.status === "quarantined" ||
+		quarantine?.status === "recovery_pending"
+	) {
 		return report("superseded", "human_required", "host_quarantined", "operator_required", "reconcile_quarantine", summaries.reconcile, diagnosticsReference, {
 			blocker: "host_quarantined",
 			repairAction: "reconcile-quarantine",

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -470,6 +470,94 @@ describe("deterministic push_pending repair", () => {
 		});
 	});
 
+	test("resumes staged-only recovery after terminal quarantine publication is lost", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const takeover = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
+
+		rmSync(join(fixture.clone, "candidate.md"));
+		writeFileSync(join(fixture.clone, "later.md"), "later aligned work\n");
+		git(fixture.clone, "add", "--", "later.md");
+		git(
+			fixture.clone,
+			"commit",
+			"--only",
+			"-m",
+			"docs: advance without staged candidate",
+			"--",
+			"later.md",
+		);
+		git(fixture.clone, "push", "origin", "HEAD:refs/heads/main");
+
+		const interruptedRepository = {
+			...fixture.repository,
+			applyStagedRecovery: async (
+				plan: Parameters<
+					NonNullable<typeof fixture.repository.applyStagedRecovery>
+				>[0],
+			) => {
+				const result = await fixture.repository.applyStagedRecovery?.(plan);
+				return result?.status === "recovered"
+					? ({ status: "refused", reason: "mismatch" } as const)
+					: (result ?? ({ status: "refused", reason: "mismatch" } as const));
+			},
+		};
+		const interruptedRepair = createVaultGitRepair({
+			...fixture.options,
+			repository: interruptedRepository,
+		});
+		const interrupted = await interruptedRepair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(interrupted).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "partial",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "recovery_pending",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(join(fixture.clone, "candidate.md"), "utf8")).toBe(
+			"candidate\n",
+		);
+		expect(git(fixture.clone, "diff", "--cached", "--name-only", "--", "candidate.md")).toBe("");
+
+		const resumed = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(resumed).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			changedState: "local",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(join(fixture.clone, "candidate.md"), "utf8")).toBe(
+			"candidate\n",
+		);
+	});
+
 	test("refuses a stale doctor proof after owned content changes", async () => {
 		const fixture = await repairFixture("host-a", "stale");
 		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
@@ -640,6 +728,8 @@ async function repairFixture(
 		releaseCommit,
 		transactionId,
 		ownerCapability,
+		repository,
+		options,
 		store,
 		doctor: createVaultGitDoctor(options),
 		repair: createVaultGitRepair(options),

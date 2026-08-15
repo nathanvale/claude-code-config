@@ -87,6 +87,42 @@ describe("private receipt store", () => {
 		expect(calls).toEqual([...linkedFile("history"), ...renamedFile("current")]);
 	});
 
+	test("persists an exact restart-safe staged recovery plan before repository mutation", async () => {
+		const root = await fixtureRoot();
+		const calls: PortCall[] = [];
+		const store = createReceiptStore({
+			stateRoot: root,
+			repositoryIdentity: "vault@example",
+			durability: recordingPort(calls),
+		});
+		const recoveryPlan = {
+			baselineHead: "b".repeat(40),
+			unrelatedState: { statusHex: "", indexHex: "" },
+			entries: [
+				{
+					path: "notes/example.md",
+					objectId: "c".repeat(40),
+					mode: "100644" as const,
+				},
+			],
+		};
+		await store.recordQuarantine({
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			status: "recovery_pending",
+			recordedAt: "2026-08-09T00:00:00.000Z",
+			recoveryPlan,
+		});
+		expect(calls).toEqual(linkedFile("quarantine"));
+		expect(await store.readQuarantine()).toEqual({
+			transactionId: `txn_${"1".repeat(32)}`,
+			ledgerGeneration: "a".repeat(40),
+			status: "recovery_pending",
+			recordedAt: "2026-08-09T00:00:00.000Z",
+			recoveryPlan,
+		});
+	});
+
 	test("initialize interrupted before any durability phase leaves absent or readable state", async () => {
 		const complete: PortCall[] = [];
 		const baselineRoot = await fixtureRoot();

@@ -317,6 +317,26 @@ export interface VaultGitUnrelatedStateSnapshot {
 	readonly indexHex: string;
 }
 
+/** One staged blob preserved while a superseded transaction is quarantined. */
+export interface VaultGitStagedRecoveryEntry {
+	/** Repository-relative admitted-new leaf path. */
+	readonly path: string;
+	/** Exact stage-zero blob object retained by the canonical index. */
+	readonly objectId: string;
+	/** Regular-file mode retained by the canonical index. */
+	readonly mode: "100644" | "100755";
+}
+
+/** Durable plan that makes staged-only quarantine recovery restart-safe. */
+export interface VaultGitStagedRecoveryPlan {
+	/** Exact aligned main head whose tree keeps every recovered path absent. */
+	readonly baselineHead: string;
+	/** Exact unrelated worktree and index state protected during recovery. */
+	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
+	/** Sorted staged additions to materialize before resetting their index entries. */
+	readonly entries: readonly VaultGitStagedRecoveryEntry[];
+}
+
 /** Durable atomic-publication observation. */
 export type VaultGitPushOutcome =
 	| "not_attempted"
