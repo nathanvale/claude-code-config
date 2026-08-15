@@ -236,6 +236,13 @@
         "typescript": "catalog:",
       },
     },
+    "skills/gog-inbox-cleanup": {
+      "name": "gog-inbox-cleanup-scripts",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "skills/record-decision": {
       "name": "record-decision-scripts",
       "version": "0.0.0",
@@ -395,6 +402,8 @@
     "fallow-scripts": ["fallow-scripts@workspace:skills/fallow"],
 
     "get-caller-file": ["get-caller-file@2.0.5", "", {}, "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="],
+
+    "gog-inbox-cleanup-scripts": ["gog-inbox-cleanup-scripts@workspace:skills/gog-inbox-cleanup"],
 
     "is-fullwidth-code-point": ["is-fullwidth-code-point@3.0.0", "", {}, "sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg=="],
 
