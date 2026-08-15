@@ -35,11 +35,18 @@ const stateRoots: string[] = [];
 
 /** Terminate matching detached workers, then remove every disposable real-Git root. @internal */
 export async function cleanupLiveAcceptanceRoots(): Promise<void> {
-	await Promise.all(
-		stateRoots.splice(0).map((stateRoot) => terminateFixtureWorkers(stateRoot)),
-	);
-	await Promise.all(
-		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+	const trackedStateRoots = stateRoots.splice(0);
+	const trackedRoots = roots.splice(0);
+	await settleFixtureCleanup(
+		() => settleCleanupOperations(
+			trackedStateRoots.map((stateRoot) => terminateFixtureWorkers(stateRoot)),
+			"live-acceptance worker cleanup failed",
+		),
+		() => settleCleanupOperations(
+			trackedRoots.map((root) => rm(root, { recursive: true, force: true })),
+			"live-acceptance root cleanup failed",
+		),
+		"live-acceptance fixture cleanup failed",
 	);
 }
 
@@ -174,6 +181,7 @@ export async function createStateIsolatedFixture(
 	if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
 		throw new Error("state-isolated fixture ordinal must be a non-negative integer");
 	}
+	await assertFixtureStateQuiescent(fixture.stateRoot);
 	const name = `state-isolated-${ordinal}`;
 	const stateRoot = join(fixture.root, `${name}-state`);
 	const shimMarker = join(fixture.root, `${name}-shim-marker`);
@@ -183,6 +191,12 @@ export async function createStateIsolatedFixture(
 		force: false,
 		errorOnExist: true,
 	});
+	try {
+		await assertFixtureStateQuiescent(stateRoot);
+	} catch (error) {
+		await rm(stateRoot, { recursive: true, force: true });
+		throw error;
+	}
 	stateRoots.push(stateRoot);
 	const env: NodeJS.ProcessEnv = {
 		...fixture.env,
@@ -503,9 +517,52 @@ async function createCloneFixture(
 }
 
 async function cleanupFixtureState(stateRoot: string): Promise<void> {
-	await terminateFixtureWorkers(stateRoot);
-	removeTrackedPath(stateRoots, stateRoot);
-	await rm(stateRoot, { recursive: true, force: true });
+	await settleFixtureCleanup(
+		() => terminateFixtureWorkers(stateRoot),
+		async () => {
+			await rm(stateRoot, { recursive: true, force: true });
+			removeTrackedPath(stateRoots, stateRoot);
+		},
+		"state-isolated fixture cleanup failed",
+	);
+}
+
+/** Run root removal even when worker cleanup fails, then preserve every failure. @internal */
+export async function settleFixtureCleanup(
+	terminateWorkers: () => Promise<void>,
+	removeRoots: () => Promise<void>,
+	message: string,
+): Promise<void> {
+	const failures: unknown[] = [];
+	try {
+		await terminateWorkers();
+	} catch (error) {
+		failures.push(error);
+	}
+	try {
+		await removeRoots();
+	} catch (error) {
+		failures.push(error);
+	}
+	throwCleanupFailures(failures, message);
+}
+
+async function settleCleanupOperations(
+	operations: readonly Promise<unknown>[],
+	message: string,
+): Promise<void> {
+	const failures = (await Promise.allSettled(operations))
+		.filter(
+			(result): result is PromiseRejectedResult => result.status === "rejected",
+		)
+		.map((result) => result.reason);
+	throwCleanupFailures(failures, message);
+}
+
+function throwCleanupFailures(failures: readonly unknown[], message: string): void {
+	if (failures.length === 0) return;
+	if (failures.length === 1) throw failures[0];
+	throw new AggregateError(failures, message);
 }
 
 function removeTrackedPath(paths: string[], target: string): void {
@@ -678,6 +735,7 @@ export async function readTaskStates(
 		state: string;
 		phase: string;
 		workerPid: number | null;
+		workerProcessIdentity: string | null;
 	}[]
 > {
 	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
@@ -689,6 +747,7 @@ export async function readTaskStates(
 			state: string;
 			phase: string;
 			workerPid: number | null;
+			workerProcessIdentity: string | null;
 		}[] = [];
 		for (const repository of repositories) {
 			const tasks = join(managerRoot, repository, "tasks");
@@ -702,6 +761,7 @@ export async function readTaskStates(
 					state: record.state,
 					phase: record.phase,
 					workerPid: record.workerPid,
+					workerProcessIdentity: record.workerProcessIdentity,
 				});
 			}
 		}
@@ -835,6 +895,29 @@ async function terminateFixtureWorkers(stateRoot: string): Promise<void> {
 	}
 }
 
+async function assertFixtureStateQuiescent(stateRoot: string): Promise<void> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	for (const repository of await readdir(managerRoot).catch(() => [])) {
+		for (const family of ["tasks", "doctor-tasks"] as const) {
+			const tasks = join(managerRoot, repository, family);
+			for (const taskId of await readdir(tasks).catch(() => [])) {
+				const record = await readLatestTaskRevision(
+					join(tasks, taskId, "history"),
+				);
+				if (
+					record?.workerPid !== null &&
+					record?.workerPid !== undefined &&
+					record.workerProcessIdentity !== null
+				) {
+					throw new Error(
+						"state-isolated fixture source must be quiescent before copying",
+					);
+				}
+			}
+		}
+	}
+}
+
 async function terminateMatchingWorkerGroup(
 	pid: number,
 	expectedIdentity: string,
@@ -911,7 +994,8 @@ export async function killWorkerForTask(
 	throw new Error("durable worker pid survived SIGKILL");
 }
 
-function observeWorkerProcess(
+/** Observe whether an exact fixture worker identity still owns its recorded pid. @internal */
+export function observeWorkerProcess(
 	pid: number,
 	expectedIdentity: string,
 ): "matching" | "absent" | "mismatch" {

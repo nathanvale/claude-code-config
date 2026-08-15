@@ -11,6 +11,7 @@ import {
 } from "./manifest.ts";
 
 const packageRoot = resolve(import.meta.dir, "../..");
+const workflowTimeoutMs = 180_000;
 const receiptRoot = await mkdtemp(join(tmpdir(), "vault-git-pr-acceptance-"));
 const results: {
 	readonly id: string;
@@ -37,7 +38,13 @@ try {
 				"--reporter=junit",
 				`--reporter-outfile=${receiptPath}`,
 			],
-			{ cwd: packageRoot, stdout: "pipe", stderr: "pipe" },
+			{
+				cwd: packageRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: workflowTimeoutMs,
+				killSignal: "SIGKILL",
+			},
 		);
 		const durationMs = Math.round(performance.now() - startedAt);
 		const receipt = await readFile(receiptPath, "utf8").catch(() => "");
@@ -51,7 +58,7 @@ try {
 			process.stderr.write(child.stdout.toString());
 			process.stderr.write(child.stderr.toString());
 			throw new Error(
-				`${workflow.id}: exit=${child.exitCode}; expected=${expectedRows.length}; observed=${observedRows.length}`,
+				`${workflow.id}: exit=${child.exitCode}; exitedDueToTimeout=${child.exitedDueToTimeout}; timeoutMs=${workflowTimeoutMs}; expected=${expectedRows.length}; observed=${observedRows.length}`,
 			);
 		}
 		results.push({

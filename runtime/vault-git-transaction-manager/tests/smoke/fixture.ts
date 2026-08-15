@@ -399,8 +399,12 @@ async function mkSmokeClone(
 				worker.pid,
 				worker.identity,
 			);
-			if (termination === "mismatch") {
-				throw new Error("durable worker process identity did not match");
+			if (termination !== "terminated") {
+				throw new Error(
+					termination === "mismatch"
+						? "durable worker process identity did not match"
+						: "durable worker process was absent before interruption",
+				);
 			}
 		},
 		prepareAtInterrupt: async (args: readonly string[], point: string) => {
@@ -586,33 +590,55 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
  * Rows call this from `afterEach` so no row inherits another row's state.
  */
 export async function cleanupSmokeFixtures(): Promise<void> {
-	await Promise.all(
-		stateRoots.splice(0).map((stateRoot) => terminateFixtureWorkers(stateRoot)),
-	);
+	const fixtureStateRoots = stateRoots.splice(0);
+	const fixtureRoots = roots.splice(0);
+	const cleanupErrors: unknown[] = [];
 	const running = [...children];
-	const descendantProcesses = running.flatMap(({ child }) =>
-		child.exitCode === null && child.signalCode === null && child.pid !== undefined
-			? readDescendantProcesses(child.pid)
-			: [],
-	);
+	const descendantProcesses: SmokeProcessIdentity[] = [];
+	// Capture descendants, then stop and reap tracked callers before reading
+	// durable state. A caller can acknowledge a worker until it fully exits.
+	for (const { child } of running) {
+		if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+			continue;
+		}
+		try {
+			descendantProcesses.push(...readDescendantProcesses(child.pid));
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+	}
 	for (const { child, detached } of running) {
 		if (child.exitCode !== null || child.signalCode !== null) continue;
 		try {
 			if (detached) process.kill(-requiredPid(child), "SIGKILL");
 			else child.kill("SIGKILL");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+				cleanupErrors.push(error);
+			}
 		}
 	}
-	await Promise.all(running.map(({ child }) => waitForChildClose(child)));
-	await Promise.all(
-		descendantProcesses.map(({ pid, identity }) =>
+	for (const result of await Promise.allSettled(
+		running.map(({ child }) => waitForChildClose(child)),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled([
+		...fixtureStateRoots.map((stateRoot) => terminateFixtureWorkers(stateRoot)),
+		...descendantProcesses.map(({ pid, identity }) =>
 			terminateMatchingWorkerGroup(pid, identity),
 		),
-	);
-	await Promise.all(
-		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-	);
+	])) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled(
+		fixtureRoots.map((root) => rm(root, { recursive: true, force: true })),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	if (cleanupErrors.length > 0) {
+		throw new AggregateError(cleanupErrors, "smoke fixture cleanup failed");
+	}
 }
 
 async function terminateFixtureWorkers(stateRoot: string): Promise<void> {
@@ -764,9 +790,17 @@ function requiredPid(child: ChildProcess): number {
 
 async function waitForChildClose(child: ChildProcess): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
-	await new Promise<void>((resolveChild) =>
-		child.once("close", () => resolveChild()),
-	);
+	await new Promise<void>((resolveChild, rejectChild) => {
+		const onClose = () => {
+			clearTimeout(timeout);
+			resolveChild();
+		};
+		const timeout = setTimeout(() => {
+			child.off("close", onClose);
+			rejectChild(new Error(`smoke process ${child.pid ?? "unknown"} did not exit`));
+		}, 5_000);
+		child.once("close", onClose);
+	});
 }
 
 /**

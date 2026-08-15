@@ -10,9 +10,10 @@ const delegated = (await import(pathToFileURL(delegateEntrypoint).href)) as {
 		args: readonly string[],
 	) => Promise<number>;
 };
-if (delegated.main) {
-	process.exitCode = await delegated.main(Bun.argv.slice(2));
+if (typeof delegated.main !== "function") {
+	throw new Error("Background Doctor delegate main unavailable");
 }
+process.exitCode = await delegated.main(Bun.argv.slice(2));
 
 function required(name: string): string {
 	const value = process.env[name];

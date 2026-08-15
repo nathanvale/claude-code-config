@@ -460,19 +460,32 @@ export function createVaultGitDoctorTaskLifecycle<SpawnContext>(
 				} catch {
 					return { kind: "refused", reason: "worker_launch_failed", state };
 				}
-				const registered = await options.store.transition(state.taskId, state.revision, {
-					state: "launching",
-					phase: "admitted",
-					updatedAt: options.runtime.recordedAt().toISOString(),
-					heartbeatAt: null,
-					checkpoint: "local_classified",
-					launchGeneration,
-					launchExpiresAt: state.launchExpiresAt,
-					workerPid: pid,
-					workerProcessIdentity: options.runtime.readProcessIdentity(pid),
-					launchAttempt: state.launchAttempt,
-					terminalResult: null,
-				});
+				let registered: Awaited<
+					ReturnType<typeof options.store.transition>
+				>;
+				try {
+					const workerProcessIdentity = options.runtime.readProcessIdentity(pid);
+					registered = await options.store.transition(state.taskId, state.revision, {
+						state: "launching",
+						phase: "admitted",
+						updatedAt: options.runtime.recordedAt().toISOString(),
+						heartbeatAt: null,
+						checkpoint: "local_classified",
+						launchGeneration,
+						launchExpiresAt: state.launchExpiresAt,
+						workerPid: pid,
+						workerProcessIdentity,
+						launchAttempt: state.launchAttempt,
+						terminalResult: null,
+					});
+				} catch (error) {
+					try {
+						options.runtime.stopUnacknowledgedWorker(pid);
+					} catch {
+						// Preserve the registration failure as the authoritative cause.
+					}
+					throw error;
+				}
 				if (registered.status !== "transitioned") {
 					options.runtime.stopUnacknowledgedWorker(pid);
 				}

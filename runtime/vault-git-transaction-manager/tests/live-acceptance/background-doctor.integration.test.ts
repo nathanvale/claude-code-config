@@ -171,9 +171,9 @@ describe("Background Doctor public-process acceptance", () => {
 		]);
 		expect(parseCliProcessJson(malformed)).toMatchObject({
 			status: "error",
-			error: { code: "worker_launch_protocol_failed" },
+			error: { code: "receipt_corrupt" },
 			data: {
-				blockers: ["worker_launch_protocol_failed"],
+				blockers: ["receipt_corrupt"],
 				task_id: taskId,
 				next_action: { id: "inspect_private_receipt" },
 			},

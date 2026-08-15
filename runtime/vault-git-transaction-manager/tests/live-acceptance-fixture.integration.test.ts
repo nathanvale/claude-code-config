@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
@@ -7,7 +8,10 @@ import { afterEach, expect, test } from "bun:test";
 import {
 	cleanupLiveAcceptanceRoots,
 	createFixture,
+	createStateIsolatedFixture,
+	observeWorkerProcess,
 	readTaskStates,
+	settleFixtureCleanup,
 	waitForChildClose,
 } from "./live-acceptance/fixture.ts";
 
@@ -27,8 +31,27 @@ test("late child-close observation resolves after an early process exit", async 
 	expect(observed).toBe("closed");
 });
 
+test("fixture cleanup removes roots after worker cleanup fails", async () => {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-cleanup-failure-"));
+	const workerFailure = new Error("fixture worker survived cleanup");
+	try {
+		await expect(
+			settleFixtureCleanup(
+				async () => {
+					throw workerFailure;
+				},
+				() => rm(root, { recursive: true, force: true }),
+				"fixture cleanup failed",
+			),
+		).rejects.toBe(workerFailure);
+		await expect(access(root)).rejects.toBeDefined();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test(
-	"fixture cleanup terminates its acknowledged blocked worker before deleting state",
+	"fixture refuses to copy an acknowledged worker and cleans its exact identity",
 	async () => {
 		const fixture = await createFixture({ blockingCheck: true });
 		const transactionId = await fixture.begin("notes/event.md");
@@ -42,28 +65,20 @@ test(
 			"acknowledged",
 		);
 		const task = (await readTaskStates(fixture.stateRoot))[0];
-		if (!task?.workerPid) throw new Error("acknowledged worker pid unavailable");
+		if (!task?.workerPid || !task.workerProcessIdentity) {
+			throw new Error("acknowledged worker identity unavailable");
+		}
+		await expect(createStateIsolatedFixture(fixture, 0)).rejects.toThrow(
+			"state-isolated fixture source must be quiescent before copying",
+		);
+		await expect(
+			access(join(fixture.root, "state-isolated-0-state")),
+		).rejects.toBeDefined();
 
 		await cleanupLiveAcceptanceRoots();
-		let alive = true;
-		try {
-			process.kill(task.workerPid, 0);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false;
-			else throw error;
-		}
-		let cleanupError: unknown;
-		if (alive) {
-			try {
-				process.kill(-task.workerPid, "SIGKILL");
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-					cleanupError = error;
-				}
-			}
-		}
-		if (cleanupError) throw cleanupError;
-		expect(alive).toBe(false);
+		expect(
+			observeWorkerProcess(task.workerPid, task.workerProcessIdentity),
+		).not.toBe("matching");
 	},
 	30_000,
 );

@@ -23,6 +23,72 @@ afterEach(async () => {
 });
 
 describe("Background Doctor Task Lifecycle", () => {
+	test("stops the exact worker when durable registration throws", async () => {
+		for (const failurePoint of ["identity", "transition"] as const) {
+			const root = await mkdtemp(join(tmpdir(), "vault-git-doctor-lifecycle-"));
+			roots.push(root);
+			const repositoryId = "a".repeat(64);
+			const durableStore = createVaultGitDoctorTaskStore({
+				stateRoot: root,
+				repositoryId,
+			});
+			const store = {
+				...durableStore,
+				async transition(
+					...args: Parameters<typeof durableStore.transition>
+				) {
+					if (failurePoint === "transition" && args[2].workerPid === 42) {
+						throw new Error("registration unavailable");
+					}
+					return durableStore.transition(...args);
+				},
+			};
+			const stoppedPids: number[] = [];
+			const lifecycle = createVaultGitDoctorTaskLifecycle({
+				store,
+				spawnContext: undefined,
+				runtime: {
+					now: () => 0,
+					recordedAt: () => new Date("2026-08-15T01:00:00.000Z"),
+					sleep: async () => undefined,
+					spawnWorker: () => 42,
+					readProcessIdentity() {
+						if (failurePoint === "identity") {
+							throw new Error("identity unavailable");
+						}
+						return "f".repeat(64);
+					},
+					stopUnacknowledgedWorker(pid) {
+						stoppedPids.push(pid);
+					},
+					stopExpiredWorker: async () => false,
+					processIdentityMatches: () => true,
+				},
+			});
+
+			await expect(
+				lifecycle.launch({
+					binding: {
+						repositoryId,
+						activationEvidenceId: null,
+						receiptId: `receipt_${"b".repeat(32)}`,
+						receiptRevision: 7,
+						transactionId: `txn_${"c".repeat(32)}`,
+						normalizedInput: '{"command":"doctor"}',
+					},
+					acknowledgementStartedAt: 0,
+					createLaunchGeneration: () => `doctor_launch_${"d".repeat(32)}`,
+					args: ["doctor", "--json"],
+				}),
+			).rejects.toThrow(
+				failurePoint === "identity"
+					? "identity unavailable"
+					: "registration unavailable",
+			);
+			expect(stoppedPids).toEqual([42]);
+		}
+	});
+
 	test("returns only after one exact worker durably acknowledges", async () => {
 		const root = await mkdtemp(join(tmpdir(), "vault-git-doctor-lifecycle-"));
 		roots.push(root);
