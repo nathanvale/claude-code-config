@@ -44,6 +44,14 @@ import {
 /** Distinguishes transient Git process timeouts from deterministic mismatches. */
 class GitProcessTimedOutError extends Error {}
 
+/** Compare persisted unrelated state by value, independent of JSON key order. */
+function matchesUnrelatedState(
+	left: VaultGitUnrelatedStateSnapshot,
+	right: VaultGitUnrelatedStateSnapshot,
+): boolean {
+	return left.statusHex === right.statusHex && left.indexHex === right.indexHex;
+}
+
 /** Options for the injected real-process vault-owned check. */
 export interface VaultGitCheckAdapterOptions {
 	/** Canonical vault root used as the checker working directory. */
@@ -1087,8 +1095,10 @@ export function createGitRepositoryAdapter(
 			}
 			const paths = plan.entries.map((entry) => entry.path);
 			if (
-				JSON.stringify(await captureUnrelatedState(paths)) !==
-				JSON.stringify(plan.unrelatedState)
+				!matchesUnrelatedState(
+					await captureUnrelatedState(paths),
+					plan.unrelatedState,
+				)
 			) {
 				return { status: "refused", reason: "mismatch" } as const;
 			}
@@ -1174,8 +1184,10 @@ export function createGitRepositoryAdapter(
 					}
 				}
 				if (
-					JSON.stringify(await captureUnrelatedState(paths)) !==
-					JSON.stringify(plan.unrelatedState)
+					!matchesUnrelatedState(
+						await captureUnrelatedState(paths),
+						plan.unrelatedState,
+					)
 				) {
 					return { status: "refused", reason: "mismatch" } as const;
 				}
@@ -1530,10 +1542,7 @@ export function createGitRepositoryAdapter(
 			const unrelated = await captureUnrelatedState(
 				request.ownedPaths.map((entry) => entry.path),
 			);
-			if (
-				unrelated.statusHex !== request.unrelatedState.statusHex ||
-				unrelated.indexHex !== request.unrelatedState.indexHex
-			) {
+			if (!matchesUnrelatedState(unrelated, request.unrelatedState)) {
 				return { status: "refused", reason: "unrelated_state_changed" };
 			}
 

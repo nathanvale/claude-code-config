@@ -484,6 +484,23 @@ describe("git repository staged recovery safeguards", () => {
 		).toEqual([]);
 	});
 
+	test("accepts persisted unrelated state regardless of object key order", async () => {
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: "candidate\n",
+		});
+		const reorderedPlan = {
+			...fixture.plan,
+			unrelatedState: {
+				indexHex: fixture.plan.unrelatedState.indexHex,
+				statusHex: fixture.plan.unrelatedState.statusHex,
+			},
+		};
+
+		expect(await fixture.repository.applyStagedRecovery?.(reorderedPlan)).toEqual({
+			status: "recovered",
+		});
+	});
+
 	test("preserves a timeout when temporary recovery cleanup fails", async () => {
 		let blockedTemporaryRoot: string | null = null;
 		const fixture = await createPreparedStagedRecoveryFixture({
@@ -515,12 +532,12 @@ describe("git repository staged recovery safeguards", () => {
 				reason: "timed_out",
 			});
 			expect(blockedTemporaryRoot).not.toBeNull();
-			if (blockedTemporaryRoot !== null) {
+			if (blockedTemporaryRoot !== null && process.getuid?.() !== 0) {
 				expect(statSync(blockedTemporaryRoot).isDirectory()).toBe(true);
 			}
 		} finally {
 			if (blockedTemporaryRoot !== null) {
-				await chmod(blockedTemporaryRoot, 0o700);
+				await chmod(blockedTemporaryRoot, 0o700).catch(() => undefined);
 				await rm(blockedTemporaryRoot, { recursive: true, force: true });
 			}
 		}
