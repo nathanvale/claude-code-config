@@ -53,6 +53,7 @@ export type SmokeTestId =
 	| "test-design-runner-sensitive-route"
 	| "test-design-simple-unit-route"
 	| "test-design-run-only-negative"
+	| "test-design-boundary-escalation"
 	| "test-design-pairwise-frozen";
 
 /** JSON scalar accepted by smoke schemas and assertion results. @internal */
@@ -281,6 +282,10 @@ function prepareRuntimeProject(
 				challenge,
 				relativePath,
 			);
+			const profileMarker =
+				relativePath === traceProof.profileRelativePath
+					? `Runtime profile qualification challenge: \`${profileChallenge}\`. Return it only after reading this profile for an authorized qualification canary.`
+					: `Runtime profile read sentinel: \`${profileChallenge}\`.`;
 			for (const projectionRoot of [".claude/skills", ".agents/skills"] as const) {
 				const profilePath = join(
 					project,
@@ -298,7 +303,7 @@ function prepareRuntimeProject(
 				const source = readFileSync(profilePath, "utf8");
 				writeFileSync(
 					profilePath,
-					`${source}\nRuntime profile qualification challenge: \`${profileChallenge}\`. Return it only after reading this profile for an authorized qualification canary.\n`,
+					`${source}\n${profileMarker}\n`,
 				);
 			}
 		}
@@ -1406,14 +1411,12 @@ function claudeTrace(stdout: string): {
 	return { toolUses, successfulToolUseIds };
 }
 
-function successfulCodexCommandOutput(stdout: string): string[] {
+function observedCodexCommandOutput(stdout: string): string[] {
 	return parseJsonLines(stdout).flatMap((event) => {
 		if (event.type !== "item.completed") return [];
 		const item = event.item as Record<string, unknown> | undefined;
 		if (
 			item?.type !== "command_execution" ||
-			item.status !== "completed" ||
-			item.exit_code !== 0 ||
 			typeof item.aggregated_output !== "string"
 		) {
 			return [];
@@ -1476,7 +1479,7 @@ export function evaluateRuntimeTrace(input: {
 			);
 		});
 	} else {
-		const outputs = successfulCodexCommandOutput(input.stdout);
+		const outputs = observedCodexCommandOutput(input.stdout);
 		skillInvoked = outputs.some((output) => output.includes(input.challenge));
 		selectedProfileRead = outputs.some((output) =>
 			output.includes(selectedProfileChallenge),
