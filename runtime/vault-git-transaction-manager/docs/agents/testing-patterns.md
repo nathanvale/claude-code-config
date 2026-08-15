@@ -8,7 +8,10 @@ Tests split by the claim they prove, not by the file they cover.
 
 - **Unit / composition** (`tests/*.test.ts`) — one collaborator graph, fakes at the edges. Most of the suite.
 - **Integration** (`tests/*.integration.test.ts`) — real Git against a temp bare remote, real receipt store on a temp dir. Used where the claim is about real git effects or cross-process recovery.
-- **Smoke** (`tests/smoke/*.integration.test.ts`) — spawned `vault-git` CLI subprocesses against a real remote, real SIGKILL. The most expensive lane; `mkSmokeFixture` (`tests/smoke/fixture.ts`) owns setup and the ref snapshots.
+- **Live acceptance** (`tests/live-acceptance/*.integration.test.ts`) — 21 public-process correctness rows split across five workflow owners. `manifest.test.ts` rejects missing files, duplicate row ownership, and row-count drift before `run.ts` executes each owner once.
+- **Hosted PR acceptance** (`tests/pr-acceptance/`) — five public-process canaries: three unique refusal/recovery boundaries, bounded two-caller repair re-entry, and one atomic-success canary. Its manifest rejects missing, duplicate, filtered, or renamed rows before the runner emits one aggregate receipt.
+- **Foreground performance** (`tests/performance.integration.test.ts`) — two isolated latency proofs. Completion measures foreground settlement while separately requiring background continuation; Doctor measures 20 cold public processes. This lane owns budgets, not correctness rows.
+- **Smoke** (`tests/smoke/*.integration.test.ts`) — spawned `vault-git` CLI subprocesses against a real remote, real SIGKILL. The most expensive lane; nightly, release, and activation qualification retain its exhaustive phase/stress proof. `mkSmokeFixture` (`tests/smoke/fixture.ts`) owns setup, ref snapshots, and exact PID/process-identity cleanup.
 
 ## The seam rule
 
@@ -58,10 +61,10 @@ Domain guards worth a negative control, by form:
 
 - `mcp__bun-runner__bun_testFile` for one file — but it caps at 30s.
 - The smoke lane sets `setDefaultTimeout(180_000)` and spawns real subprocesses, so it exceeds that cap. Run smoke files (or a `-t` phase filter) through the skill-local runner `skills/test-runner/src/test-runner.sh --json -- <file> [-t <name>]` (path is relative to the claude-code-config repo root, not this package), which honors the in-file timeout.
-- `package.json` owns the script surface (`test`, `test:smoke`, `test:smoke:pr`); read it there rather than trusting a copy.
+- `package.json` owns the script surface. `test:pr` runs exact detached-worker cleanup, the bounded five-row public manifest, then performance. `test:live-acceptance` verifies the exact owner manifest before running all five workflows. `test:smoke` retains the full crash/stress lane. `test` composes every qualification lane while replacement ownership is being hosted and proven. Read exact commands there rather than trusting a copy.
 
-The `test:smoke:pr` gate is the cheap merge check: it must exercise every persisted lifecycle phase. A phase left off the `-t` filter ships regressions in that phase green.
+The hosted PR gate does not claim exhaustive phase coverage. Deterministic engine/store crash matrices stay in default correctness; full real-SIGKILL phase coverage runs nightly and through manual release or activation qualification. Keep the slower rows until their replacement owner is green on a hosted PR head.
 
 ## What the suite does not prove
 
-Live SSH transport over the constructed `GIT_SSH_COMMAND`; known-hosts content trust (only metadata is bound); real-process timeout/kill; bounded real concurrency beyond scripted `deferred()` barriers. State these as unproved boundaries rather than letting a lower-layer green imply them.
+Live SSH transport over the constructed `GIT_SSH_COMMAND`; known-hosts content trust (only metadata is bound); hosted macOS behavior until an exact PR head runs; installed activation; daily-driver soak. State these as unproved boundaries rather than letting a lower-layer green imply them.

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { parseCliProcessJson } from "@side-quest/cli-command-facade/testing";
 
+import { readVaultGitProcessIdentity } from "../../src/cli.ts";
 import { VAULT_GIT_LEDGER_REF } from "../../src/model.ts";
 import { createReceiptStore } from "../../src/store.ts";
 import {
@@ -409,7 +410,17 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			],
 			"after_repair_receipt_before_task_authorization",
 		);
+		expect(interruptedRepair.descendantProcesses.length).toBeGreaterThan(0);
 		await interruptedRepair.kill();
+		for (const descendant of interruptedRepair.descendantProcesses) {
+			let observedIdentity: string | null = null;
+			try {
+				observedIdentity = readVaultGitProcessIdentity(descendant.pid);
+			} catch {
+				// An absent process proves cleanup succeeded.
+			}
+			expect(observedIdentity).not.toBe(descendant.identity);
+		}
 		expect(
 			await createReceiptStore({
 				stateRoot: fixture.stateRoot,

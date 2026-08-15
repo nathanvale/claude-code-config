@@ -519,9 +519,10 @@ export function hasTransactionTrailer(
  */
 export function isResumedLocalCommit(
 	commit: VaultGitLocalCommitInspection,
-	receipt: { readonly localMainHead: string; readonly transactionId: string },
+	receipt: { readonly localMainHead: string; readonly transactionId: string | null },
 ): boolean {
 	return (
+		receipt.transactionId !== null &&
 		commit.status === "ok" &&
 		commit.parents.length === 1 &&
 		commit.parents[0] === receipt.localMainHead &&

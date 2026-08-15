@@ -1,6 +1,32 @@
 import { createHash } from "node:crypto";
 
-import type { VaultGitDoctorResult } from "./doctor.ts";
+import {
+	VAULT_GIT_BLOCKER_IDS,
+	VAULT_GIT_DOCTOR_FINDINGS,
+	VAULT_GIT_ENGINE_NEXT_ACTION_IDS,
+	VAULT_GIT_REPAIR_ACTIONS,
+	VAULT_GIT_RETRY_SAFETIES,
+	VAULT_GIT_TRANSACTION_PHASES,
+	VAULT_GIT_TRANSACTION_STATES,
+	type VaultGitBlockerId,
+	type VaultGitDoctorFinding,
+	type VaultGitDoctorTaskCheckpoint,
+	type VaultGitDoctorTaskTerminal,
+	type VaultGitDoctorTaskTerminalResult,
+	type VaultGitDoctorTaskWorkerFailure,
+	type VaultGitEngineNextActionId,
+	type VaultGitRepairAction,
+	type VaultGitRetrySafety,
+	type VaultGitTransactionPhase,
+	type VaultGitTransactionState,
+} from "./model.ts";
+
+export type {
+	VaultGitDoctorTaskCheckpoint,
+	VaultGitDoctorTaskTerminal,
+	VaultGitDoctorTaskTerminalResult,
+	VaultGitDoctorTaskWorkerFailure,
+} from "./model.ts";
 
 export const VAULT_GIT_DOCTOR_TASK_STATES = [
 	"claimed",
@@ -14,39 +40,6 @@ export type VaultGitDoctorTaskLifecycleState =
 	(typeof VAULT_GIT_DOCTOR_TASK_STATES)[number];
 
 export type VaultGitDoctorTaskPhase = "admitted" | "running" | "terminal";
-
-export type VaultGitDoctorTaskCheckpoint =
-	| "local_classified"
-	| "checking_remote"
-	| "terminal";
-
-export interface VaultGitDoctorTaskTerminalResult {
-	readonly kind: "doctor_result";
-	readonly status: VaultGitDoctorResult["status"];
-	readonly state: VaultGitDoctorResult["state"];
-	readonly phase: VaultGitDoctorResult["phase"];
-	readonly finding: VaultGitDoctorResult["finding"];
-	readonly changedState: VaultGitDoctorResult["changedState"];
-	readonly retrySafety: VaultGitDoctorResult["retrySafety"];
-	readonly nextAction: VaultGitDoctorResult["nextAction"];
-	readonly blocker?: VaultGitDoctorResult["blocker"];
-	readonly repairAction?: VaultGitDoctorResult["repairAction"];
-	readonly transactionId?: string;
-}
-
-export interface VaultGitDoctorTaskWorkerFailure {
-	readonly kind: "worker_failure";
-	readonly blocker: "worker_launch_protocol_failed" | "worker_lost";
-	readonly retrySafety: "operator_required";
-	readonly nextAction: {
-		readonly id: "inspect_private_receipt";
-		readonly summary: string;
-	};
-}
-
-export type VaultGitDoctorTaskTerminal =
-	| VaultGitDoctorTaskTerminalResult
-	| VaultGitDoctorTaskWorkerFailure;
 
 export interface VaultGitDoctorTaskBindingInput {
 	readonly repositoryId: string;
@@ -112,6 +105,33 @@ const STATE_KEYS = [
 	"launchAttempt",
 	"terminalResult",
 ] as const;
+
+const DOCTOR_TERMINAL_REQUIRED_KEYS = [
+	"kind",
+	"status",
+	"state",
+	"phase",
+	"finding",
+	"changedState",
+	"retrySafety",
+	"nextAction",
+] as const;
+
+const DOCTOR_TERMINAL_KEYS = [
+	...DOCTOR_TERMINAL_REQUIRED_KEYS,
+	"blocker",
+	"repairAction",
+	"transactionId",
+] as const;
+
+const WORKER_FAILURE_KEYS = [
+	"kind",
+	"blocker",
+	"retrySafety",
+	"nextAction",
+] as const;
+
+const NEXT_ACTION_KEYS = ["id", "summary"] as const;
 
 export function digestVaultGitDoctorTaskBinding(
 	input: VaultGitDoctorTaskBindingInput,
@@ -295,14 +315,16 @@ export function parseVaultGitDoctorTaskState(
 function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
 	if (
 		isRecord(value) &&
+		hasExactKeys(value, WORKER_FAILURE_KEYS) &&
 		value.kind === "worker_failure" &&
 		(value.blocker === "worker_launch_protocol_failed" ||
 			value.blocker === "worker_lost") &&
 		value.retrySafety === "operator_required" &&
 		isRecord(value.nextAction) &&
+		hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) &&
 		value.nextAction.id === "inspect_private_receipt" &&
 		typeof value.nextAction.summary === "string" &&
-		Object.keys(value).length === 4
+		value.nextAction.summary.trim().length > 0
 	) {
 		return Object.freeze(
 			value as unknown as VaultGitDoctorTaskWorkerFailure,
@@ -310,18 +332,26 @@ function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
 	}
 	if (
 		!isRecord(value) ||
+		!hasOnlyKeys(value, DOCTOR_TERMINAL_KEYS) ||
+		!DOCTOR_TERMINAL_REQUIRED_KEYS.every((key) => Object.hasOwn(value, key)) ||
 		value.kind !== "doctor_result" ||
-		typeof value.status !== "string" ||
-		typeof value.state !== "string" ||
-		typeof value.phase !== "string" ||
-		typeof value.finding !== "string" ||
-		typeof value.changedState !== "string" ||
-		typeof value.retrySafety !== "string" ||
+		value.status !== "diagnosed" ||
+		!VAULT_GIT_TRANSACTION_STATES.includes(value.state as VaultGitTransactionState) ||
+		!VAULT_GIT_TRANSACTION_PHASES.includes(value.phase as VaultGitTransactionPhase) ||
+		!VAULT_GIT_DOCTOR_FINDINGS.includes(value.finding as VaultGitDoctorFinding) ||
+		(value.changedState !== "none" && value.changedState !== "local") ||
+		!VAULT_GIT_RETRY_SAFETIES.includes(value.retrySafety as VaultGitRetrySafety) ||
 		!isRecord(value.nextAction) ||
-		typeof value.nextAction.id !== "string" ||
+		!hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) ||
+		!VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+			value.nextAction.id as VaultGitEngineNextActionId,
+		) ||
 		typeof value.nextAction.summary !== "string" ||
-		(value.blocker !== undefined && typeof value.blocker !== "string") ||
-		(value.repairAction !== undefined && typeof value.repairAction !== "string") ||
+		value.nextAction.summary.trim().length === 0 ||
+		(value.blocker !== undefined &&
+			!VAULT_GIT_BLOCKER_IDS.includes(value.blocker as VaultGitBlockerId)) ||
+		(value.repairAction !== undefined &&
+			!VAULT_GIT_REPAIR_ACTIONS.includes(value.repairAction as VaultGitRepairAction)) ||
 		(value.transactionId !== undefined &&
 			(typeof value.transactionId !== "string" ||
 				!/^txn_[0-9a-f]{32}$/u.test(value.transactionId)))
@@ -345,6 +375,13 @@ function hasExactKeys(
 		Object.keys(value).length === keys.length &&
 		keys.every((key) => Object.hasOwn(value, key))
 	);
+}
+
+function hasOnlyKeys(
+	value: Record<string, unknown>,
+	keys: readonly string[],
+): boolean {
+	return Object.keys(value).every((key) => keys.includes(key));
 }
 
 function isTimestamp(value: unknown): value is string {

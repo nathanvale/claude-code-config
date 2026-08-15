@@ -112,6 +112,38 @@ describe("Background Doctor task state", () => {
 		).toThrow("doctor task state malformed");
 	});
 
+	test("rejects malformed terminal evidence instead of trusting private strings", () => {
+		const claimed = createVaultGitDoctorTaskState({
+			taskId: `doctor_task_${"d".repeat(32)}`,
+			binding,
+			recordedAt: "2026-08-14T01:00:00.000Z",
+		});
+		const terminal = {
+			...claimed,
+			state: "closed",
+			phase: "terminal",
+			checkpoint: "terminal",
+			terminalResult: {
+				kind: "doctor_result",
+				status: "diagnosed",
+				state: "repairable",
+				phase: "writing",
+				finding: "writes_in_progress",
+				changedState: "none",
+				retrySafety: "same_input_safe",
+				nextAction: {
+					id: "run_repair",
+					summary: "/Users/private/secret TOKEN=secret",
+				},
+				privateEvidence: "/Users/private/secret",
+			},
+		};
+
+		expect(() => parseVaultGitDoctorTaskState(terminal)).toThrow(
+			"doctor task terminal result invalid",
+		);
+	});
+
 	test("separates stale heartbeat from proven process loss", () => {
 		const claimed = createVaultGitDoctorTaskState({
 			taskId: `doctor_task_${"d".repeat(32)}`,

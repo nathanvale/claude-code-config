@@ -1,0 +1,44 @@
+name: Vault Git qualification
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Qualification boundary
+        required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - release
+          - activation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vault-git-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: full crash, stress, live, and performance proof
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck Vault Git
+        run: bun run --cwd runtime/vault-git-transaction-manager typecheck
+
+      - name: Run full Vault Git qualification
+        run: bun run --cwd runtime/vault-git-transaction-manager test
