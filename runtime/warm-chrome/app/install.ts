@@ -98,7 +98,10 @@ function help(): string {
 	].join("\n");
 }
 
-async function run(argv: readonly string[], cwd?: string): Promise<CommandResult> {
+async function runCommand(
+	argv: readonly string[],
+	cwd?: string,
+): Promise<CommandResult> {
 	const child = Bun.spawn([...argv], {
 		...(cwd ? { cwd } : {}),
 		env: {
@@ -123,7 +126,7 @@ async function requireSuccess(
 	code: string,
 	cwd?: string,
 ): Promise<CommandResult> {
-	const result = await run(argv, cwd);
+	const result = await runCommand(argv, cwd);
 	if (result.exitCode !== 0) throw new InstallFailure(code);
 	return result;
 }
@@ -153,7 +156,7 @@ async function inspectExisting(
 		) {
 			return "foreign";
 		}
-		const signature = await run([
+		const signature = await runCommand([
 			"/usr/bin/codesign",
 			"--verify",
 			"--strict",
@@ -203,7 +206,7 @@ async function migrateLegacyRetainedLaunchers(
 		// Launch Services returns non-zero when a copied rollback bundle was never
 		// registered. Relocation out of the `.app` discovery shape is authoritative;
 		// unregistering is best-effort cleanup for bundles that were indexed.
-		await run([LAUNCH_SERVICES_REGISTER, "-u", legacyPath]);
+		await runCommand([LAUNCH_SERVICES_REGISTER, "-u", legacyPath]);
 		const retained = retainedLauncherPath(backups, "Agent Chrome");
 		await rename(legacyPath, retained);
 		migrated.push(retained);
@@ -258,7 +261,7 @@ async function buildAgentBundle(
 		[
 			"/usr/bin/swiftc",
 			"-parse-as-library",
-			join(packageRoot, "app", "ChromeLaunchServices.swift"),
+			join(packageRoot, "app", "chrome-launch-services.swift"),
 			"-o",
 			launchServicesHelper,
 		],
@@ -269,7 +272,7 @@ async function buildAgentBundle(
 		[
 			"/usr/bin/swiftc",
 			"-parse-as-library",
-			join(packageRoot, "app", "AgentChrome.swift"),
+			join(packageRoot, "app", "agent-chrome.swift"),
 			"-o",
 			launcher,
 		],
@@ -277,9 +280,12 @@ async function buildAgentBundle(
 		packageRoot,
 	);
 	await Promise.all([
-		cp(join(packageRoot, "app", "Info.plist"), join(contents, "Info.plist")),
 		cp(
-			join(packageRoot, "app", "assets", "AgentChrome.icns"),
+			join(packageRoot, "app", "agent-chrome-info.plist"),
+			join(contents, "Info.plist"),
+		),
+		cp(
+			join(packageRoot, "app", "assets", "agent-chrome.icns"),
 			join(resources, "AgentChrome.icns"),
 		),
 		cp(
@@ -381,7 +387,7 @@ async function buildEverydayBundle(
 		[
 			"/usr/bin/swiftc",
 			"-parse-as-library",
-			join(packageRoot, "app", "EverydayChrome.swift"),
+			join(packageRoot, "app", "everyday-chrome.swift"),
 			"-o",
 			launcher,
 		],
@@ -390,7 +396,7 @@ async function buildEverydayBundle(
 	);
 	await Promise.all([
 		cp(
-			join(packageRoot, "app", "EverydayChrome-Info.plist"),
+			join(packageRoot, "app", "everyday-chrome-info.plist"),
 			join(contents, "Info.plist"),
 		),
 		cp(
@@ -512,8 +518,8 @@ async function install(
 				"everyday_launcher_registration_failed",
 			);
 		} catch (error) {
-			await run([LAUNCH_SERVICES_REGISTER, "-u", destinations.everyday]);
-			await run([LAUNCH_SERVICES_REGISTER, "-u", destinations.agent]);
+			await runCommand([LAUNCH_SERVICES_REGISTER, "-u", destinations.everyday]);
+			await runCommand([LAUNCH_SERVICES_REGISTER, "-u", destinations.agent]);
 			if (everydayInstalled) {
 				await rename(
 					destinations.everyday,
@@ -525,11 +531,11 @@ async function install(
 			}
 			if (retainedEveryday) {
 				await rename(retainedEveryday, destinations.everyday);
-				await run([LAUNCH_SERVICES_REGISTER, "-f", destinations.everyday]);
+				await runCommand([LAUNCH_SERVICES_REGISTER, "-f", destinations.everyday]);
 			}
 			if (retainedAgent) {
 				await rename(retainedAgent, destinations.agent);
-				await run([LAUNCH_SERVICES_REGISTER, "-f", destinations.agent]);
+				await runCommand([LAUNCH_SERVICES_REGISTER, "-f", destinations.agent]);
 			}
 			throw error;
 		}

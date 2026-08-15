@@ -22,6 +22,7 @@ const PNG = Buffer.from([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x41, 0x67, 0x65, 0x6e,
 	0x74,
 ]);
+const AGENT_CHROME_PROFILE_COLOR_SEED = -33536;
 const temporaryRoots: string[] = [];
 
 type Fixture = {
@@ -130,6 +131,30 @@ async function run(
 	return { exitCode, stdout, stderr };
 }
 
+async function expectProfileBytes(
+	state: Fixture,
+	localState: Buffer,
+	preferences: Buffer,
+): Promise<void> {
+	expect(
+		Buffer.compare(await readFile(join(state.profile, "Local State")), localState),
+	).toBe(0);
+	expect(
+		Buffer.compare(
+			await readFile(join(state.profile, "Default", "Preferences")),
+			preferences,
+		),
+	).toBe(0);
+}
+
+async function expectNoInstalledAvatar(state: Fixture): Promise<void> {
+	expect(
+		await lstat(
+			join(state.profile, "Default", "Google Profile Picture.png"),
+		).catch(() => null),
+	).toBeNull();
+}
+
 describe("Agent Chrome profile avatar", () => {
 	test("preview is read-only and apply installs the generated artwork without touching Everyday Chrome", async () => {
 		const state = await fixture();
@@ -172,6 +197,7 @@ describe("Agent Chrome profile avatar", () => {
 				info_cache: {
 					Default: {
 						name: "Agent Chrome",
+						profile_color_seed: AGENT_CHROME_PROFILE_COLOR_SEED,
 						is_using_default_avatar: false,
 						gaia_picture_file_name: "Google Profile Picture.png",
 						use_gaia_picture: true,
@@ -215,11 +241,28 @@ describe("Agent Chrome profile avatar", () => {
 			next_action: "close_agent_chrome",
 		});
 		expect(await readlink(lock)).toBe(`${hostname()}-${process.pid}`);
-		expect(
-			await lstat(
-				join(state.profile, "Default", "Google Profile Picture.png"),
-			).catch(() => null),
-		).toBeNull();
+		await expectNoInstalledAvatar(state);
+	});
+
+	test("a live local lock remains authoritative after the Mac hostname changes", async () => {
+		const state = await fixture();
+		const lock = join(state.profile, "SingletonLock");
+		const localStateBefore = await readFile(join(state.profile, "Local State"));
+		const preferencesBefore = await readFile(
+			join(state.profile, "Default", "Preferences"),
+		);
+		await symlink(`previous-hostname-${process.pid}`, lock);
+
+		const result = await run(state, "--apply");
+		expect(result.exitCode).toBe(20);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "blocked",
+			code: "profile_running",
+			changed_state: "none",
+			next_action: "close_agent_chrome",
+		});
+		await expectProfileBytes(state, localStateBefore, preferencesBefore);
+		await expectNoInstalledAvatar(state);
 	});
 
 	test("an already-branded running session remains reusable after Chrome consumes the backing file", async () => {
@@ -269,15 +312,21 @@ describe("Agent Chrome profile avatar", () => {
 			})}\n`,
 			{ mode: 0o600 },
 		);
+		const localStateBefore = await readFile(join(state.profile, "Local State"));
+		const preferencesBefore = await readFile(
+			join(state.profile, "Default", "Preferences"),
+		);
 
 		const result = await run(state, "--apply");
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.stdout)).toMatchObject({
-			status: "blocked",
-			code: "browser_account_signed_in",
+			status: "verified",
+			profile_avatar: "browser_account_preserved",
 			changed_state: "none",
-			next_action: "preserve_google_account_avatar",
+			next_action: "launch_agent_chrome",
 		});
+		await expectProfileBytes(state, localStateBefore, preferencesBefore);
+		await expectNoInstalledAvatar(state);
 		expect(result.stdout).not.toContain("private-account-id");
 		expect(result.stderr).not.toContain("private-account-id");
 	});

@@ -63,7 +63,7 @@ _Avoid example_: "Edit a browser-use preflight script to change proof
 behavior — no such script exists anymore."
 
 **Agent Chrome launcher**:
-The copied and signed native macOS app built from `app/AgentChrome.swift`. Its
+The copied and signed native macOS app built from `app/agent-chrome.swift`. Its
 embedded compiled helpers retain profile-branding and Warm Chrome authority.
 The profile-avatar helper installs the generated Agent Chrome artwork only in
 the dedicated, stopped, browser-level-unsynced profile. Chrome loads the local
@@ -82,7 +82,7 @@ _Avoid example_: "Let the app derive port 9222 and start Chrome directly."
 
 **Everyday Chrome launcher**:
 The copied and signed human-only macOS action built from
-`app/EverydayChrome.swift`. It opens the fixed regular Google Chrome lane
+`app/everyday-chrome.swift`. It opens the fixed regular Google Chrome lane
 through Launch Services without profile, CDP, or adapter
 arguments. It never proves, repairs, launches, or cleans up Agent Chrome. Both
 actions still host Google's `com.google.Chrome` Browser process, so the label

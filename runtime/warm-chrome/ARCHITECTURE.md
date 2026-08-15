@@ -128,14 +128,14 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   R13 redaction chokepoints, station envelope emission, error normalization,
   and runtime-action guidance.
 - `src/index.ts`: re-exports the package seam.
-- `app/AgentChrome.swift`: native launcher; consumes helper proof, activates
+- `app/agent-chrome.swift`: native launcher; consumes helper proof, activates
   only the returned Browser pid, and verifies foreground pid equality.
-- `app/EverydayChrome.swift`: human-only launcher; asks Launch Services for the
+- `app/everyday-chrome.swift`: human-only launcher; asks Launch Services for the
   regular Google Chrome lane with no profile, CDP, or adapter arguments.
 - `app/native-runtime.ts`: installed-app Warm Chrome entrypoint; retains the
   proof lifecycle while replacing direct Chrome spawn with an embedded Launch
   Services call and fail-closed exact-pid termination.
-- `app/ChromeLaunchServices.swift`: validates the fixed Google Chrome app and
+- `app/chrome-launch-services.swift`: validates the fixed Google Chrome app and
   dedicated profile inputs, launches a new Chrome instance through
   `NSWorkspace.OpenConfiguration`, and returns its pid.
 - `app/install.ts`: preview-first paired build, inside-out ad-hoc signing,
@@ -148,7 +148,8 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `app/migrate-profile.ts`: fixed-source, fixed-destination, stopped-Browser
   preserving migration with metadata verification and unchanged legacy
   rollback state.
-- `app/Info.plist`, `app/EverydayChrome-Info.plist`, and `app/assets/`:
+- `app/agent-chrome-info.plist`, `app/everyday-chrome-info.plist`, and
+  `app/assets/`:
   installed bundle metadata and visual identity sources.
 - `tests/`: one suite per lifecycle (`check-stations`, `launch-stations`,
   `repair-stations`), `catalog.test.ts` drift gate, `cli-surface.test.ts`

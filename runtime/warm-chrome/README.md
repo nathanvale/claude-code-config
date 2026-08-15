@@ -95,7 +95,7 @@ provisioning persists the visible `Agent Chrome` name. `launch --open` creates
 one `chrome://newtab/` target through the verbatim browser-level websocket,
 verifies the returned target id, then re-proves the same endpoint and profile.
 
-`app/AgentChrome.swift` is the agent launcher source. `agent-chrome-install`
+`app/agent-chrome.swift` is the agent launcher source. `agent-chrome-install`
 builds, verifies, and installs two labelled actions as one transaction:
 `~/Applications/Agent Chrome.app` and
 `~/Applications/Everyday Chrome.app`. The Agent action is self-contained with

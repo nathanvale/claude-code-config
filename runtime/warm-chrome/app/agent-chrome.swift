@@ -116,7 +116,9 @@ private func applyProfileAvatar() throws {
     guard
         let envelope,
         ["branded", "verified"].contains(envelope["status"] as? String),
-        envelope["profile_avatar"] as? String == "agent_chrome"
+        ["agent_chrome", "browser_account_preserved"].contains(
+            envelope["profile_avatar"] as? String
+        )
     else {
         throw LauncherFailure.avatarHelperFailed("invalid_envelope")
     }

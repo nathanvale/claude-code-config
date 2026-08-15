@@ -37,12 +37,22 @@ export const WARM_CHROME_DEFAULT_PROFILE_DIR =
 /**
  * Chrome profile directory selected inside the dedicated user-data directory.
  *
+ * @example
+ * ```ts
+ * const preferences = join(profileDir, WARM_CHROME_PROFILE_DIRECTORY, "Preferences");
+ * ```
+ *
  * @defaultValue "Default"
  */
 export const WARM_CHROME_PROFILE_DIRECTORY = "Default" as const;
 
 /**
  * Human-visible identity for the dedicated automation profile.
+ *
+ * @example
+ * ```ts
+ * if (profileName !== WARM_CHROME_PROFILE_NAME) throw new Error("wrong profile");
+ * ```
  *
  * @defaultValue "Agent Chrome"
  */

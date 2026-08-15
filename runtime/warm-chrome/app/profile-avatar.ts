@@ -22,6 +22,7 @@ const PROFILE_DIRECTORY = "Default";
 const CHROME_AVATAR_INDEX = 8;
 const CHROME_AVATAR_FILE_NAME = "Google Profile Picture.png";
 const CHROME_AVATAR_ICON_URL = `chrome://theme/IDR_PROFILE_AVATAR_${CHROME_AVATAR_INDEX}`;
+const AGENT_CHROME_PROFILE_COLOR_SEED = -33536;
 const PRODUCT_NAME = "Agent Chrome";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -205,6 +206,7 @@ function mergedLocalState(localState: JsonObject): JsonObject {
 				[PROFILE_DIRECTORY]: {
 					...defaultProfile,
 					name: PRODUCT_NAME,
+					profile_color_seed: AGENT_CHROME_PROFILE_COLOR_SEED,
 					avatar_icon: CHROME_AVATAR_ICON_URL,
 					is_using_default_name: false,
 					is_using_default_avatar: false,
@@ -235,6 +237,7 @@ function profileMetadataIsBranded(
 	const preferenceProfile = nestedObject(preferences.profile);
 	return (
 		cachedProfile.name === PRODUCT_NAME &&
+		cachedProfile.profile_color_seed === AGENT_CHROME_PROFILE_COLOR_SEED &&
 		cachedProfile.avatar_icon === CHROME_AVATAR_ICON_URL &&
 		cachedProfile.is_using_default_avatar === false &&
 		cachedProfile.use_gaia_picture === true &&
@@ -247,7 +250,7 @@ function profileMetadataIsBranded(
 async function profileIsLocked(profileDir: string): Promise<boolean> {
 	const runtime = createDefaultRuntime();
 	const lock = await runtime.readSingletonLock(profileDir);
-	if (lock === null || !lock.local) return false;
+	if (lock === null) return false;
 	if (lock.pid === null) return true;
 	return runtime.isProcessAlive(lock.pid);
 }
@@ -331,7 +334,13 @@ async function main(argv: readonly string[]): Promise<number> {
 			if ((error as AvatarFailure).code !== "required_file_missing") throw error;
 		}
 		if (browserAccountIsSignedIn(localState)) {
-			throw new AvatarFailure("browser_account_signed_in", "preserve_google_account_avatar");
+			emit(invocation.json, {
+				status: "verified",
+				profile_avatar: "browser_account_preserved",
+				changed_state: "none",
+				next_action: "launch_agent_chrome",
+			});
+			return 0;
 		}
 
 		const nextLocalState = mergedLocalState(localState);

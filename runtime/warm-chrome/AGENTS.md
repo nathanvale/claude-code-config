@@ -41,9 +41,10 @@ Use the direct runner above for agent-operational examples.
   `tests/launch-stations.test.ts`, and the Branch Station Catalog when station
   posture changes.
 - **Change Agent Chrome launcher or install route** ->
-  `app/AgentChrome.swift`, `app/EverydayChrome.swift`,
-  `app/native-runtime.ts`, `app/ChromeLaunchServices.swift`, `app/Info.plist`,
-  `app/EverydayChrome-Info.plist`, `app/install.ts`, `app/assets/`,
+  `app/agent-chrome.swift`, `app/everyday-chrome.swift`,
+  `app/native-runtime.ts`, `app/chrome-launch-services.swift`,
+  `app/agent-chrome-info.plist`, `app/everyday-chrome-info.plist`,
+  `app/install.ts`, `app/assets/`,
   `tests/agent-chrome-app.test.ts`, and `tests/native-runtime.test.ts`.
 - **Change Agent Chrome profile avatar** -> `app/profile-avatar.ts`,
   `app/assets/agent-chrome-icon.png`, `tests/profile-avatar.test.ts`, and the
