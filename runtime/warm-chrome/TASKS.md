@@ -30,7 +30,7 @@ Verification.
 
 ## Current Priority
 
-Implementation U1-U8 closed on 2026-07-03. Sixteen stations, redaction proofs,
+Implementation U1-U8 closed on 2026-07-03. Eighteen stations, redaction proofs,
 entrypoint gate membership, and docs-drift are live. The browser-use switchover
 closed on 2026-07-04 and the interim delegator retired on 2026-07-16 (migration
 cleanup U5/KTD6): browser entry reaches this package only through
@@ -46,7 +46,7 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Now
 
-- (empty)
+No active P1 work. Identity-and-launch closeout moved to `TASKS.archive.md`.
 
 ## Next
 
@@ -61,13 +61,6 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       DevToolsActivePort write uses an O_NOFOLLOW/tmp-rename seam primitive
       and profile realpath verification happens before mkdir/chmod. Next:
       resolve-then-verify before extending the U4 seam.
-- [ ] P2 Profile-predicate + DEFAULT_PROFILE_DIR duplication Lane: CLI
-      Contract. Done when: the `~/.agent-warm-profile` literal and the
-      default-Chrome-profile predicate each have one owner. Today `src/cli.ts`
-      and `src/repair.ts` both carry the literal, and `isDefaultProfilePath`
-      is copied across `src/proof.ts`, `src/launch.ts`, and `src/repair.ts`
-      (three-way, flagged in `src/repair.ts`). Next: move both into
-      `src/model.ts`.
 - [ ] P2 Station-contract residuals decision Lane: CLI Contract. Done when: a
       recorded decision resolves the three review residuals that each change a
       Station-Map contract: (1) launch `unsafe_profile` routes `change_input`
@@ -134,30 +127,41 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-08-14: Both labelled actions installed and passed live crossover proof.
+  Everyday Chrome launched regular Chrome with no Agent flags and left the
+  Agent endpoint target count unchanged. Agent Chrome reused the exact verified
+  process and created one page. The wrappers still host Google's Chrome bundle;
+  full Finder, Dock, and external-link isolation remains a V2 experiment.
+- 2026-08-14: The stale `avatar_helper_profile_running` alert came from old
+  production-id `.app` rollback siblings discoverable by Launch Services.
+  Installer backups now live under private Agent Chrome application support
+  with a non-`.app` suffix; the exact installed helper verifies healthy reuse.
+- 2026-08-14: Exact-pid visual proof corrected the earlier false failure.
+  Agent Chrome and everyday Chrome both expose `com.google.Chrome`; Computer
+  Use selected everyday Chrome and reported **Person 1**. Activating the Warm
+  Chrome proof-returned pid showed **Agent Chrome** and the generated image in
+  the exact toolbar and profile menu. Nathan accepted the visible identity.
+  Chrome clears the local GAIA backing filename after loading it while retaining
+  the rendered session image; cold launch therefore reapplies it. File checks
+  remain preparation evidence, not visual acceptance.
+- 2026-08-14: Launch Services cold-start proof passed after an Agent Chrome-only
+  App Management reset: exact profile, pid, and port `9242` verified; no TCC row
+  or warning returned. A simultaneous legacy `~/.agent-warm-profile` listener
+  also proved that port-only health is insufficient; the exact-profile check
+  correctly refused `profile_mismatch`.
 - 2026-07-16: browser-use delegator retired (migration cleanup U5/KTD6).
-  `skills/browser-use/src/preflight-warm-chrome.ts` + test + bin deleted; the
-  only consumer path is now `runtime/browser-connect` in-process. The
+  The retired preflight-warm-chrome source, test, and bin were deleted; the only
+  consumer path is now `runtime/browser-connect` in-process. The
   delegator's `BROWSER_USE_*` -> `WARM_CHROME_*` env bridge retired with it.
-- 2026-07-04: browser-use switchover closed (P1 done). Front door delegates to
-  `main()`; adapter router gates on `data.contract_id`; adapter proof composes
-  the package proof in-process; legacy `preflight-warm-chrome` impl + parity
-  harness deleted. Detail: `TASKS.archive.md`.
-- 2026-07-04: Sixth-pass fixes closed two high bugs: `fetchLoopbackJson` TDZ
-  deadline crash and competing-instance guard escape. Residual nits moved into
-  P2/P3 tasks. Detail: `TASKS.archive.md`.
-- 2026-07-04: Fifth-pass `fetchLoopbackJson` partial-body branch fixed and
-  pinned; station-contract residuals docketed. Detail: `TASKS.archive.md`.
-- 2026-07-04: Post-audit regressions fixed from review handoff; design
-  residuals became active CLI Contract tasks. Detail: `TASKS.archive.md`.
-- 2026-07-03: Manual real-Chrome validation recorded cross-implementation
-  compatibility and launch/repair convergence behavior. Detail:
-  `TASKS.archive.md`.
-
 ## Command Shortcuts
 
 ```bash
 bun run runtime/warm-chrome/src/cli.ts check --json
 bun run runtime/warm-chrome/src/cli.ts status
+bun run runtime/warm-chrome/src/cli.ts launch --open --json
+bun run runtime/warm-chrome/app/migrate-profile.ts --check --json
+bun run runtime/warm-chrome/app/install.ts --check --json
+bun run runtime/warm-chrome/app/profile-avatar.ts --check --profile "$HOME/Library/Application Support/Agent Chrome/Chrome User Data" --avatar "$PWD/runtime/warm-chrome/app/assets/agent-chrome-icon.png" --json
 skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 bun run command-entrypoint:integration
 bun --filter @side-quest/warm-chrome typecheck

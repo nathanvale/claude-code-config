@@ -75,6 +75,7 @@ export const WARM_CHROME_CONVENTION_PORT = "9222";
 // Startup URL the spawn seam opens; a concrete page keeps the default browser
 // context populated so the R6a default-context proof has a page target.
 const WARM_CHROME_LAUNCH_STARTUP_URL = "https://example.com/";
+const AGENT_CHROME_OPEN_URL = "chrome://newtab/";
 
 /**
  * Launch-owned reason ids (plan U6), keyed by canonical error code.
@@ -94,6 +95,11 @@ export const WARM_CHROME_LAUNCH_REASONS = {
 		"chrome_for_testing",
 		"chromium",
 		"launch_binary_not_real_chrome",
+	],
+	open_failed: [
+		"target_create_failed",
+		"target_verification_failed",
+		"post_open_proof_failed",
 	],
 } as const;
 
@@ -173,7 +179,18 @@ export function createLaunchCommandHandler(
 		// the requested endpoint means nothing spawns (launch.already_verified).
 		const preSpawn = await runProofOutcome(proofInput, runtime, deps);
 		if (preSpawn.kind === "verified") {
-			return launchSuccess(invocation, preSpawn.proof, false);
+			const opened = await maybeOpenVerifiedChrome(
+				invocation,
+				preSpawn.proof,
+				runtime,
+				deps,
+			);
+			return launchSuccess(
+				invocation,
+				opened.proof,
+				false,
+				opened.targetId,
+			);
 		}
 
 		// 2. Competing-instance guard (R10a): --port/--endpoint naming another
@@ -198,7 +215,18 @@ export function createLaunchCommandHandler(
 				deps,
 			);
 			if (convention.kind === "verified") {
-				return launchSuccess(invocation, convention.proof, false);
+				const opened = await maybeOpenVerifiedChrome(
+					invocation,
+					convention.proof,
+					runtime,
+					deps,
+				);
+				return launchSuccess(
+					invocation,
+					opened.proof,
+					false,
+					opened.targetId,
+				);
 			}
 			// The profiled probe failed — but its verdict may be about the caller's
 			// --profile input (unsafe_profile/invalid_profile_path for a not-yet
@@ -334,7 +362,14 @@ export function createLaunchCommandHandler(
 		for (;;) {
 			const outcome = await runProofOutcome(proofInput, runtime, deps);
 			if (outcome.kind === "verified") {
-				return resolveSpawnRace(invocation, outcome.proof, child, context);
+				return resolveSpawnRace(
+					invocation,
+					outcome.proof,
+					child,
+					context,
+					runtime,
+					deps,
+				);
 			}
 			if (
 				outcome.error.code !== "endpoint_unreachable" &&
@@ -417,10 +452,23 @@ async function resolveSpawnRace(
 	proof: WarmChromeVerifiedProof,
 	child: SpawnedChrome,
 	context: LaunchContext,
+	runtime: WarmChromeRuntime,
+	deps: WarmChromeProofDeps,
 ): Promise<WarmChromeCommandSuccess> {
 	const verifiedPid = Number(proof.data.browser_pid);
 	if (verifiedPid === child.pid) {
-		return launchSuccess(invocation, proof, true);
+		const opened = await maybeOpenVerifiedChrome(
+			invocation,
+			proof,
+			runtime,
+			deps,
+		);
+		return launchSuccess(
+			invocation,
+			opened.proof,
+			true,
+			opened.targetId,
+		);
 	}
 	let killed: boolean;
 	try {
@@ -445,19 +493,36 @@ async function resolveSpawnRace(
 			},
 		});
 	}
-	return launchSuccess(invocation, proof, true);
+	const opened = await maybeOpenVerifiedChrome(
+		invocation,
+		proof,
+		runtime,
+		deps,
+	);
+	return launchSuccess(
+		invocation,
+		opened.proof,
+		true,
+		opened.targetId,
+	);
 }
 
 function launchSuccess(
 	invocation: WarmChromeExecuteInvocation,
 	proof: WarmChromeVerifiedProof,
 	launchPerformed: boolean,
+	openTargetId: string | null,
 ): WarmChromeCommandSuccess {
 	const action = warmChromeRuntimeAction("use_verified_endpoint");
 	return {
 		// The proof's ok payload is the endpoint authority (R8); launch only adds
 		// whether this invocation performed a browser spawn/write.
-		data: { ...proof.data, launch_performed: launchPerformed },
+		data: {
+			...proof.data,
+			launch_performed: launchPerformed,
+			open_target_verified: openTargetId !== null,
+			...(openTargetId === null ? {} : { open_target_id: openTargetId }),
+		},
 		plain: [
 			"browser_ready",
 			`command=${invocation.displayCommand}`,
@@ -466,6 +531,7 @@ function launchSuccess(
 			`browser=${proof.browser}`,
 			`profile=${String(proof.data.profile_dir)}`,
 			`launched=${launchPerformed}`,
+			`open_target_verified=${openTargetId !== null}`,
 		].join(" "),
 		runtimeActions: [
 			{
@@ -478,6 +544,114 @@ function launchSuccess(
 		],
 		continuation: { next_action_id: "use_verified_endpoint" },
 	};
+}
+
+async function maybeOpenVerifiedChrome(
+	invocation: WarmChromeExecuteInvocation,
+	proof: WarmChromeVerifiedProof,
+	runtime: WarmChromeRuntime,
+	deps: WarmChromeProofDeps,
+): Promise<{ proof: WarmChromeVerifiedProof; targetId: string | null }> {
+	if (!invocation.openBrowser) return { proof, targetId: null };
+	const profileDir = proof.data.profile_dir;
+	const port = proof.data.port;
+	if (typeof profileDir !== "string" || typeof port !== "string") {
+		throw openFailedError(
+			"post_open_proof_failed",
+			"Verified Browser proof omitted the profile or port required for a bounded open request.",
+			proof,
+		);
+	}
+	let targetId: string;
+	try {
+		const created = await deps.cdpRoundTrip(
+			proof.webSocketDebuggerUrl,
+			"Target.createTarget",
+			{ url: AGENT_CHROME_OPEN_URL },
+		);
+		if (typeof created.targetId !== "string" || created.targetId === "") {
+			throw new Error("Target.createTarget returned no target id.");
+		}
+		targetId = created.targetId;
+	} catch {
+		throw openFailedError(
+			"target_create_failed",
+			"The verified Agent Chrome CDP authority could not create a new tab.",
+			proof,
+		);
+	}
+	try {
+		const targets = await deps.cdpRoundTrip(
+			proof.webSocketDebuggerUrl,
+			"Target.getTargets",
+		);
+		const targetInfos = Array.isArray(targets.targetInfos)
+			? targets.targetInfos
+			: [];
+		const targetVerified = targetInfos.some((candidate) => {
+			if (candidate === null || typeof candidate !== "object") return false;
+			const target = candidate as Record<string, unknown>;
+			return target.targetId === targetId && target.type === "page";
+		});
+		if (!targetVerified) {
+			throw new Error("Created target was not observable.");
+		}
+	} catch {
+		throw openFailedError(
+			"target_verification_failed",
+			"Agent Chrome created a target but could not verify it in the same Browser authority.",
+			proof,
+		);
+	}
+
+	const outcome = await runProofOutcome(
+		{
+			command: invocation.displayCommand,
+			endpoint: proof.endpoint,
+			port,
+			profileInput: profileDir,
+		},
+		runtime,
+		deps,
+	);
+	if (outcome.kind === "failed") {
+		throw openFailedError(
+			"post_open_proof_failed",
+			"Agent Chrome no longer passed Browser proof after the open request.",
+			proof,
+			outcome.error,
+		);
+	}
+	return { proof: outcome.proof, targetId };
+}
+
+function openFailedError(
+	reason:
+		| "target_create_failed"
+		| "target_verification_failed"
+		| "post_open_proof_failed",
+	message: string,
+	proof: WarmChromeVerifiedProof,
+	cause?: WarmChromeRuntimeError,
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError("open_failed", message, {
+		exitCode: 1,
+		failureDomain: "runtime_diagnostics",
+		recoverability: "none",
+		hintSummary:
+			"Agent Chrome remains the only approved browser lane; inspect launcher diagnostics and retry the explicit open request.",
+		data: {
+			reason,
+			endpoint: proof.endpoint,
+			port: proof.data.port,
+			...(cause === undefined
+				? {}
+				: {
+					failed_check_code: cause.code,
+					failed_check_reason: cause.options.data?.reason,
+				}),
+		},
+	});
 }
 
 type SpawnedUnverifiedInput = {

@@ -29,9 +29,10 @@ export const WARM_CHROME_CLI_NAME = "warm-chrome" as const;
  * `check` does not inject this default; launch and repair apply it only when
  * they must create or repair local Warm Chrome profile state.
  *
- * @defaultValue "~/.agent-warm-profile"
+ * @defaultValue "~/Library/Application Support/Agent Chrome/Chrome User Data"
  */
-export const WARM_CHROME_DEFAULT_PROFILE_DIR = "~/.agent-warm-profile" as const;
+export const WARM_CHROME_DEFAULT_PROFILE_DIR =
+	"~/Library/Application Support/Agent Chrome/Chrome User Data" as const;
 
 /**
  * Chrome profile directory selected inside the dedicated user-data directory.

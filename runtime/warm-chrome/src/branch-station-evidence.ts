@@ -15,7 +15,7 @@ import {
 export type WarmChromeBranchStationEvidence = BranchStationEvidence;
 
 /**
- * Importable expected-coverage manifest for the full 16-station catalog.
+ * Importable expected-coverage manifest for the full 18-station catalog.
  *
  * Process-boundary tests (U5-U7) compare their live scenario evidence to this
  * manifest so the auditor can import deterministic coverage without running

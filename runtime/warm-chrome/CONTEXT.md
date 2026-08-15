@@ -62,10 +62,54 @@ browser-connect; edit proof behavior in `runtime/warm-chrome`, not consumers."
 _Avoid example_: "Edit a browser-use preflight script to change proof
 behavior — no such script exists anymore."
 
+**Agent Chrome launcher**:
+The copied and signed native macOS app built from `app/AgentChrome.swift`. Its
+embedded compiled helpers retain profile-branding and Warm Chrome authority.
+The profile-avatar helper installs the generated Agent Chrome artwork only in
+the dedicated, stopped, browser-level-unsynced profile. Chrome loads the local
+GAIA image for the session and may clear its backing filename afterward; the
+launcher therefore reapplies it before cold start. Warm Chrome retains proof,
+profile, endpoint, target, and failure authority. Native code activates only
+the returned Browser pid and verifies foreground equality. Cold process
+creation uses macOS Launch Services so Agent Chrome is not responsible for
+Google Chrome app-bundle activity. It is a launcher for Google's signed Chrome
+binary, not a second browser implementation.
+_Avoid_: browser shell, proof owner, credential broker, Everyday Chrome alias,
+bundle-id-only visual proof
+_Developer example_: "Open Agent Chrome through its app; the launcher delegates
+to the proof-first CLI seam."
+_Avoid example_: "Let the app derive port 9222 and start Chrome directly."
+
+**Everyday Chrome launcher**:
+The copied and signed human-only macOS action built from
+`app/EverydayChrome.swift`. It opens the fixed regular Google Chrome lane
+through Launch Services without profile, CDP, or adapter
+arguments. It never proves, repairs, launches, or cleans up Agent Chrome. Both
+actions still host Google's `com.google.Chrome` Browser process, so the label
+is a convenience boundary rather than global macOS bundle-identity isolation.
+_Avoid_: adapter route, Agent fallback, default-browser owner, distinct browser
+bundle
+_Developer example_: "Use Everyday Chrome when a human wants regular Chrome
+without Agent Chrome launch arguments."
+_Avoid example_: "The Everyday action makes Finder route every Chrome link to
+the regular profile."
+
+**Verified browser open**:
+The optional `launch --open` lifecycle: prove the dedicated Agent Chrome,
+create `chrome://newtab/` through the proof-returned browser websocket, verify
+the returned target in the same Browser, then re-prove the endpoint and
+profile. The native launcher separately verifies exact-pid foreground
+activation. A cold Browser starts through the guarded spawn path first; no
+competing fallback Browser is allowed.
+_Avoid_: unproved activation, bundle-id-only routing, adapter fallback
+_Developer example_: "Use `launch --open`, then trust only its returned proof."
+_Avoid example_: "Activate any Google Chrome process and assume the agent
+profile won."
+
 **Station**:
 One deterministic agent-visible command outcome in the Branch Station
 Catalog: station id = canonical error code = primary runtime action =
-mutation pin, sixteen in total. Tests attach envelope evidence per station;
+mutation pin, eighteen in total. Tests attach envelope evidence per station;
 a missing or contradicting envelope is a drift finding.
 _Avoid_: log line, health value, freeform status, fine-grained cause
 _Developer example_: "`check.port_occupied_foreign` stays one station even when
@@ -157,9 +201,10 @@ machine."
 
 **Mutation pin**:
 The per-station declaration of cross-tool-visible state change the drift gate
-checks: `check` stations are read-only, `launch.launched` and
-`launch.spawned_unverified` write browser state, `repair.repaired` repairs
-profile state and enumerates each mutation (`profile_dir_created`,
+checks: `check` stations are read-only; `launch.launched`,
+`launch.open_target_verified`, and `launch.spawned_unverified` may write browser state;
+`launch.open_failed` preserves the verified browser but leaves the open effect
+unknown. `repair.repaired` repairs profile state and enumerates each mutation (`profile_dir_created`,
 `profile_permissions`, `devtools_active_port`, `profile_preferences`) with its
 exact path.
 _Avoid_: undeclared side effects, implicit writes

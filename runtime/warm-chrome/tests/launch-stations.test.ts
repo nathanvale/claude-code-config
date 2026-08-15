@@ -53,7 +53,7 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
@@ -105,15 +105,26 @@ function profileStat(
 
 type CdpEntry = Record<string, unknown> | Error;
 
+type CdpCall = {
+	method: string;
+	params?: Record<string, unknown>;
+};
+
 function healthyCdp(
 	overrides: Record<string, CdpEntry> = {},
 ): Record<string, CdpEntry> {
 	return {
 		"Browser.getVersion": { product: OBSERVED_BUILD, userAgent: HEADED_UA },
 		"Target.getBrowserContexts": { browserContextIds: [] },
+		"Target.createTarget": { targetId: "agent-chrome-new-tab" },
 		"Target.getTargets": {
 			targetInfos: [
 				{ type: "page", targetId: "page-1", url: "https://example.com/" },
+				{
+					type: "page",
+					targetId: "agent-chrome-new-tab",
+					url: "chrome://newtab/",
+				},
 			],
 		},
 		...overrides,
@@ -171,6 +182,7 @@ type Fixture = {
 		chmod: number;
 		ensureProfileDir: number;
 		readDevToolsActivePort: number;
+		cdpCalls: CdpCall[];
 	};
 	/** Virtual milliseconds consumed through runtime.now()/runtime.sleep. */
 	elapsedMs: () => number;
@@ -200,6 +212,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 		chmod: 0,
 		ensureProfileDir: 0,
 		readDevToolsActivePort: 0,
+		cdpCalls: [],
 	};
 	const toScript = <T,>(value: Script<T>): readonly T[] =>
 		(Array.isArray(value) ? value : [value]) as readonly T[];
@@ -315,11 +328,11 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 		},
 		isProcessAlive: async (pid) => options.processAlive?.[pid] ?? true,
 	});
-
 	const activePortScript = toScript(options.activePort ?? null);
 	let activePortCursor = 0;
 	const deps: WarmChromeProofDeps = {
-		cdpRoundTrip: async (_wsUrl, method) => {
+		cdpRoundTrip: async (_wsUrl, method, params) => {
+			calls.cdpCalls.push({ method, ...(params ? { params } : {}) });
 			const entry = cdp[method];
 			if (!entry) throw new Error(`unexpected CDP method: ${method}`);
 			if (entry instanceof Error) throw entry;
@@ -524,24 +537,120 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.writeTextFile).toBe(0);
 		expect(fixture.calls.chmod).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(
+			fixture.calls.cdpCalls.some((call) => call.method === "Target.createTarget"),
+		).toBe(false);
 	});
 
-		test("zero-flag launch reuses any verified dedicated profile instead of injecting the default", async () => {
-			const otherProfile = `${HOME}/other-warm-profile`;
-			const fixture = launchFixture({
-				listeners: {
-					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
-						port: WARM_CHROME_DEFAULT_CDP_PORT,
-						profile: otherProfile,
-					}),
-				},
-				versions: {
-					[WARM_CHROME_DEFAULT_CDP_PORT]: healthyVersionFor(
-						WARM_CHROME_DEFAULT_CDP_PORT,
-					),
-				},
-				profiles: { [otherProfile]: profileStat(otherProfile) },
-			});
+	test("launch.open_target_verified: --open creates and verifies a new tab through the proof-verified browser websocket", async () => {
+		const fixture = healthyWarmChromeFixture();
+		const argv = ["launch", "--open", "--run-id", "open-run"] as const;
+		const run = await runWarmChrome(argv, fixture);
+
+		expect(run.exitCode).toBe(0);
+		assertStationEnvelope(
+			stationById("launch.open_target_verified"),
+			toProcessResult("launch.open_target_verified", argv, run),
+		);
+		const parsed = parseEnvelope(run);
+		expect(parsed.data?.launch_performed).toBe(false);
+		expect(parsed.data?.open_target_verified).toBe(true);
+		expect(parsed.data?.open_target_id).toBe("agent-chrome-new-tab");
+		expect(fixture.calls.spawnChrome).toBe(0);
+		expect(fixture.calls.cdpCalls).toContainEqual({
+			method: "Target.createTarget",
+			params: { url: "chrome://newtab/" },
+		});
+	});
+
+	test("launch --open on a cold profile creates the verified target after the guarded spawn", async () => {
+		const fixture = launchFixture();
+		const run = await runWarmChrome(["launch", "--open"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.data?.launch_performed).toBe(true);
+		expect(parsed.data?.open_target_verified).toBe(true);
+		expect(parsed.data?.open_target_id).toBe("agent-chrome-new-tab");
+		expect(fixture.calls.spawnChrome).toBe(1);
+		expect(fixture.calls.spawnInputs[0]?.startupUrl).toBe("https://example.com/");
+		expect(fixture.calls.cdpCalls).toContainEqual({
+			method: "Target.createTarget",
+			params: { url: "chrome://newtab/" },
+		});
+	});
+
+	test("launch.open_failed: a rejected target creation is typed and never spawns a competing browser", async () => {
+		const fixture = healthyWarmChromeFixture({
+			cdp: healthyCdp({
+				"Target.createTarget": new Error("CDP target creation failed"),
+			}),
+		});
+		const argv = ["launch", "--open"] as const;
+		const run = await runWarmChrome(argv, fixture);
+
+		expect(run.exitCode).toBe(1);
+		assertStationEnvelope(
+			stationById("launch.open_failed"),
+			toProcessResult("launch.open_failed", argv, run),
+		);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("open_failed");
+		expect(parsed.continuation?.next_action_id).toBe("inspect_diagnostics");
+		expect(parsed.data?.reason).toBe("target_create_failed");
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("launch.open_failed: post-open proof loss is typed and preserves the original proof metadata", async () => {
+		const listener = chromeListener({ port: WARM_CHROME_DEFAULT_CDP_PORT });
+		const fixture = launchFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: [listener, listener, listener, null],
+			},
+			versions: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: healthyVersionFor(
+					WARM_CHROME_DEFAULT_CDP_PORT,
+				),
+			},
+		});
+		const argv = ["launch", "--open"] as const;
+		const run = await runWarmChrome(argv, fixture);
+
+		expect(run.exitCode).toBe(1);
+		assertStationEnvelope(
+			stationById("launch.open_failed"),
+			toProcessResult("launch.open_failed", argv, run),
+		);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("open_failed");
+		expect(parsed.data?.reason).toBe("post_open_proof_failed");
+		expect(parsed.data?.endpoint).toBe(
+			`http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
+		);
+		expect(parsed.data?.failed_check_code).toBe("listener_mismatch");
+		expect(fixture.calls.cdpCalls).toContainEqual({
+			method: "Target.createTarget",
+			params: { url: "chrome://newtab/" },
+		});
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("zero-flag launch reuses any verified dedicated profile instead of injecting the default", async () => {
+		const otherProfile = `${HOME}/other-warm-profile`;
+		const fixture = launchFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
+					port: WARM_CHROME_DEFAULT_CDP_PORT,
+					profile: otherProfile,
+				}),
+			},
+			versions: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: healthyVersionFor(
+					WARM_CHROME_DEFAULT_CDP_PORT,
+				),
+			},
+			profiles: { [otherProfile]: profileStat(otherProfile) },
+		});
 		const run = await runWarmChrome(["launch"], fixture);
 
 		expect(run.exitCode).toBe(0);
@@ -1290,7 +1399,7 @@ describe("warm-chrome launch re-emit rule (U6 via U3 map)", () => {
 });
 
 describe("warm-chrome launch station evidence (U6)", () => {
-	test("all four launch stations attach evidence and stop being missing", async () => {
+	test("all six launch stations attach evidence and stop being missing", async () => {
 		const evidence: WarmChromeBranchStationEvidence[] = [];
 		const stationRuns: Array<{
 			stationId: string;
@@ -1302,6 +1411,20 @@ describe("warm-chrome launch station evidence (U6)", () => {
 				stationId: "launch.already_verified",
 				argv: ["launch"],
 				fixture: healthyWarmChromeFixture(),
+			},
+			{
+				stationId: "launch.open_target_verified",
+				argv: ["launch", "--open"],
+				fixture: healthyWarmChromeFixture(),
+			},
+			{
+				stationId: "launch.open_failed",
+				argv: ["launch", "--open"],
+				fixture: healthyWarmChromeFixture({
+					cdp: healthyCdp({
+						"Target.createTarget": new Error("CDP target creation failed"),
+					}),
+				}),
 			},
 			{
 				stationId: "launch.port_occupied_foreign",

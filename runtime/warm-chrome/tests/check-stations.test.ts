@@ -48,7 +48,7 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
@@ -1357,6 +1357,8 @@ describe("warm-chrome check station evidence (U5)", () => {
 			[
 				"launch.already_verified",
 				"launch.launched",
+				"launch.open_failed",
+				"launch.open_target_verified",
 				"launch.port_occupied_foreign",
 				"launch.spawned_unverified",
 				"repair.repaired",

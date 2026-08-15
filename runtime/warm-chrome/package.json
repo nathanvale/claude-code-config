@@ -8,6 +8,9 @@
 		"sourceLinkedBin": true
 	},
 	"bin": {
+		"agent-chrome-install": "./app/install.ts",
+		"agent-chrome-profile-avatar": "./app/profile-avatar.ts",
+		"agent-chrome-profile-migrate": "./app/migrate-profile.ts",
 		"warm-chrome": "./src/cli.ts"
 	},
 	"exports": {
@@ -15,6 +18,9 @@
 		"./cli": "./src/cli.ts"
 	},
 	"scripts": {
+		"install-agent-chrome": "bun run app/install.ts",
+		"install-agent-chrome-avatar": "bun run app/profile-avatar.ts",
+		"migrate-agent-chrome-profile": "bun run app/migrate-profile.ts",
 		"warm-chrome": "bun run src/cli.ts",
 		"test": "bun test ./tests/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"

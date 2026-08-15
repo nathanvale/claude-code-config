@@ -127,7 +127,9 @@ describe("warm-chrome help flag surface (U2)", () => {
 				command,
 				contract,
 				help: renderCommandUsage(contract),
-				...(command === "launch" ? {} : { absentFlags: ["--chrome"] }),
+				...(command === "launch"
+					? {}
+					: { absentFlags: ["--chrome", "--open"] }),
 			});
 		}
 	});
@@ -182,6 +184,12 @@ describe("warm-chrome help flag surface (U2)", () => {
 			"--chrome",
 		);
 		expect(Object.keys(warmChromeContracts.launch.flags)).toContain("--chrome");
+		expect(Object.keys(warmChromeContracts.launch.flags)).toContain("--open");
+		for (const command of ["check", "status", "repair"] as const) {
+			expect(Object.keys(warmChromeContracts[command].flags)).not.toContain(
+				"--open",
+			);
+		}
 	});
 });
 

@@ -60,7 +60,7 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const ACTIVE_PORT_PATH = `${DEDICATED_PROFILE}/DevToolsActivePort`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const BROWSER_WS_PATH = "/devtools/browser/warm-chrome-token";
@@ -860,6 +860,7 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 				port: WARM_CHROME_DEFAULT_CDP_PORT,
 				profileInput: profile,
 				profileOnly: true,
+				openBrowser: false,
 				chromeBin: REAL_GOOGLE_CHROME_BINARY,
 			};
 			const firstHandler = createRepairCommandHandler();
@@ -958,7 +959,7 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		});
 		await runRepair(["repair"], fixture);
 
-		// The documented listenerless default is ~/.agent-warm-profile under
+		// The documented listenerless default is Agent Chrome's Application Support directory under
 		// HOME; an un-expanded literal would mkdir a "./~" dir in cwd instead.
 		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
 	});

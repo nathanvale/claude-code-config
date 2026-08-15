@@ -213,12 +213,12 @@ export type WarmChromeRuntime = {
 	ensureProfileDir: (path: string) => Promise<string>;
 	chmod: (path: string, mode: number) => Promise<void>;
 	writeTextFile: (path: string, content: string) => Promise<void>;
-		spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
-		readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
-		isProcessAlive: (pid: number) => Promise<boolean>;
-		sleep: (ms: number) => Promise<void>;
-		isTemporaryPath: (path: string) => boolean;
-	};
+	spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
+	readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
+	isProcessAlive: (pid: number) => Promise<boolean>;
+	sleep: (ms: number) => Promise<void>;
+	isTemporaryPath: (path: string) => boolean;
+};
 
 /**
  * Build the default macOS runtime adapter.
