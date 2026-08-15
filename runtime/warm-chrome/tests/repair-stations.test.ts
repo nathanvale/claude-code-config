@@ -60,7 +60,7 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const ACTIVE_PORT_PATH = `${DEDICATED_PROFILE}/DevToolsActivePort`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const BROWSER_WS_PATH = "/devtools/browser/warm-chrome-token";
@@ -431,12 +431,12 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 		expect(run.exitCode).toBe(0);
 		expect(run.stdout).toContain("--profile-only");
 		expect(run.stdout).toContain(
-			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
+			"Repair Agent Chrome identity and profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
 		);
 		expectNoProcessAffectingCalls(fixture);
 	});
 
-	test("missing profile is created 0700 with the five disabled policy flags", async () => {
+	test("missing profile is created 0700 with Agent Chrome identity and the five disabled policy flags", async () => {
 		const root = await makeScratchProfileRoot();
 		try {
 			const profile = join(root, "explicit-profile");
@@ -464,7 +464,10 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 			) as Record<string, unknown>;
 			expect(preferences).toMatchObject({
 				credentials_enable_service: false,
-				profile: { password_manager_enabled: false },
+				profile: {
+					name: "Agent Chrome",
+					password_manager_enabled: false,
+				},
 				autofill: { profile_enabled: false, credit_card_enabled: false },
 				sync: { requested: false },
 			});
@@ -655,7 +658,7 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 		}
 	});
 
-	test("existing Preferences keeps unrelated JSON bytes while merging the five flags", async () => {
+	test("existing Preferences keeps unrelated JSON bytes while merging Agent Chrome identity and the five flags", async () => {
 		const root = await makeScratchProfileRoot();
 		try {
 			const profile = join(root, "explicit-profile");
@@ -689,7 +692,11 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 			const preferences = JSON.parse(output) as Record<string, unknown>;
 			expect(preferences).toMatchObject({
 				unrelated: { marker: "keep-me" },
-				profile: { theme: "dark", password_manager_enabled: false },
+				profile: {
+					name: "Agent Chrome",
+					theme: "dark",
+					password_manager_enabled: false,
+				},
 				autofill: {
 					address_hint: "home",
 					profile_enabled: false,
@@ -853,6 +860,7 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 				port: WARM_CHROME_DEFAULT_CDP_PORT,
 				profileInput: profile,
 				profileOnly: true,
+				openBrowser: false,
 				chromeBin: REAL_GOOGLE_CHROME_BINARY,
 			};
 			const firstHandler = createRepairCommandHandler();
@@ -951,7 +959,7 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		});
 		await runRepair(["repair"], fixture);
 
-		// The documented listenerless default is ~/.agent-warm-profile under
+		// The documented listenerless default is Agent Chrome's Application Support directory under
 		// HOME; an un-expanded literal would mkdir a "./~" dir in cwd instead.
 		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
 	});

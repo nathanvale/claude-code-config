@@ -80,6 +80,11 @@ const launchFlags = {
 		description:
 			"Stable Google Chrome app binary; accepted path is /Applications/Google Chrome.app/Contents/MacOS/Google Chrome.",
 	},
+	"--open": {
+		type: "boolean",
+		description:
+			"After browser-entry proof, create and verify a new tab through the verified browser websocket, then re-prove it.",
+	},
 } as const satisfies WarmChromeCommandContract["flags"];
 
 const repairFlags = {
@@ -92,7 +97,7 @@ const repairFlags = {
 	"--profile-only": {
 		type: "boolean",
 		description:
-			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
+			"Repair Agent Chrome identity and profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
 	},
 } as const satisfies WarmChromeCommandContract["flags"];
 
@@ -223,7 +228,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			script: WARM_CHROME_CLI_NAME,
 			summary: "Launch real Google Chrome if needed, then verify.",
 			usage: [
-				"warm-chrome launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
+				"warm-chrome launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--open] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",
@@ -235,7 +240,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			// command as the package preview surface (former projection CLI precedent).
 			previewExemption: {
 				reason:
-					"Launch may start local Warm Chrome; warm-chrome check is the read-only preview surface, and launch-only input such as --chrome is validated by launch itself and cannot be previewed.",
+					"Launch may start local Warm Chrome or create a verified tab; warm-chrome check is the read-only preview surface, and launch-only input such as --chrome or --open is validated by launch itself and cannot be previewed.",
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
@@ -291,7 +296,7 @@ export const warmChromeContractEntries = WARM_CHROME_COMMANDS.map(
  */
 export const WARM_CHROME_PREVIEW_NOTES = {
 	launch:
-		"Preview with warm-chrome check; launch-only input (--chrome) is validated by launch itself and cannot be previewed.",
+		"Preview with warm-chrome check; launch-only input (--chrome, --open) is validated by launch itself and cannot be previewed.",
 	repair:
 		"Preview browser entry with warm-chrome check; profile-only repair requires the caller's read-only profile-policy check.",
 } as const satisfies Partial<Record<WarmChromeCommand, string>>;

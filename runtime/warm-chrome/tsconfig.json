@@ -16,5 +16,5 @@
 		"resolveJsonModule": true,
 		"ignoreDeprecations": "5.0"
 	},
-	"include": ["src/**/*.ts", "tests/**/*.ts"]
+	"include": ["app/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
 }

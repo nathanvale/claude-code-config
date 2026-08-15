@@ -180,6 +180,33 @@ export const warmChromeBranchStationCatalog = [
 		mutationExpectation: "no_surviving_new_child",
 	},
 	{
+		id: "launch.open_target_verified",
+		command: "launch",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--open creates and verifies a new page target through the proof-verified browser websocket, then re-proves the browser",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
+		expectedActionId: "use_verified_endpoint",
+		mutationExpectation: "verified_browser_preserved_target_created",
+	},
+	{
+		id: "launch.open_failed",
+		command: "launch",
+		classification: "required",
+		intent: "runtime_failure",
+		trigger:
+			"target creation, target verification, or post-open Browser proof fails",
+		expectedExitCode: 1,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
+		expectedErrorCode: "open_failed",
+		expectedActionId: "inspect_diagnostics",
+		mutationExpectation: "verified_browser_preserved_open_effect_unknown",
+	},
+	{
 		id: "launch.port_occupied_foreign",
 		command: "launch",
 		classification: "required",

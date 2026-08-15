@@ -190,6 +190,7 @@ export type LaunchChromeInput = {
 	chromeBin: string;
 	port: string;
 	profileDir: string;
+	profileDirectory: string;
 	startupUrl: string;
 };
 
@@ -212,12 +213,12 @@ export type WarmChromeRuntime = {
 	ensureProfileDir: (path: string) => Promise<string>;
 	chmod: (path: string, mode: number) => Promise<void>;
 	writeTextFile: (path: string, content: string) => Promise<void>;
-		spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
-		readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
-		isProcessAlive: (pid: number) => Promise<boolean>;
-		sleep: (ms: number) => Promise<void>;
-		isTemporaryPath: (path: string) => boolean;
-	};
+	spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
+	readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
+	isProcessAlive: (pid: number) => Promise<boolean>;
+	sleep: (ms: number) => Promise<void>;
+	isTemporaryPath: (path: string) => boolean;
+};
 
 /**
  * Build the default macOS runtime adapter.
@@ -255,6 +256,7 @@ export function createDefaultRuntime(
 				[
 					`--remote-debugging-port=${input.port}`,
 					`--user-data-dir=${input.profileDir}`,
+					`--profile-directory=${input.profileDirectory}`,
 					"--no-first-run",
 					"--no-default-browser-check",
 					input.startupUrl,

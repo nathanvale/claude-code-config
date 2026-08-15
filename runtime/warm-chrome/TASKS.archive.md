@@ -5,6 +5,14 @@ Keep active choices in `TASKS.md`; use this file when history matters.
 
 ## Closed Implementation Units
 
+- 2026-08-14 Agent Chrome identity-and-launch slice closed: preserving native
+  profile migration; copied and signed Agent Chrome and human-only Everyday
+  Chrome actions; exact-profile launch; generated avatar; continuity;
+  coexistence; rollback; human identity acceptance; Warm Chrome `261/261` and
+  Browser Connect `564/564`; both typechecks. Both actions still host Google's
+  `com.google.Chrome` Browser process, so global macOS routing isolation remains
+  outside V1.
+
 - 2026-07-03 U1 package scaffold closed: `@side-quest/warm-chrome` lives at
   `runtime/warm-chrome`, source-linked bin `warm-chrome`, facade dependency,
   tests, typecheck, and package docs.
@@ -126,18 +134,19 @@ Plan: `docs/plans/2026-07-04-001-feat-browser-use-warm-chrome-switchover-plan.md
 Decision log:
 `docs/decisions/2026-07-04-001-browser-use-warm-chrome-switchover-decision-log.md`.
 
-browser-use now routes its production Warm Chrome proof through this package:
+browser-use now routes its production Warm Chrome proof through this package.
+Historical paths at closure, since deleted:
 
-- `skills/browser-use/src/preflight-warm-chrome.ts` is a thin delegator to
+- `preflight-warm-chrome.ts` is a thin delegator to
   `main()` with a `WARM_CHROME_X ?? BROWSER_USE_X` env bridge (CDP_PORT,
   PROFILE_DIR, RUN_ID); the `preflight-warm-chrome` bin, dist entrypoint, and
   argv contract are unchanged.
-- `skills/browser-use/src/browser-adapter-router-prepare.ts` gates the Warm
+- `browser-adapter-router-prepare.ts` gates the Warm
   Chrome proof on the package's `data.contract_id == WARM_CHROME_CONTRACT_ID`
   (a `contractField` param keeps the shared parser serving the adapter proof's
   `data.contract`). The legacy `WARM_CHROME_PREFLIGHT_CONTRACT_ID` + preflight
   contract surface (`warmChromePreflightContracts`) are removed.
-- `skills/browser-use/src/preflight-browser-adapter.ts` composes the package
+- `preflight-browser-adapter.ts` composes the package
   proof in-process via `main(..., { handlers: { check: createCheckCommandHandler(proofDeps) } })`.
   This was not enumerated in the plan units: the live adapter proof imported the
   old implementation's runtime helpers, so R2's deletion forced the repoint. It
