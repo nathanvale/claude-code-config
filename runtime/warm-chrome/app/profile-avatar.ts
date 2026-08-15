@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 
+import { WARM_CHROME_PROFILE_NAME } from "../src/model.ts";
 import { createDefaultRuntime } from "../src/runtime.ts";
 
 const EXIT_BLOCKED = 20;
@@ -25,6 +26,13 @@ const CHROME_AVATAR_ICON_URL = `chrome://theme/IDR_PROFILE_AVATAR_${CHROME_AVATA
 const AGENT_CHROME_PROFILE_COLOR_SEED = -33536;
 const PRODUCT_NAME = "Agent Chrome";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+type AvatarChangedState =
+	| "none"
+	| "profile_directories_prepared"
+	| "profile_avatar_written"
+	| "profile_preferences_written"
+	| "profile_local_state_written";
 
 type Invocation = {
 	mode: "check" | "apply";
@@ -163,7 +171,11 @@ function sha256(bytes: Uint8Array): string {
 	return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function writeAtomically(path: string, content: Uint8Array): Promise<void> {
+async function writeAtomically(
+	path: string,
+	content: Uint8Array,
+	recordMutation: () => void,
+): Promise<void> {
 	const tempPath = join(dirname(path), `.${PRODUCT_NAME}.${process.pid}.${randomUUID()}.tmp`);
 	let handle: Awaited<ReturnType<typeof open>> | null = null;
 	try {
@@ -172,8 +184,9 @@ async function writeAtomically(path: string, content: Uint8Array): Promise<void>
 		await handle.sync();
 		await handle.close();
 		handle = null;
+		await chmod(tempPath, 0o600);
 		await rename(tempPath, path);
-		await chmod(path, 0o600);
+		recordMutation();
 	} finally {
 		await handle?.close().catch(() => undefined);
 		await unlink(tempPath).catch(() => undefined);
@@ -185,7 +198,7 @@ function mergedPreferences(preferences: JsonObject): JsonObject {
 		...preferences,
 		profile: {
 			...nestedObject(preferences.profile),
-			name: PRODUCT_NAME,
+			name: WARM_CHROME_PROFILE_NAME,
 			avatar_index: CHROME_AVATAR_INDEX,
 			using_default_avatar: false,
 			using_gaia_avatar: true,
@@ -205,7 +218,7 @@ function mergedLocalState(localState: JsonObject): JsonObject {
 				...infoCache,
 				[PROFILE_DIRECTORY]: {
 					...defaultProfile,
-					name: PRODUCT_NAME,
+					name: WARM_CHROME_PROFILE_NAME,
 					profile_color_seed: AGENT_CHROME_PROFILE_COLOR_SEED,
 					avatar_icon: CHROME_AVATAR_ICON_URL,
 					is_using_default_name: false,
@@ -236,12 +249,12 @@ function profileMetadataIsBranded(
 	const cachedProfile = nestedObject(cache[PROFILE_DIRECTORY]);
 	const preferenceProfile = nestedObject(preferences.profile);
 	return (
-		cachedProfile.name === PRODUCT_NAME &&
+		cachedProfile.name === WARM_CHROME_PROFILE_NAME &&
 		cachedProfile.profile_color_seed === AGENT_CHROME_PROFILE_COLOR_SEED &&
 		cachedProfile.avatar_icon === CHROME_AVATAR_ICON_URL &&
 		cachedProfile.is_using_default_avatar === false &&
 		cachedProfile.use_gaia_picture === true &&
-		preferenceProfile.name === PRODUCT_NAME &&
+		preferenceProfile.name === WARM_CHROME_PROFILE_NAME &&
 		preferenceProfile.using_default_avatar === false &&
 		preferenceProfile.using_gaia_avatar === true
 	);
@@ -255,22 +268,52 @@ async function profileIsLocked(profileDir: string): Promise<boolean> {
 	return runtime.isProcessAlive(lock.pid);
 }
 
-async function ensureProfileDirectories(profileDir: string): Promise<void> {
-	await mkdir(join(profileDir, PROFILE_DIRECTORY), {
-		recursive: true,
-		mode: 0o700,
-	});
-	if ((await realpath(profileDir)) !== profileDir) {
+async function inspectProfileRoot(profileDir: string): Promise<void> {
+	let resolved: string;
+	try {
+		resolved = await realpath(profileDir);
+	} catch {
+		throw new AvatarFailure("profile_path_unsafe", "inspect_profile_path");
+	}
+	if (resolved !== profileDir) {
 		throw new AvatarFailure("profile_path_symlink", "use_agent_chrome_path");
 	}
 	const profileInfo = await lstat(profileDir);
 	if (!profileInfo.isDirectory() || profileInfo.isSymbolicLink()) {
 		throw new AvatarFailure("profile_path_unsafe", "inspect_profile_path");
 	}
-	await Promise.all([
-		chmod(profileDir, 0o700),
-		chmod(join(profileDir, PROFILE_DIRECTORY), 0o700),
-	]);
+}
+
+async function ensureProfileDirectories(
+	profileDir: string,
+	recordMutation: () => void,
+): Promise<void> {
+	await inspectProfileRoot(profileDir);
+	const profileDirectory = join(profileDir, PROFILE_DIRECTORY);
+	const profileInfo = await lstat(profileDir);
+	if ((profileInfo.mode & 0o777) !== 0o700) {
+		await chmod(profileDir, 0o700);
+		recordMutation();
+	}
+	try {
+		await mkdir(profileDirectory, { mode: 0o700 });
+		recordMutation();
+		const createdInfo = await lstat(profileDirectory);
+		if ((createdInfo.mode & 0o777) !== 0o700) {
+			await chmod(profileDirectory, 0o700);
+			recordMutation();
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		const info = await lstat(profileDirectory);
+		if (!info.isDirectory() || info.isSymbolicLink()) {
+			throw new AvatarFailure("profile_path_unsafe", "inspect_profile_path");
+		}
+		if ((info.mode & 0o777) !== 0o700) {
+			await chmod(profileDirectory, 0o700);
+			recordMutation();
+		}
+	}
 }
 
 function emit(json: boolean, payload: JsonObject): void {
@@ -282,6 +325,7 @@ function emit(json: boolean, payload: JsonObject): void {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+	let changedState: AvatarChangedState = "none";
 	let invocation: Invocation | null;
 	try {
 		invocation = parseInvocation(argv);
@@ -307,6 +351,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			normalize(invocation.avatarPath),
 			"avatar_path_invalid",
 		);
+		await inspectProfileRoot(expectedProfile);
 		const avatar = await readRegularFile(invocation.avatarPath, AVATAR_MAX_BYTES);
 		if (!avatar.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
 			throw new AvatarFailure("avatar_not_png", "restore_owned_avatar");
@@ -345,7 +390,12 @@ async function main(argv: readonly string[]): Promise<number> {
 
 		const nextLocalState = mergedLocalState(localState);
 		const nextPreferences = mergedPreferences(preferences);
-		const installedAvatar = await readFile(installedAvatarPath).catch(() => null);
+		let installedAvatar: Buffer | null = null;
+		try {
+			installedAvatar = await readRegularFile(installedAvatarPath, AVATAR_MAX_BYTES);
+		} catch (error) {
+			if ((error as AvatarFailure).code !== "required_file_missing") throw error;
+		}
 		const branded =
 			installedAvatar !== null &&
 			sha256(installedAvatar) === sha256(avatar) &&
@@ -383,15 +433,25 @@ async function main(argv: readonly string[]): Promise<number> {
 			throw new AvatarFailure("profile_running", "close_agent_chrome");
 		}
 
-		await ensureProfileDirectories(expectedProfile);
-		await writeAtomically(installedAvatarPath, avatar);
+		await ensureProfileDirectories(expectedProfile, () => {
+			changedState = "profile_directories_prepared";
+		});
+		await writeAtomically(installedAvatarPath, avatar, () => {
+			changedState = "profile_avatar_written";
+		});
 		await writeAtomically(
 			preferencesPath,
 			Buffer.from(serializeJson(nextPreferences, preferencesSource)),
+			() => {
+				changedState = "profile_preferences_written";
+			},
 		);
 		await writeAtomically(
 			localStatePath,
 			Buffer.from(serializeJson(nextLocalState, localStateSource)),
+			() => {
+				changedState = "profile_local_state_written";
+			},
 		);
 		emit(invocation.json, {
 			status: "branded",
@@ -409,7 +469,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			status: "blocked",
 			code: failure.code,
 			profile_avatar: "agent_chrome",
-			changed_state: "none",
+			changed_state: changedState,
 			next_action: failure.nextAction,
 		});
 		return failure.exitCode;

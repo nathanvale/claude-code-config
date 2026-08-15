@@ -29,6 +29,18 @@ describe("Agent Chrome native runtime", () => {
 		expect(observed).toEqual([INPUT]);
 		expect(launched.pid).toBe(process.pid);
 		expect(await launched.kill()).toBe(false);
-		expect(runtime.isProcessAlive(process.pid)).resolves.toBe(true);
+		await expect(runtime.isProcessAlive(process.pid)).resolves.toBe(true);
+	});
+
+	test("an unknown process-command probe never reports the launched Chrome as terminated", async () => {
+		const runtime = createNativeRuntime({
+			launchChrome: async () => process.pid,
+			processCommand: async () => ({ status: "unknown" }),
+		});
+
+		const launched = await runtime.spawnChrome(INPUT);
+
+		expect(await launched.kill()).toBe(false);
+		await expect(runtime.isProcessAlive(process.pid)).resolves.toBe(true);
 	});
 });

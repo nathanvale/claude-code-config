@@ -106,10 +106,11 @@ has a repository or Bun runtime dependency. Owned rollback copies live under
 `~/Library/Application Support/Agent Chrome/Installer Backups/` with a
 non-`.app` suffix so Launch Services cannot discover an obsolete production
 bundle. Before cold browser entry, Agent Chrome converges the generated image
-as a dedicated local GAIA avatar while the profile is stopped. It refuses
-browser-level Google sign-in instead of replacing an account photo. Chrome
-`151.0.7922.137` rendered the generated image in the exact Agent Chrome toolbar
-and profile menu. Chrome then cleared the backing GAIA filename while retaining
+as a dedicated local GAIA avatar while the profile is stopped. A browser-level
+Google sign-in preserves the account photo and continues without replacing it.
+On 2026-08-14, Chrome `151.0.7922.137` rendered the generated image in the exact
+Agent Chrome toolbar and profile menu as observed validation evidence. Chrome
+then cleared the backing GAIA filename while retaining
 the rendered session image, so the launcher reapplies it before each cold start
 and accepts matching branding metadata during healthy live reuse. File checks
 remain preparation evidence only. The launcher then
@@ -223,7 +224,7 @@ cleanup U5/KTD6).
 - Preview lifecycle posture with `check` before `launch` or `repair`.
 - Keep `Agent Chrome.app` self-contained but policy-thin: embedded Warm Chrome
   owns proof and target creation; native code owns exact-pid activation only.
-- Launch cold installed Agent Chrome instances through the embedded Launch
+- Cold-launch installed Agent Chrome instances through the embedded Launch
   Services helper; never require Agent Chrome App Management permission.
 - Preview migration and installation before applying either writer.
 - Apply profile-avatar candidates only to the exact dedicated path while

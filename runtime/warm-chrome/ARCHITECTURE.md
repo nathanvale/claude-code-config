@@ -143,8 +143,8 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   and private non-application retained backups.
 - `app/profile-avatar.ts`: preview-first, stopped-profile product branding;
   installs the generated artwork through Chrome's persistent high-resolution
-  local-avatar file and metadata owners, refuses browser-level Google sign-in,
-  and never accepts an Everyday Chrome path.
+  local-avatar file and metadata owners, preserves browser-account artwork on
+  signed-in profiles, and never accepts an Everyday Chrome path.
 - `app/migrate-profile.ts`: fixed-source, fixed-destination, stopped-Browser
   preserving migration with metadata verification and unchanged legacy
   rollback state.

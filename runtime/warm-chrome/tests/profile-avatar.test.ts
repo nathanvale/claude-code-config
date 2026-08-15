@@ -155,7 +155,101 @@ async function expectNoInstalledAvatar(state: Fixture): Promise<void> {
 	).toBeNull();
 }
 
+async function changeFlags(flag: "uchg" | "nouchg", path: string): Promise<void> {
+	const child = Bun.spawn(["/usr/bin/chflags", flag, path], {
+		stdin: "ignore",
+		stdout: "ignore",
+		stderr: "ignore",
+	});
+	expect(await child.exited).toBe(0);
+}
+
 describe("Agent Chrome profile avatar", () => {
+	test("rejects an out-of-scope profile before reading or writing it", async () => {
+		const state = await fixture();
+		const localStateBefore = await readFile(join(state.profile, "Local State"));
+		const preferencesBefore = await readFile(
+			join(state.profile, "Default", "Preferences"),
+		);
+		const result = await run(
+			{ ...state, profile: join(state.home, "out-of-scope-profile") },
+			"--apply",
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "blocked",
+			code: "profile_path_invalid",
+			changed_state: "none",
+			next_action: "use_agent_chrome_path",
+		});
+		await expectProfileBytes(state, localStateBefore, preferencesBefore);
+		await expectNoInstalledAvatar(state);
+	});
+
+	test("rejects relative and non-normalized avatar paths", async () => {
+		const state = await fixture();
+		const localStateBefore = await readFile(join(state.profile, "Local State"));
+		const preferencesBefore = await readFile(
+			join(state.profile, "Default", "Preferences"),
+		);
+
+		for (const avatar of [
+			"agent-chrome.png",
+			`${state.home}/nested/../agent-chrome.png`,
+		]) {
+			const result = await run({ ...state, avatar }, "--apply");
+			expect(result.exitCode).toBe(20);
+			expect(JSON.parse(result.stdout)).toMatchObject({
+				status: "blocked",
+				code: "avatar_path_invalid",
+				changed_state: "none",
+				next_action: "use_agent_chrome_path",
+			});
+		}
+
+		await expectProfileBytes(state, localStateBefore, preferencesBefore);
+		await expectNoInstalledAvatar(state);
+	});
+
+	test("rejects a non-PNG avatar without changing profile state", async () => {
+		const state = await fixture();
+		const localStateBefore = await readFile(join(state.profile, "Local State"));
+		const preferencesBefore = await readFile(
+			join(state.profile, "Default", "Preferences"),
+		);
+		await writeFile(state.avatar, "not a png\n", { mode: 0o600 });
+
+		const result = await run(state, "--apply");
+		expect(result.exitCode).toBe(20);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "blocked",
+			code: "avatar_not_png",
+			changed_state: "none",
+			next_action: "restore_owned_avatar",
+		});
+		await expectProfileBytes(state, localStateBefore, preferencesBefore);
+		await expectNoInstalledAvatar(state);
+	});
+
+	test("rejects a symlinked profile root before creating its Default directory", async () => {
+		const state = await fixture();
+		const foreignRoot = join(state.home, "foreign-profile-root");
+		await rm(state.profile, { recursive: true });
+		await mkdir(foreignRoot, { mode: 0o700 });
+		await symlink(foreignRoot, state.profile);
+
+		const result = await run(state, "--apply");
+		expect(result.exitCode).toBe(20);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "blocked",
+			code: "profile_path_symlink",
+			changed_state: "none",
+			next_action: "use_agent_chrome_path",
+		});
+		expect(await lstat(join(foreignRoot, "Default")).catch(() => null)).toBeNull();
+	});
+
 	test("preview is read-only and apply installs the generated artwork without touching Everyday Chrome", async () => {
 		const state = await fixture();
 		const localStateBefore = await readFile(join(state.profile, "Local State"));
@@ -330,4 +424,52 @@ describe("Agent Chrome profile avatar", () => {
 		expect(result.stdout).not.toContain("private-account-id");
 		expect(result.stderr).not.toContain("private-account-id");
 	});
+
+	test("rejects an unsafe installed avatar instead of following it", async () => {
+		const state = await fixture();
+		const foreignAvatar = join(state.home, "foreign-avatar.png");
+		const installedAvatar = join(
+			state.profile,
+			"Default",
+			"Google Profile Picture.png",
+		);
+		await writeFile(foreignAvatar, PNG, { mode: 0o600 });
+		await symlink(foreignAvatar, installedAvatar);
+
+		const result = await run(state, "--check");
+		expect(result.exitCode).toBe(20);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "blocked",
+			code: "required_file_unsafe",
+			changed_state: "none",
+			next_action: "inspect_owned_file",
+		});
+		expect(await readlink(installedAvatar)).toBe(foreignAvatar);
+	});
+
+	test.skipIf(process.platform !== "darwin")(
+		"reports the last completed mutation when a later profile write is blocked",
+		async () => {
+			const state = await fixture();
+			const preferencesPath = join(state.profile, "Default", "Preferences");
+			await changeFlags("uchg", preferencesPath);
+			try {
+				const result = await run(state, "--apply");
+				expect(result.exitCode).toBe(20);
+				expect(JSON.parse(result.stdout)).toMatchObject({
+					status: "blocked",
+					code: "avatar_install_failed",
+					changed_state: "profile_avatar_written",
+					next_action: "inspect_diagnostics",
+				});
+				expect(
+					await readFile(
+						join(state.profile, "Default", "Google Profile Picture.png"),
+					),
+				).toEqual(PNG);
+			} finally {
+				await changeFlags("nouchg", preferencesPath);
+			}
+		},
+	);
 });

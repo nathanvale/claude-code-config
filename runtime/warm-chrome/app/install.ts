@@ -107,6 +107,8 @@ async function runCommand(
 		env: {
 			PATH: "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
 			LANG: "C.UTF-8",
+			...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+			...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
 		},
 		stdin: "ignore",
 		stdout: "pipe",
@@ -452,6 +454,8 @@ async function install(
 }> {
 	const scratch = await mkdtemp(join(tmpdir(), "agent-chrome-install-"));
 	await chmod(scratch, 0o700);
+	let agentNext: string | undefined;
+	let everydayNext: string | undefined;
 	try {
 		const [agentBundle, everydayBundle] = await Promise.all([
 			buildAgentBundle(packageRoot, scratch),
@@ -472,11 +476,11 @@ async function install(
 			applications,
 			backups,
 		);
-		const agentNext = join(
+		agentNext = join(
 			applications,
 			`.Agent Chrome.next-${randomUUID()}.app`,
 		);
-		const everydayNext = join(
+		everydayNext = join(
 			applications,
 			`.Everyday Chrome.next-${randomUUID()}.app`,
 		);
@@ -545,7 +549,18 @@ async function install(
 			migratedLegacy,
 		};
 	} finally {
-		await rm(scratch, { recursive: true, force: true }).catch(() => {});
+		try {
+			await Promise.all([
+				agentNext
+					? rm(agentNext, { recursive: true, force: true })
+					: Promise.resolve(),
+				everydayNext
+					? rm(everydayNext, { recursive: true, force: true })
+					: Promise.resolve(),
+			]);
+		} finally {
+			await rm(scratch, { recursive: true, force: true }).catch(() => {});
+		}
 	}
 }
 

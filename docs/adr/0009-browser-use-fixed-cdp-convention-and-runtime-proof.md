@@ -6,8 +6,9 @@ supersedes: 0008-browser-use-owns-warm-chrome-binding-lifecycle.md
 
 # browser-use Uses Fixed CDP Convention And Runtime Proof
 
-`browser-use` uses the current Warm Chrome convention: CDP on `9222`, a
-dedicated Agent Chrome profile, and proof on every run.
+`browser-use` uses the current Warm Chrome convention: default CDP port `9242`,
+a dedicated Agent Chrome profile, and proof on every run. Explicit `--port`
+and `--endpoint` values remain supported.
 
 ## Current owners: 2026-08-14
 
@@ -52,7 +53,7 @@ Status: superseded on 2026-08-14 by the native macOS path below.
 - Detail:
   `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`.
 
-## Amendment 2026-08-14
+## Amendment 2026-08-14: Profile ownership
 
 - Agent Chrome owns Browser data at
   `~/Library/Application Support/Agent Chrome/Chrome User Data` on macOS.
@@ -64,7 +65,7 @@ Status: superseded on 2026-08-14 by the native macOS path below.
 - Both actions still host Google's `com.google.Chrome` Browser process. The
   labels do not claim global Finder, Dock, or external-link isolation.
 
-## Amendment 2026-08-14
+## Amendment 2026-08-14: Native launch and target proof
 
 - Nathan accepted the macOS-native profile owner at
   `~/Library/Application Support/Agent Chrome/Chrome User Data`. This

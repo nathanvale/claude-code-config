@@ -34,6 +34,15 @@ type SnapshotEntry = {
 	mode: number;
 };
 
+type MigrationChangedState =
+	| "none"
+	| "destination_owner_prepared"
+	| "destination_promoted";
+
+type OwnerRootPosture =
+	| { status: "missing" }
+	| { status: "directory"; mode: number };
+
 class MigrationFailure extends Error {
 	constructor(
 		readonly code: string,
@@ -209,14 +218,15 @@ async function runDitto(source: string, staging: string): Promise<void> {
 	}
 }
 
-async function ensureOwnerRoot(ownerRoot: string): Promise<void> {
+async function inspectOwnerRoot(ownerRoot: string): Promise<OwnerRootPosture> {
 	let ownerInfo: Awaited<ReturnType<typeof lstat>>;
 	try {
 		ownerInfo = await lstat(ownerRoot);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		await mkdir(ownerRoot, { recursive: true, mode: 0o700 });
-		ownerInfo = await lstat(ownerRoot);
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return { status: "missing" };
+		}
+		throw error;
 	}
 	if (!ownerInfo.isDirectory() || ownerInfo.isSymbolicLink()) {
 		throw new MigrationFailure(
@@ -224,12 +234,55 @@ async function ensureOwnerRoot(ownerRoot: string): Promise<void> {
 			"inspect_destination",
 		);
 	}
-	await chmod(ownerRoot, 0o700);
+	return { status: "directory", mode: ownerInfo.mode & 0o777 };
 }
 
-async function migrate(source: string, destination: string): Promise<void> {
+async function ensureOwnerRoot(
+	ownerRoot: string,
+	recordMutation: () => void,
+): Promise<void> {
+	const posture = await inspectOwnerRoot(ownerRoot);
+	if (posture.status === "missing") {
+		try {
+			await mkdir(ownerRoot, { mode: 0o700 });
+			recordMutation();
+			const createdPosture = await inspectOwnerRoot(ownerRoot);
+			if (
+				createdPosture.status === "directory" &&
+				createdPosture.mode !== 0o700
+			) {
+				await chmod(ownerRoot, 0o700);
+				recordMutation();
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			const racedPosture = await inspectOwnerRoot(ownerRoot);
+			if (racedPosture.status !== "directory") {
+				throw new MigrationFailure(
+					"destination_owner_unsafe",
+					"inspect_destination",
+				);
+			}
+			if (racedPosture.mode !== 0o700) {
+				await chmod(ownerRoot, 0o700);
+				recordMutation();
+			}
+		}
+	} else if (posture.mode !== 0o700) {
+		await chmod(ownerRoot, 0o700);
+		recordMutation();
+	}
+}
+
+async function migrate(
+	source: string,
+	destination: string,
+	recordMutation: (state: MigrationChangedState) => void,
+): Promise<void> {
 	const ownerRoot = resolve(destination, "..");
-	await ensureOwnerRoot(ownerRoot);
+	await ensureOwnerRoot(ownerRoot, () => {
+		recordMutation("destination_owner_prepared");
+	});
 	const staging = await mkdtemp(join(ownerRoot, ".Chrome User Data.staging-"));
 	await chmod(staging, 0o700);
 	try {
@@ -252,6 +305,7 @@ async function migrate(source: string, destination: string): Promise<void> {
 			throw new MigrationFailure("destination_exists", "inspect_destination");
 		}
 		await rename(staging, destination);
+		recordMutation("destination_promoted");
 		await durableDirectory(ownerRoot);
 	} finally {
 		await rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -259,6 +313,7 @@ async function migrate(source: string, destination: string): Promise<void> {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+	let changedState: MigrationChangedState = "none";
 	let invocation: Invocation | null;
 	try {
 		invocation = parseInvocation(argv);
@@ -305,6 +360,7 @@ async function main(argv: readonly string[]): Promise<number> {
 	);
 	try {
 		await requireLegacyPosture(source);
+		await inspectOwnerRoot(resolve(destination, ".."));
 		if (await destinationExists(destination)) {
 			throw new MigrationFailure("destination_exists", "inspect_destination");
 		}
@@ -320,7 +376,9 @@ async function main(argv: readonly string[]): Promise<number> {
 			});
 			return 0;
 		}
-		await migrate(source, destination);
+		await migrate(source, destination, (state) => {
+			changedState = state;
+		});
 		emit(invocation.json, {
 			status: "migrated",
 			changed_state: "profile_migrated",
@@ -338,7 +396,7 @@ async function main(argv: readonly string[]): Promise<number> {
 		emit(invocation.json, {
 			status: "blocked",
 			code: failure.code,
-			changed_state: "none",
+			changed_state: changedState,
 			source,
 			destination,
 			source_retained: true,

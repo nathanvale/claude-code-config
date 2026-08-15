@@ -45,13 +45,16 @@ Use the direct runner above for agent-operational examples.
   `app/native-runtime.ts`, `app/chrome-launch-services.swift`,
   `app/agent-chrome-info.plist`, `app/everyday-chrome-info.plist`,
   `app/install.ts`, `app/assets/`,
-  `tests/agent-chrome-app.test.ts`, and `tests/native-runtime.test.ts`.
+  `tests/agent-chrome-app.test.ts`, `tests/native-runtime.test.ts`,
+  `ARCHITECTURE.md`, `README.md`, and the accepted decision amendments.
 - **Change Agent Chrome profile avatar** -> `app/profile-avatar.ts`,
   `app/assets/agent-chrome-icon.png`, `tests/profile-avatar.test.ts`, and the
-  native launcher integration above.
+  native launcher integration above; align `ARCHITECTURE.md`, `README.md`, and
+  the accepted decision amendments when lifecycle posture changes.
 - **Change Agent Chrome profile migration** -> `app/migrate-profile.ts`,
   `src/model.ts`, `tests/profile-migration.test.ts`, and the accepted decision
-  amendments.
+  amendments; align `ARCHITECTURE.md` and `README.md` when lifecycle posture
+  changes.
 - **Change repair lifecycle** -> `src/repair.ts`,
   `tests/repair-stations.test.ts`, and redaction tests when diagnostics move.
 - **Change redaction** -> `src/runtime.ts`, `src/cli.ts`,

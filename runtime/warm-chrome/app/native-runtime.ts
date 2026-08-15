@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { main } from "../src/cli.ts";
 import {
 	createDefaultRuntime,
+	DEFAULT_SYSTEM_PROBE_TIMEOUT_MS,
 	REAL_GOOGLE_CHROME_BINARY,
 	type LaunchChromeInput,
 	type SpawnedChrome,
@@ -21,9 +22,15 @@ type NativeLaunchResult = {
 	launch_mode: "launch_services";
 };
 
+type ProcessCommandProbe =
+	| { status: "found"; command: string }
+	| { status: "missing" }
+	| { status: "unknown" };
+
 type NativeRuntimeDeps = {
 	launchServicesPath?: string;
 	launchChrome?: (input: LaunchChromeInput) => Promise<number>;
+	processCommand?: (pid: number) => Promise<ProcessCommandProbe>;
 };
 
 function launchServicesPath(): string {
@@ -90,18 +97,38 @@ async function launchChromeWithHelper(
 	return Number((parsed as NativeLaunchResult).browser_pid);
 }
 
-async function processCommand(pid: number): Promise<string | null> {
+async function processCommand(
+	pid: number,
+): Promise<ProcessCommandProbe> {
 	const child = Bun.spawn(["/bin/ps", "-p", String(pid), "-o", "command="], {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "ignore",
 	});
-	const [exitCode, source] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-	]);
-	if (exitCode !== 0) return null;
-	return source.trim();
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			// The probe exited between the timeout and kill; unknown remains safe.
+		}
+	}, DEFAULT_SYSTEM_PROBE_TIMEOUT_MS);
+	let exitCode: number;
+	let source: string;
+	try {
+		[exitCode, source] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+		]);
+	} catch {
+		return { status: "unknown" };
+	} finally {
+		clearTimeout(timeout);
+	}
+	if (timedOut) return { status: "unknown" };
+	if (exitCode !== 0) return { status: "missing" };
+	return { status: "found", command: source.trim() };
 }
 
 function commandMatchesLaunch(command: string, input: LaunchChromeInput): boolean {
@@ -134,19 +161,22 @@ async function waitForExit(pid: number, budgetMs: number): Promise<boolean> {
 async function terminateOwnedChrome(
 	pid: number,
 	input: LaunchChromeInput,
+	readProcessCommand: (pid: number) => Promise<ProcessCommandProbe> = processCommand,
 ): Promise<boolean> {
-	const command = await processCommand(pid);
-	if (command === null) return true;
-	if (!commandMatchesLaunch(command, input)) return false;
+	const probe = await readProcessCommand(pid);
+	if (probe.status === "missing") return true;
+	if (probe.status === "unknown") return false;
+	if (!commandMatchesLaunch(probe.command, input)) return false;
 	try {
 		process.kill(pid, "SIGTERM");
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ESRCH";
 	}
 	if (await waitForExit(pid, TERMINATE_GRACE_MS)) return true;
-	const commandBeforeKill = await processCommand(pid);
-	if (commandBeforeKill === null) return true;
-	if (!commandMatchesLaunch(commandBeforeKill, input)) return false;
+	const probeBeforeKill = await readProcessCommand(pid);
+	if (probeBeforeKill.status === "missing") return true;
+	if (probeBeforeKill.status === "unknown") return false;
+	if (!commandMatchesLaunch(probeBeforeKill.command, input)) return false;
 	try {
 		process.kill(pid, "SIGKILL");
 	} catch (error) {
@@ -172,12 +202,13 @@ export function createNativeRuntime(deps: NativeRuntimeDeps = {}): WarmChromeRun
 	const launchChrome =
 		deps.launchChrome ??
 		((input: LaunchChromeInput) => launchChromeWithHelper(helperPath, input));
+	const readProcessCommand = deps.processCommand ?? processCommand;
 	return createDefaultRuntime({
 		spawnChrome: async (input): Promise<SpawnedChrome> => {
 			const pid = await launchChrome(input);
 			return {
 				pid,
-				kill: () => terminateOwnedChrome(pid, input),
+				kill: () => terminateOwnedChrome(pid, input, readProcessCommand),
 			};
 		},
 	});

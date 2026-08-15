@@ -17,6 +17,7 @@ private enum LaunchFailure: Error {
     case invalidChrome
     case invalidPort
     case invalidProfile
+    case invalidStartupURL
     case launchFailed
     case launchTimedOut
 
@@ -26,6 +27,7 @@ private enum LaunchFailure: Error {
         case .invalidChrome: "invalid_chrome"
         case .invalidPort: "invalid_port"
         case .invalidProfile: "invalid_profile"
+        case .invalidStartupURL: "invalid_startup_url"
         case .launchFailed: "launch_failed"
         case .launchTimedOut: "launch_timed_out"
         }
@@ -90,6 +92,15 @@ private func parse(_ arguments: [String]) throws -> Invocation? {
     else {
         throw LaunchFailure.invalidProfile
     }
+    guard
+        !startupURL.hasPrefix("-"),
+        let parsedStartupURL = URL(string: startupURL),
+        let scheme = parsedStartupURL.scheme?.lowercased(),
+        ["http", "https", "chrome"].contains(scheme),
+        parsedStartupURL.host?.isEmpty == false
+    else {
+        throw LaunchFailure.invalidStartupURL
+    }
     return Invocation(
         chromeBinary: chromeBinary,
         port: port,
@@ -97,6 +108,28 @@ private func parse(_ arguments: [String]) throws -> Invocation? {
         profileDirectory: profileDirectory,
         startupURL: startupURL
     )
+}
+
+private final class LaunchCompletion {
+    private let lock = NSLock()
+    private var application: NSRunningApplication?
+    private var error: Error?
+    private var completed = false
+
+    func finish(application: NSRunningApplication?, error: Error?) {
+        lock.lock()
+        self.application = application
+        self.error = error
+        completed = true
+        lock.unlock()
+    }
+
+    func snapshot() -> (application: NSRunningApplication?, error: Error?, completed: Bool) {
+        lock.lock()
+        let result = (application, error, completed)
+        lock.unlock()
+        return result
+    }
 }
 
 private func emit(_ payload: [String: Any]) {
@@ -123,26 +156,24 @@ private func launch(_ invocation: Invocation) throws -> pid_t {
         invocation.startupURL,
     ]
 
-    var launchedApplication: NSRunningApplication?
-    var launchError: Error?
-    var completed = false
+    let completion = LaunchCompletion()
     NSWorkspace.shared.openApplication(
         at: URL(fileURLWithPath: expectedChromeApp),
         configuration: configuration
     ) { application, error in
-        launchedApplication = application
-        launchError = error
-        completed = true
+        completion.finish(application: application, error: error)
     }
 
     let deadline = Date().addingTimeInterval(15)
-    while !completed && Date() < deadline {
+    var result = completion.snapshot()
+    while !result.completed && Date() < deadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        result = completion.snapshot()
     }
-    guard completed else {
+    guard result.completed else {
         throw LaunchFailure.launchTimedOut
     }
-    guard launchError == nil, let application = launchedApplication else {
+    guard result.error == nil, let application = result.application else {
         throw LaunchFailure.launchFailed
     }
     return application.processIdentifier

@@ -91,7 +91,7 @@ async function run(home: string, mode: "--check" | "--apply"): Promise<CommandRe
 	return { exitCode, stdout, stderr };
 }
 
-describe("Agent Chrome profile migration", () => {
+describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration", () => {
 	test("preview is read-only and apply atomically copies metadata without changing either protected source", async () => {
 		const state = await fixture();
 		const sourceCookie = await readFile(join(state.legacy, "Default", "Cookies"));
@@ -187,7 +187,7 @@ describe("Agent Chrome profile migration", () => {
 		);
 	});
 
-	test("a symlinked Agent Chrome owner is rejected before its target permissions change", async () => {
+	test("check and apply reject a symlinked Agent Chrome owner without changing its target", async () => {
 		const state = await fixture();
 		const ownerRoot = join(
 			state.home,
@@ -198,6 +198,16 @@ describe("Agent Chrome profile migration", () => {
 		const foreignTarget = join(state.home, "foreign-owner-target");
 		await mkdir(foreignTarget, { mode: 0o755 });
 		await symlink(foreignTarget, ownerRoot);
+
+		const preview = await run(state.home, "--check");
+		expect(preview.exitCode).toBe(20);
+		expect(JSON.parse(preview.stdout)).toMatchObject({
+			status: "blocked",
+			code: "destination_owner_unsafe",
+			changed_state: "none",
+		});
+		expect((await lstat(foreignTarget)).mode & 0o777).toBe(0o755);
+		expect(await lstat(state.destination).catch(() => null)).toBeNull();
 
 		const apply = await run(state.home, "--apply");
 		expect(apply.exitCode).toBe(20);

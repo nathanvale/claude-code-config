@@ -113,18 +113,29 @@ type CdpCall = {
 function healthyCdp(
 	overrides: Record<string, CdpEntry> = {},
 ): Record<string, CdpEntry> {
+	const created = overrides["Target.createTarget"] ?? {
+		targetId: "agent-chrome-new-tab",
+	};
+	const createdTargetId =
+		created instanceof Error || typeof created.targetId !== "string"
+			? null
+			: created.targetId;
 	return {
 		"Browser.getVersion": { product: OBSERVED_BUILD, userAgent: HEADED_UA },
 		"Target.getBrowserContexts": { browserContextIds: [] },
-		"Target.createTarget": { targetId: "agent-chrome-new-tab" },
+		"Target.createTarget": created,
 		"Target.getTargets": {
 			targetInfos: [
 				{ type: "page", targetId: "page-1", url: "https://example.com/" },
-				{
-					type: "page",
-					targetId: "agent-chrome-new-tab",
-					url: "chrome://newtab/",
-				},
+				...(createdTargetId === null
+					? []
+					: [
+							{
+								type: "page",
+								targetId: createdTargetId,
+								url: "chrome://newtab/",
+							},
+						]),
 			],
 		},
 		...overrides,
@@ -578,6 +589,51 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 			method: "Target.createTarget",
 			params: { url: "chrome://newtab/" },
 		});
+	});
+
+	test("launch --open verifies the exact target id returned by Target.createTarget", async () => {
+		const fixture = healthyWarmChromeFixture({
+			cdp: healthyCdp({
+				"Target.createTarget": { targetId: "returned-target-id" },
+			}),
+		});
+		const run = await runWarmChrome(["launch", "--open"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(parseEnvelope(run).data?.open_target_id).toBe("returned-target-id");
+	});
+
+	test("launch.open_failed: a created target id missing from the observed target list is typed", async () => {
+		const fixture = healthyWarmChromeFixture({
+			cdp: healthyCdp({
+				"Target.createTarget": { targetId: "missing-target-id" },
+				"Target.getTargets": { targetInfos: [] },
+			}),
+		});
+		const run = await runWarmChrome(["launch", "--open"], fixture);
+
+		expect(run.exitCode).toBe(1);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("open_failed");
+		expect(parsed.data?.reason).toBe("target_verification_failed");
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("the parser accepts --open only for launch", async () => {
+		const accepted = await runWarmChrome(
+			["launch", "--open"],
+			healthyWarmChromeFixture(),
+		);
+		expect(accepted.exitCode).toBe(0);
+
+		for (const command of ["check", "status", "repair"] as const) {
+			const rejected = await runWarmChrome(
+				[command, "--open", "--json"],
+				healthyWarmChromeFixture(),
+			);
+			expect(rejected.exitCode).toBe(2);
+			expect(parseEnvelope(rejected).error?.code).toBe("invalid_usage");
+		}
 	});
 
 	test("launch.open_failed: a rejected target creation is typed and never spawns a competing browser", async () => {

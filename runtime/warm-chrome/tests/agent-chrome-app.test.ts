@@ -7,7 +7,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +15,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const INSTALLER = join(PACKAGE_ROOT, "app", "install.ts");
+const LAUNCH_SERVICES_REGISTER =
+	"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const temporaryRoots: string[] = [];
 
 type CommandResult = {
@@ -24,6 +26,18 @@ type CommandResult = {
 };
 
 afterEach(async () => {
+	for (const root of temporaryRoots) {
+		for (const name of ["Agent Chrome.app", "Everyday Chrome.app"]) {
+			const app = join(root, "Applications", name);
+			if (await lstat(app).catch(() => null)) {
+				Bun.spawnSync([LAUNCH_SERVICES_REGISTER, "-u", app], {
+					stdin: "ignore",
+					stdout: "ignore",
+					stderr: "ignore",
+				});
+			}
+		}
+	}
 	await Promise.all(
 		temporaryRoots.splice(0).map((path) =>
 			rm(path, { recursive: true, force: true }),
@@ -154,6 +168,36 @@ describe("Agent Chrome native app installation", () => {
 		expect(launchServicesHelp.stdout).toContain(
 			"Launch Google Chrome through macOS Launch Services",
 		);
+		for (const startupURL of ["-incognito", "relative/path", "file:///tmp"]) {
+			const rejected = await run(
+				[
+					launchServicesHelper,
+					"--chrome",
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+					"--port",
+					"9222",
+					"--profile",
+					join(
+						homedir(),
+						"Library",
+						"Application Support",
+						"Agent Chrome",
+						"Chrome User Data",
+					),
+					"--profile-directory",
+					"Default",
+					"--startup-url",
+					startupURL,
+				],
+				{ home },
+			);
+			expect(rejected.exitCode).toBe(20);
+			expect(JSON.parse(rejected.stdout)).toMatchObject({
+				status: "blocked",
+				code: "invalid_startup_url",
+				changed_state: "none",
+			});
+		}
 
 		const helper = join(app, "Contents", "Helpers", "warm-chrome");
 		const help = await run([helper, "launch", "--help"], { home });
@@ -205,7 +249,7 @@ describe("Agent Chrome native app installation", () => {
 			),
 		).toEqual([]);
 		expect(await lstat(legacyRetained).catch(() => null)).toBeNull();
-	}, 30_000);
+	}, 60_000);
 
 	test("a foreign destination is preserved and blocks install before build", async () => {
 		const home = await temporaryHome();

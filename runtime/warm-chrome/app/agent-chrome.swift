@@ -39,16 +39,31 @@ private struct LaunchProof {
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<LaunchProof, LauncherFailure>
             do {
                 try applyProfileAvatar()
-                let proof = try runWarmChrome()
-                try activateVerifiedBrowser(pid: proof.browserPID)
-                NSApp.terminate(nil)
+                result = .success(try runWarmChrome())
             } catch let failure as LauncherFailure {
-                showFailure(failure)
+                result = .failure(failure)
             } catch {
-                showFailure(.invalidEnvelope)
+                result = .failure(.invalidEnvelope)
+            }
+
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let proof):
+                    do {
+                        try activateVerifiedBrowser(pid: proof.browserPID)
+                        NSApp.terminate(nil)
+                    } catch let failure as LauncherFailure {
+                        showFailure(failure)
+                    } catch {
+                        showFailure(.activationUnverified)
+                    }
+                case .failure(let failure):
+                    showFailure(failure)
+                }
             }
         }
     }
@@ -82,6 +97,29 @@ private func launchServicesHelperURL() -> URL {
         .appendingPathComponent("chrome-launch-services", isDirectory: false)
 }
 
+private func runProcess(_ process: Process) throws -> (status: Int32, output: Data) {
+    let stdout = Pipe()
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+    try process.run()
+
+    let maximumOutputBytes = 1_048_576
+    var output = Data()
+    while true {
+        let chunk = stdout.fileHandleForReading.availableData
+        if chunk.isEmpty {
+            break
+        }
+        let remaining = maximumOutputBytes - output.count
+        if remaining > 0 {
+            output.append(contentsOf: chunk.prefix(remaining))
+        }
+    }
+    process.waitUntilExit()
+    return (process.terminationStatus, output)
+}
+
 private func applyProfileAvatar() throws {
     let helper = avatarHelperURL()
     guard FileManager.default.isExecutableFile(atPath: helper.path) else {
@@ -97,15 +135,10 @@ private func applyProfileAvatar() throws {
         avatarResourceURL().path,
         "--json",
     ]
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = Pipe()
-    process.standardInput = FileHandle.nullDevice
-    try process.run()
-    process.waitUntilExit()
-    let output = stdout.fileHandleForReading.readDataToEndOfFile()
+    let execution = try runProcess(process)
+    let output = execution.output
     let envelope = try? JSONSerialization.jsonObject(with: output) as? [String: Any]
-    guard process.terminationStatus == 0 else {
+    guard execution.status == 0 else {
         let rawCode = envelope?["code"] as? String
         let safeCode = rawCode?.range(
             of: #"^[a-z0-9_]{1,64}$"#,
@@ -141,15 +174,10 @@ private func runWarmChrome() throws -> LaunchProof {
         "--run-id",
         "agent-chrome-launcher",
     ]
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = Pipe()
-    process.standardInput = FileHandle.nullDevice
-    try process.run()
-    process.waitUntilExit()
-    let output = stdout.fileHandleForReading.readDataToEndOfFile()
+    let execution = try runProcess(process)
+    let output = execution.output
     let envelope = try? JSONSerialization.jsonObject(with: output) as? [String: Any]
-    guard process.terminationStatus == 0 else {
+    guard execution.status == 0 else {
         let rawCode = (envelope?["error"] as? [String: Any])?["code"] as? String
         let safeCode = rawCode?.range(
             of: #"^[a-z0-9_]{1,64}$"#,

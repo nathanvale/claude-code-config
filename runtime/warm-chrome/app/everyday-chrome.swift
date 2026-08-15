@@ -30,6 +30,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         configuration.activates = true
         configuration.addsToRecentItems = false
         configuration.allowsRunningApplicationSubstitution = false
+        // Both Agent Chrome and Everyday Chrome host Google Chrome.app. Reusing an
+        // arbitrary running application can activate the Agent profile instead.
+        // A fresh entry lets Chrome's default-profile singleton own safe routing.
         configuration.createsNewApplicationInstance = true
         configuration.promptsUserIfNeeded = false
 
@@ -37,16 +40,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             at: expectedChromeURL,
             configuration: configuration
         ) { application, error in
-            guard error == nil, let application else {
-                showFailure(.launchFailed)
+            DispatchQueue.main.async {
+                guard error == nil, let application else {
+                    showFailure(.launchFailed)
+                }
+                guard application.bundleURL?.standardizedFileURL == expectedChromeURL else {
+                    showFailure(.wrongApplication)
+                }
+                guard application.activate(options: []) else {
+                    showFailure(.activationRejected)
+                }
+                NSApp.terminate(nil)
             }
-            guard application.bundleURL?.standardizedFileURL == expectedChromeURL else {
-                showFailure(.wrongApplication)
-            }
-            guard application.activate(options: []) else {
-                showFailure(.activationRejected)
-            }
-            NSApp.terminate(nil)
         }
     }
 }
