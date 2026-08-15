@@ -1,8 +1,15 @@
 import type { GmailIdentity } from "./config";
 import type { GogSearchResponse, GogSearchThread } from "./model";
 
+const DEFAULT_GOG_TIMEOUT_MS = 30_000;
+
 /** Runtime error safe to show without forwarding private subprocess output. */
 export class GogAuditError extends Error {}
+
+interface GogSearchRuntime {
+	executable?: string;
+	timeoutMs?: number;
+}
 
 /**
  * Build the only external command allowed by the prototype.
@@ -17,9 +24,9 @@ export class GogAuditError extends Error {}
  * const argv = buildGogSearchArgv({ account: "me@example.test", client: "personal" }, "newer_than:7d", 20)
  * ```
  */
-function buildGogSearchArgv(identity: GmailIdentity, query: string, max: number): string[] {
+function buildGogSearchArgv(identity: GmailIdentity, query: string, max: number, executable = "gog"): string[] {
 	return [
-		"gog",
+		executable,
 		"--account",
 		identity.account,
 		"--client",
@@ -53,24 +60,55 @@ function buildGogSearchArgv(identity: GmailIdentity, query: string, max: number)
  * const response = await runGogSearch(identity, "newer_than:7d", 20)
  * ```
  */
-export async function runGogSearch(identity: GmailIdentity, query: string, max: number): Promise<GogSearchResponse> {
-	const child = Bun.spawn(buildGogSearchArgv(identity, query, max), {
+export async function runGogSearch(
+	identity: GmailIdentity,
+	query: string,
+	max: number,
+	runtime: GogSearchRuntime = {},
+): Promise<GogSearchResponse> {
+	const timeoutMs = runtime.timeoutMs ?? DEFAULT_GOG_TIMEOUT_MS;
+	const stdout = await runGogProcess(buildGogSearchArgv(identity, query, max, runtime.executable), timeoutMs);
+	const response = normalizeSearchResponse(parseGogJson(stdout));
+	if (response.threads.length > max) {
+		throw new GogAuditError("gog Gmail search exceeded the requested result cap");
+	}
+	return response;
+}
+
+async function runGogProcess(argv: string[], timeoutMs: number): Promise<string> {
+	const child = Bun.spawn(argv, {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const [stdout, , exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		child.kill();
+	}, timeoutMs);
+	let stdout: string;
+	let exitCode: number;
+	try {
+		[stdout, , exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+	} finally {
+		clearTimeout(timeout);
+	}
+	if (timedOut) throw new GogAuditError(`gog Gmail search timed out after ${timeoutMs}ms`);
 	if (exitCode !== 0) throw new GogAuditError(`gog Gmail search failed with exit ${exitCode}`);
+	return stdout;
+}
+
+function parseGogJson(stdout: string): unknown {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(stdout);
 	} catch {
 		throw new GogAuditError("gog Gmail search did not return valid JSON");
 	}
-	return normalizeSearchResponse(parsed);
+	return parsed;
 }
 
 function normalizeSearchResponse(value: unknown): GogSearchResponse {

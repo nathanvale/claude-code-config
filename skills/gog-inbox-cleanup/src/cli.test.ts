@@ -3,6 +3,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { runGogSearch } from "./gog-runner";
+
 const CLI_PATH = join(import.meta.dir, "cli.ts");
 const temporaryDirectories: string[] = [];
 
@@ -12,7 +14,7 @@ interface CliResult {
 	stderr: string;
 }
 
-async function makeFixture(options: { missingClient?: boolean } = {}): Promise<{
+async function makeFixture(options: { missingClient?: boolean; hang?: boolean } = {}): Promise<{
 	root: string;
 	configPath: string;
 	argvPath: string;
@@ -30,19 +32,22 @@ async function makeFixture(options: { missingClient?: boolean } = {}): Promise<{
 			? "connectors:\n  email-account: test-person@example.test\n"
 			: "connectors:\n  email-account: test-person@example.test\n  email-client: test-personal\n",
 	);
-	await writeFile(
-		join(bin, "gog"),
-		`#!/usr/bin/env bun
-import { writeFileSync } from "node:fs";
-writeFileSync(process.env.GOG_TEST_ARGV_PATH, JSON.stringify(process.argv.slice(2)));
-console.log(JSON.stringify({
+	const behavior = options.hang
+		? "setInterval(() => {}, 1000);\n"
+		: `console.log(JSON.stringify({
   threads: [
     { id: "private-1", from: "GitHub <notifications@github.com>", subject: "Review requested", date: "2026-08-15T02:00:00Z", labels: ["INBOX", "CATEGORY_UPDATES"], messageCount: 1 },
     { id: "private-2", from: "Account <security@example.test>", subject: "Security alert", date: "2026-08-14T02:00:00Z", labels: ["INBOX"], messageCount: 1 }
   ],
   nextPageToken: "private-next",
   externalContent: { warning: "private wrapper" }
-}));
+}));\n`;
+	await writeFile(
+		join(bin, "gog"),
+		`#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+if (process.env.GOG_TEST_ARGV_PATH) writeFileSync(process.env.GOG_TEST_ARGV_PATH, JSON.stringify(process.argv.slice(2)));
+${behavior}
 `,
 	);
 	await chmod(join(bin, "gog"), 0o755);
@@ -152,6 +157,59 @@ describe("gog-inbox-cleanup public CLI", () => {
 		expect(excessive.exitCode).toBe(2);
 		expect(excessive.stderr).toContain("between 1 and 100");
 		await expect(readFile(fixture.argvPath, "utf8")).rejects.toThrow();
+	});
+
+	test("refuses duplicate config, query, and max flags before starting gog", async () => {
+		for (const [flag, value] of [
+			["--config", "CONFIG_PATH"],
+			["--query", "newer_than:7d"],
+			["--max", "2"],
+		] as const) {
+			const fixture = await makeFixture();
+			const duplicateValue = value === "CONFIG_PATH" ? fixture.configPath : value;
+			const result = await runCli(
+				[
+					"audit",
+					"--config",
+					fixture.configPath,
+					"--query",
+					"newer_than:7d",
+					"--max",
+					"2",
+					flag,
+					duplicateValue,
+					"--json",
+				],
+				fixture,
+			);
+
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr).toContain(`${flag} must appear once`);
+			await expect(readFile(fixture.argvPath, "utf8")).rejects.toThrow();
+		}
+	});
+
+	test("rejects a gog response that exceeds the requested cap", async () => {
+		const fixture = await makeFixture();
+		const result = await runCli(
+			["audit", "--config", fixture.configPath, "--query", "newer_than:7d", "--max", "1", "--json"],
+			fixture,
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toContain("exceeded the requested result cap");
+	});
+
+	test("terminates a stalled gog search at the runtime boundary", async () => {
+		const fixture = await makeFixture({ hang: true });
+
+		await expect(
+			runGogSearch({ account: "test-person@example.test", client: "test-personal" }, "newer_than:7d", 1, {
+				executable: join(fixture.root, "bin", "gog"),
+				timeoutMs: 25,
+			}),
+		).rejects.toThrow("timed out");
 	});
 
 	test("renders help without invoking gog", async () => {

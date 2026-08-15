@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import type {
 	AuditCategory,
 	AuditExclusion,
@@ -12,19 +10,19 @@ import type {
 	ReviewProposal,
 } from "./model";
 
-const CATEGORY_ORDER: AuditCategory[] = [
-	"ambiguous",
-	"family",
-	"finance",
-	"github",
-	"government",
-	"health",
-	"legal",
-	"marketing",
-	"receipt",
-	"security",
-	"subscription",
-];
+const CATEGORY_RANK: Record<AuditCategory, number> = {
+	ambiguous: 0,
+	family: 1,
+	finance: 2,
+	github: 3,
+	government: 4,
+	health: 5,
+	legal: 6,
+	marketing: 7,
+	receipt: 8,
+	security: 9,
+	subscription: 10,
+};
 
 const PROTECTED_CATEGORIES = new Set<AuditCategory>([
 	"ambiguous",
@@ -128,7 +126,6 @@ export function auditThreads(response: GogSearchResponse, options: AuditOptions)
 		receipt: {
 			runId: options.runId,
 			timestamp: options.now,
-			queryHash: createHash("sha256").update(options.query).digest("hex"),
 			cap: options.max,
 			returnedCount: response.threads.length,
 			candidateCount,
@@ -294,7 +291,10 @@ function partitionThreads(threads: ClassifiedThread[]): {
 			continue;
 		}
 		const existing = candidateGroups.get(thread.sender);
-		if (existing) existing.count += 1;
+		if (existing) {
+			existing.count += 1;
+			if (thread.categories.includes("github")) existing.label = "GitHub";
+		}
 		else candidateGroups.set(thread.sender, toCandidateGroup(thread));
 	}
 	return { exclusions, candidateGroups };
@@ -365,7 +365,7 @@ function extractSender(value: string): string {
 }
 
 function categoryComparator(left: AuditCategory, right: AuditCategory): number {
-	return CATEGORY_ORDER.indexOf(left) - CATEGORY_ORDER.indexOf(right);
+	return CATEGORY_RANK[left] - CATEGORY_RANK[right];
 }
 
 function aggregateOverlaps(threads: ClassifiedThread[]): AuditOverlap[] {

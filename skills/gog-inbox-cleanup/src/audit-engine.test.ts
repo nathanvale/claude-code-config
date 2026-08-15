@@ -163,7 +163,6 @@ describe("auditThreads", () => {
 		expect(result.receipt).toEqual({
 			runId: "run-test",
 			timestamp: "2026-08-15T03:00:00.000Z",
-			queryHash: expect.stringMatching(/^[a-f0-9]{64}$/),
 			cap: 5,
 			returnedCount: 5,
 			candidateCount: 2,
@@ -180,9 +179,71 @@ describe("auditThreads", () => {
 			"thread-",
 			"Security alert",
 			"more-private-results",
+			"synthetic untrusted content",
 		]) {
 			expect(receipt).not.toContain(forbidden);
 		}
+	});
+
+	test("returns an empty bounded result without leaking wrapper content", () => {
+		const result = auditThreads(
+			{ threads: [], externalContent: { warning: "private wrapper value" } },
+			{
+				query: "newer_than:7d",
+				max: 20,
+				runId: "run-empty",
+				now: "2026-08-15T03:00:00.000Z",
+			},
+		);
+
+		expect(result.cap).toEqual({ max: 20, returned: 0, reached: false, moreAvailable: false });
+		expect(result.proposals).toEqual([]);
+		expect(result.reviewProposals).toEqual([]);
+		expect(result.receipt).toMatchObject({
+			returnedCount: 0,
+			candidateCount: 0,
+			exclusionCount: 0,
+			overlapCount: 0,
+		});
+		expect(JSON.stringify(result)).not.toContain("private wrapper value");
+	});
+
+	test("uses GitHub label precedence for mixed candidate rows from one sender", () => {
+		const result = auditThreads(
+			{
+				threads: [
+					{
+						id: "marketing-first",
+						from: "Mixed Sender <updates@mixed.example>",
+						subject: "Monthly newsletter",
+						date: "2026-08-14T02:00:00Z",
+						labels: ["INBOX", "CATEGORY_PROMOTIONS"],
+						messageCount: 1,
+					},
+					{
+						id: "github-second",
+						from: "Mixed Sender <updates@mixed.example>",
+						subject: "GitHub review requested",
+						date: "2026-08-15T02:00:00Z",
+						labels: ["INBOX", "CATEGORY_UPDATES"],
+						messageCount: 1,
+					},
+				],
+			},
+			{
+				query: "newer_than:7d",
+				max: 2,
+				runId: "run-mixed-label",
+				now: "2026-08-15T03:00:00.000Z",
+			},
+		);
+
+		expect(result.proposals).toHaveLength(1);
+		expect(result.proposals[0]).toMatchObject({
+			scope: { type: "sender", value: "updates@mixed.example" },
+			candidateCount: 2,
+			intendedLabel: "GitHub",
+		});
 	});
 
 	test("preserves unparseable sender metadata as ambiguous", () => {

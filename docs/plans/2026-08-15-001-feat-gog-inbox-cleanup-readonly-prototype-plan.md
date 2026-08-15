@@ -97,7 +97,7 @@ gog --account <config account> --client <config client>
 ### Privacy and receipts
 
 - Exact sender or domain scopes appear only in the private command result.
-- The receipt records run id, timestamp, query hash, cap, counts, exclusions,
+- The receipt records run id, timestamp, cap, counts, exclusions,
   outcome, changed state, and next safe action.
 - The receipt excludes account value, query text, senders, subjects, snippets,
   thread ids, bodies, attachments, auth data, and URLs.

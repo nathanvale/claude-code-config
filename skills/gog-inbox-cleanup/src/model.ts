@@ -128,8 +128,6 @@ export interface AuditReceipt {
 	runId: string;
 	/** ISO timestamp supplied by the command boundary. */
 	timestamp: string;
-	/** SHA-256 of the private Gmail query. */
-	queryHash: string;
 	/** Requested maximum result count. */
 	cap: number;
 	/** Rows returned by the bounded search. */

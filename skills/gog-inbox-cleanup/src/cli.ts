@@ -32,6 +32,7 @@ const VALUE_FLAGS = {
 } as const;
 
 type ValueFlag = keyof typeof VALUE_FLAGS;
+type InvocationValues = Partial<Record<(typeof VALUE_FLAGS)[ValueFlag], string>>;
 
 /**
  * Run the public read-only audit command.
@@ -74,7 +75,7 @@ export async function main(argv: string[]): Promise<number> {
 
 function parseInvocation(argv: string[]): AuditInvocation {
 	if (argv[0] !== "audit") throw new AuditUsageError("expected the audit command; run --help");
-	const values: Partial<Record<(typeof VALUE_FLAGS)[ValueFlag], string>> = {};
+	const values: InvocationValues = {};
 	let json = false;
 	for (let index = 1; index < argv.length; index += 1) {
 		const argument = argv[index];
@@ -83,9 +84,7 @@ function parseInvocation(argv: string[]): AuditInvocation {
 			continue;
 		}
 		if (isValueFlag(argument)) {
-			const value = argv[index + 1];
-			if (!value || value.startsWith("--")) throw new AuditUsageError(`${argument} needs one value`);
-			values[VALUE_FLAGS[argument]] = value;
+			assignValueFlag(values, argument, argv[index + 1]);
 			index += 1;
 			continue;
 		}
@@ -98,6 +97,13 @@ function parseInvocation(argv: string[]): AuditInvocation {
 	const max = Number(maxValue);
 	if (!Number.isInteger(max) || max < 1 || max > 100) throw new AuditUsageError("--max must be an integer between 1 and 100");
 	return { configPath, query, max, json };
+}
+
+function assignValueFlag(values: InvocationValues, argument: ValueFlag, value: string | undefined): void {
+	if (!value || value.startsWith("--")) throw new AuditUsageError(`${argument} needs one value`);
+	const key = VALUE_FLAGS[argument];
+	if (values[key] !== undefined) throw new AuditUsageError(`${argument} must appear once`);
+	values[key] = value;
 }
 
 function isValueFlag(value: string): value is ValueFlag {
