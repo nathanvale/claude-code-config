@@ -131,6 +131,62 @@ async function createStagedRecoveryAdapter(
 	});
 }
 
+/** Build a real-Git fixture with one deterministic recovery-boundary mutation. */
+async function createStagedRecoveryRaceFixture(options: {
+	readonly missingWorktree: boolean;
+	readonly isBoundary: (request: VaultGitProcessRequest) => boolean;
+	readonly inject: (repositoryPath: string) => void;
+}) {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-recovery-race-"));
+	fixtureRoots.push(root);
+	const repositoryPath = join(root, "repository");
+	git(root, ["init", "--initial-branch=main", repositoryPath]);
+	git(repositoryPath, ["config", "user.name", "Fixture"]);
+	git(repositoryPath, ["config", "user.email", "fixture@example.invalid"]);
+	await writeFile(join(repositoryPath, "initial.md"), "initial\n");
+	git(repositoryPath, ["add", "--", "initial.md"]);
+	git(repositoryPath, ["commit", "-m", "initial"]);
+	await writeFile(join(repositoryPath, "candidate.md"), "planned\n");
+	git(repositoryPath, ["add", "--", "candidate.md"]);
+	const plannedObjectId = git(repositoryPath, [
+		"rev-parse",
+		":candidate.md",
+	]);
+	if (options.missingWorktree) {
+		await rm(join(repositoryPath, "candidate.md"));
+	}
+	let injected = false;
+	const realProcess = createNodeProcessPort();
+	const process: VaultGitProcessPort = {
+		async run(request) {
+			if (!injected && options.isBoundary(request)) {
+				injected = true;
+				options.inject(repositoryPath);
+			}
+			return realProcess.run(request);
+		},
+	};
+	const repository = createGitRepositoryAdapter({
+		repositoryPath,
+		repositoryIdentity: "vault-git:v1:fixture",
+		process,
+		timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+	});
+	const prepared = await repository.prepareStagedRecovery?.([
+		{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
+	]);
+	if (prepared?.status !== "ready") {
+		throw new Error("staged recovery fixture was not ready");
+	}
+	return {
+		plan: prepared.plan,
+		plannedObjectId,
+		repository,
+		repositoryPath,
+		wasInjected: () => injected,
+	};
+}
+
 function ledgerReadResponder(
 	contentResponse: Partial<VaultGitProcessResult>,
 ): Responder {
@@ -297,7 +353,7 @@ describe("git adapter construction", () => {
 	});
 });
 
-describe("git repository staged recovery timeout classification", () => {
+describe("git repository staged recovery safeguards", () => {
 	const ownedPaths = [
 		{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
 	] as const;
@@ -344,6 +400,77 @@ describe("git repository staged recovery timeout classification", () => {
 			status: "refused",
 			reason: "mismatch",
 		});
+	});
+
+	test("preserves a concurrently replaced owned index entry", async () => {
+		let newerObjectId = "";
+		const fixture = await createStagedRecoveryRaceFixture({
+			missingWorktree: false,
+			isBoundary: ({ args }) =>
+				args[0] === "reset" ||
+				(args[0] === "apply" &&
+					args.includes("--cached") &&
+					args.includes("--reverse")),
+			inject(repositoryPath) {
+				newerObjectId = gitStdin(repositoryPath, "newer\n", [
+					"hash-object",
+					"-w",
+					"--stdin",
+				]);
+				git(repositoryPath, [
+					"update-index",
+					"--add",
+					"--cacheinfo",
+					`100644,${newerObjectId},candidate.md`,
+				]);
+			},
+		});
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "refused",
+			reason: "mismatch",
+		});
+		expect(fixture.wasInjected()).toBe(true);
+		expect(
+			git(fixture.repositoryPath, [
+				"ls-files",
+				"--stage",
+				"--",
+				"candidate.md",
+			]),
+		).toContain(newerObjectId);
+	});
+
+	test("preserves concurrently created owned worktree content", async () => {
+		const competingContent = "concurrent writer\n";
+		const fixture = await createStagedRecoveryRaceFixture({
+			missingWorktree: true,
+			isBoundary: ({ args }) =>
+				args[0] === "checkout-index" ||
+				(args[0] === "apply" &&
+					!args.includes("--cached") &&
+					!args.includes("--reverse")),
+			inject(repositoryPath) {
+				writeFileSync(join(repositoryPath, "candidate.md"), competingContent);
+			},
+		});
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "refused",
+			reason: "mismatch",
+		});
+		expect(fixture.wasInjected()).toBe(true);
+		expect(
+			await Bun.file(join(fixture.repositoryPath, "candidate.md")).text(),
+		).toBe(competingContent);
+		expect(
+			git(fixture.repositoryPath, [
+				"ls-files",
+				"--stage",
+				"--",
+				"candidate.md",
+			]),
+		).toContain(fixture.plannedObjectId);
 	});
 });
 

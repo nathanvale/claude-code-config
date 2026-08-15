@@ -31,6 +31,7 @@ import {
 	VaultGitRemoteSafetyError,
 } from "./remote-safety.ts";
 
+/** Distinguishes transient Git process timeouts from deterministic mismatches. */
 class GitProcessTimedOutError extends Error {}
 
 /** Options for the injected real-process vault-owned check. */
@@ -943,6 +944,97 @@ export function createGitRepositoryAdapter(
 		}
 	};
 
+	// Preserve timeout classification while collapsing repeated subprocess checks.
+	const requireStagedRecoveryCommand = (
+		result: VaultGitProcessResult,
+		timeoutMessage: string,
+		failureMessage: string,
+	): string => {
+		if (result.timedOut) throw new GitProcessTimedOutError(timeoutMessage);
+		if (result.exitCode !== 0) throw new Error(failureMessage);
+		return result.stdout;
+	};
+
+	// Derive an exact-object patch in an isolated index so recovery can use Git's compare-and-apply semantics.
+	const createStagedRecoveryPatch = async (
+		baselineHead: string,
+		entries: readonly VaultGitStagedRecoveryEntry[],
+	): Promise<string> => {
+		const canonicalIndexPath = requireStagedRecoveryCommand(
+			await runGit([
+				"rev-parse",
+				"--path-format=absolute",
+				"--git-path",
+				"index",
+			]),
+			"timed out resolving the staged recovery index",
+			"could not resolve the staged recovery index",
+		).trim();
+		if (
+			!isAbsolute(canonicalIndexPath) ||
+			canonicalIndexPath.includes("\0")
+		) {
+			throw new Error("could not resolve the staged recovery index");
+		}
+		const temporaryIndexPath = `${canonicalIndexPath}.vault-git-${randomUUID()}`;
+		const temporaryIndexEnvironment = { GIT_INDEX_FILE: temporaryIndexPath };
+		try {
+			requireStagedRecoveryCommand(
+				await runGit(
+					["read-tree", baselineHead],
+					undefined,
+					temporaryIndexEnvironment,
+				),
+				"timed out creating the staged recovery index",
+				"could not create the staged recovery index",
+			);
+			requireStagedRecoveryCommand(
+				await runGit(
+					["update-index", "-z", "--index-info"],
+					entries
+						.map(
+							(entry) =>
+								`${entry.mode} ${entry.objectId}\t${entry.path}\0`,
+						)
+						.join(""),
+					temporaryIndexEnvironment,
+				),
+				"timed out populating the staged recovery index",
+				"could not populate the staged recovery index",
+			);
+			const patch = requireStagedRecoveryCommand(
+				await runGit(
+					[
+						"diff",
+						"--cached",
+						"--binary",
+						"--full-index",
+						"--no-renames",
+						"--no-ext-diff",
+						"--no-textconv",
+						baselineHead,
+						"--",
+						...entries.map((entry) => literalPathspec(entry.path)),
+					],
+					undefined,
+					temporaryIndexEnvironment,
+				),
+				"timed out deriving the staged recovery patch",
+				"could not derive the staged recovery patch",
+			);
+			if (patch.length === 0) {
+				throw new Error("could not derive the staged recovery patch");
+			}
+			return patch;
+		} finally {
+			for (const path of [temporaryIndexPath, `${temporaryIndexPath}.lock`]) {
+				await unlink(path).catch((error: unknown) => {
+					if (!isMissingFilesystemEntry(error)) throw error;
+				});
+			}
+		}
+	};
+
 	const applyStagedRecovery = async (plan: VaultGitStagedRecoveryPlan) => {
 		try {
 			if (plan.entries.length === 0) {
@@ -969,7 +1061,8 @@ export function createGitRepositoryAdapter(
 			) {
 				return { status: "refused", reason: "mismatch" } as const;
 			}
-			const checkoutPaths: string[] = [];
+			const stagedEntries: VaultGitStagedRecoveryEntry[] = [];
+			const missingWorktreeEntries: VaultGitStagedRecoveryEntry[] = [];
 			for (const entry of plan.entries) {
 				if (
 					!(await isSafeOwnedPath(options.repositoryPath, entry.path)) ||
@@ -988,40 +1081,48 @@ export function createGitRepositoryAdapter(
 				if (worktreeHash !== null && worktreeHash !== entry.objectId) {
 					return { status: "refused", reason: "mismatch" } as const;
 				}
-				if (indexEntry !== null) checkoutPaths.push(entry.path);
-				else if (worktreeHash !== entry.objectId) {
+				if (indexEntry !== null) {
+					stagedEntries.push(entry);
+					if (worktreeHash === null) missingWorktreeEntries.push(entry);
+				} else if (worktreeHash !== entry.objectId) {
 					return { status: "refused", reason: "mismatch" } as const;
 				}
 			}
-			if (checkoutPaths.length > 0) {
-				const checkout = await runGit(
-					["checkout-index", "--force", "-z", "--stdin"],
-					`${checkoutPaths.join("\0")}\0`,
+			const worktreePatch =
+				missingWorktreeEntries.length === 0
+					? null
+					: await createStagedRecoveryPatch(
+							plan.baselineHead,
+							missingWorktreeEntries,
+						);
+			const indexPatch =
+				stagedEntries.length === 0
+					? null
+					: await createStagedRecoveryPatch(plan.baselineHead, stagedEntries);
+			if (worktreePatch !== null) {
+				requireStagedRecoveryCommand(
+					await runGit(
+						["apply", "--whitespace=nowarn"],
+						worktreePatch,
+					),
+					"timed out materializing staged recovery content",
+					"could not materialize staged recovery content",
 				);
-				if (checkout.timedOut) {
-					return { status: "refused", reason: "timed_out" } as const;
-				}
-				if (checkout.exitCode !== 0) {
-					return { status: "refused", reason: "mismatch" } as const;
-				}
 			}
 			for (const entry of plan.entries) {
 				if ((await hashRecoveryPath(entry.path)) !== entry.objectId) {
 					return { status: "refused", reason: "mismatch" } as const;
 				}
 			}
-			const reset = await runGit([
-				"reset",
-				"--quiet",
-				plan.baselineHead,
-				"--",
-				...paths.map(literalPathspec),
-			]);
-			if (reset.timedOut) {
-				return { status: "refused", reason: "timed_out" } as const;
-			}
-			if (reset.exitCode !== 0) {
-				return { status: "refused", reason: "mismatch" } as const;
+			if (indexPatch !== null) {
+				requireStagedRecoveryCommand(
+					await runGit(
+						["apply", "--cached", "--reverse", "--whitespace=nowarn"],
+						indexPatch,
+					),
+					"timed out resetting the staged recovery index",
+					"could not reset the staged recovery index",
+				);
 			}
 			for (const entry of plan.entries) {
 				if (
