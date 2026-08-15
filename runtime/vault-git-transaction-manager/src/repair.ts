@@ -645,10 +645,54 @@ async function reconcileQuarantine(
 	const marker = await options.store.readQuarantine().catch(() => null);
 	if (
 		!marker ||
-		marker.status !== "quarantined" ||
+		(marker.status !== "quarantined" && marker.status !== "recovery_pending") ||
 		marker.transactionId !== input.transactionId
 	) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+	}
+	if (isQuarantineReconciliationReceipt(receipt, marker)) {
+		return finalizeQuarantineReconciliation(options, input, receipt, marker);
+	}
+	let recoveryPlan =
+		marker.status === "recovery_pending" ? marker.recoveryPlan : null;
+	if (
+		recoveryPlan === null &&
+		options.repository.prepareStagedRecovery &&
+		options.repository.applyStagedRecovery
+	) {
+		const prepared = await options.repository.prepareStagedRecovery(
+			receipt.ownedPaths,
+		);
+		if (prepared.status === "refused" && prepared.reason === "timed_out") {
+			return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "none", "same_input_safe");
+		}
+		if (prepared.status === "ready") {
+			recoveryPlan = prepared.plan;
+			try {
+				await options.store.recordQuarantine({
+					transactionId: marker.transactionId,
+					ledgerGeneration: marker.ledgerGeneration,
+					status: "recovery_pending",
+					recordedAt: options.runtime.now().toISOString(),
+					recoveryPlan,
+				});
+			} catch {
+				return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+			}
+		}
+	}
+	if (recoveryPlan !== null) {
+		if (!options.repository.applyStagedRecovery) {
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		}
+		const recovered = await options.repository.applyStagedRecovery(recoveryPlan);
+		if (recovered.status !== "recovered") {
+			if (recovered.reason === "timed_out") {
+				return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "partial", "same_input_safe");
+			}
+			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics, "partial");
+		}
+		return finalizeQuarantineReconciliation(options, input, receipt, marker);
 	}
 	const identity = await options.repository.resolveCanonicalIdentity().catch(() => null);
 	if (!identity) {
@@ -690,16 +734,67 @@ async function reconcileQuarantine(
 			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 		}
 	}
+	return finalizeQuarantineReconciliation(options, input, receipt, marker);
+}
+
+/** Publish one crash-resumable diagnostic epoch before clearing quarantine. */
+async function finalizeQuarantineReconciliation(
+	options: VaultGitDoctorOptions,
+	input: VaultGitRepairInput,
+	receipt: VaultGitReceipt,
+	marker: Pick<
+		NonNullable<Awaited<ReturnType<VaultGitDoctorOptions["store"]["readQuarantine"]>>>,
+		"transactionId" | "ledgerGeneration"
+	>,
+): Promise<VaultGitRepairResult> {
+	const diagnostics = receipt.diagnosticsReference;
+	if (!isQuarantineReconciliationReceipt(receipt, marker)) {
+		const reconciledReceipt = nextVaultGitReceipt(receipt, {
+			phase: "closed",
+			transition: "quarantine_reconciled",
+			nextSafeAction: "none",
+			recordedAt: options.runtime.now().toISOString(),
+		});
+		try {
+			await options.store.append(reconciledReceipt);
+		} catch {
+			const loaded = await options.store.load().catch(() => null);
+			if (
+				loaded?.status !== "loaded" ||
+				!isQuarantineReconciliationReceipt(loaded.receipt, marker)
+			) {
+				return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+			}
+		}
+	}
 	try {
 		await options.store.recordQuarantine({
-			...marker,
+			transactionId: marker.transactionId,
+			ledgerGeneration: marker.ledgerGeneration,
 			status: "reconciled",
 			recordedAt: options.runtime.now().toISOString(),
 		});
 	} catch {
 		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
 	}
-	return repaired(input.action, "closed", receipt.phase, "local", "none", summaries.none, diagnostics);
+	return repaired(input.action, "closed", "closed", "local", "none", summaries.none, diagnostics);
+}
+
+/** Match only the receipt revision that proves this exact quarantine settled. */
+function isQuarantineReconciliationReceipt(
+	receipt: VaultGitReceipt,
+	marker: Pick<
+		NonNullable<Awaited<ReturnType<VaultGitDoctorOptions["store"]["readQuarantine"]>>>,
+		"transactionId" | "ledgerGeneration"
+	>,
+): boolean {
+	return (
+		receipt.phase === "closed" &&
+		receipt.transition === "quarantine_reconciled" &&
+		receipt.transactionId === marker.transactionId &&
+		receipt.leaseGeneration === marker.ledgerGeneration &&
+		receipt.nextSafeAction === "none"
+	);
 }
 
 /** Prove a later canonical main has settled every formerly owned path. */

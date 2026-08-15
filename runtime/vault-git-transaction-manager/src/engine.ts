@@ -348,7 +348,10 @@ export function createVaultGitTransactionEngine(
 		if (quarantine?.status === "takeover_pending") {
 			return refusal("superseded", "human_required", "host_quarantined", "run_doctor", "Run doctor to reconcile the interrupted stale-lease takeover.");
 		}
-		if (quarantine?.status === "quarantined") {
+		if (
+			quarantine?.status === "quarantined" ||
+			quarantine?.status === "recovery_pending"
+		) {
 			return refusal("superseded", "human_required", "host_quarantined", "reconcile_quarantine", "Reconcile preserved local evidence before clearing quarantine.");
 		}
 		const loaded = await options.store.load();

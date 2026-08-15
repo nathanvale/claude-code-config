@@ -1,10 +1,23 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, readdir, realpath, unlink } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+	chmod,
+	lstat,
+	mkdtemp,
+	open,
+	readdir,
+	realpath,
+	rm,
+	stat,
+	unlink,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
 	VAULT_GIT_LEDGER_REF,
+	type VaultGitOwnedPathReceipt,
+	type VaultGitStagedRecoveryEntry,
+	type VaultGitStagedRecoveryPlan,
 	type VaultGitUnrelatedStateSnapshot,
 } from "./model.ts";
 import {
@@ -27,6 +40,17 @@ import {
 	normalizeVaultGitAllowedRemoteHosts,
 	VaultGitRemoteSafetyError,
 } from "./remote-safety.ts";
+
+/** Distinguishes transient Git process timeouts from deterministic mismatches. */
+class GitProcessTimedOutError extends Error {}
+
+/** Compare persisted unrelated state by value, independent of JSON key order. */
+function matchesUnrelatedState(
+	left: VaultGitUnrelatedStateSnapshot,
+	right: VaultGitUnrelatedStateSnapshot,
+): boolean {
+	return left.statusHex === right.statusHex && left.indexHex === right.indexHex;
+}
 
 /** Options for the injected real-process vault-owned check. */
 export interface VaultGitCheckAdapterOptions {
@@ -808,12 +832,12 @@ export function createGitRepositoryAdapter(
 			]),
 			runGit(["ls-files", "--stage", "-z", "--", ...pathspecs]),
 		]);
-		if (
-			status.timedOut ||
-			index.timedOut ||
-			status.exitCode !== 0 ||
-			index.exitCode !== 0
-		) {
+		if (status.timedOut || index.timedOut) {
+			throw new GitProcessTimedOutError(
+				"timed out capturing unrelated repository state",
+			);
+		}
+		if (status.exitCode !== 0 || index.exitCode !== 0) {
 			throw new Error("could not capture unrelated repository state");
 		}
 		return {
@@ -847,6 +871,337 @@ export function createGitRepositoryAdapter(
 			});
 		}
 		return hashes;
+	};
+
+	const hashRecoveryPath = async (path: string): Promise<string | null> => {
+		const metadata = await lstat(resolve(options.repositoryPath, path)).catch(
+			(error: unknown) =>
+				isMissingFilesystemEntry(error) ? null : Promise.reject(error),
+		);
+		if (metadata === null) return null;
+		if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
+		const hashed = await runGit(["hash-object", "--", path]);
+		if (hashed.timedOut) {
+			throw new GitProcessTimedOutError(
+				"timed out hashing staged recovery path",
+			);
+		}
+		if (hashed.exitCode !== 0) {
+			throw new Error("could not hash staged recovery path");
+		}
+		return requireObjectId(hashed.stdout, "staged recovery content");
+	};
+
+	const prepareStagedRecovery = async (
+		ownedPaths: readonly VaultGitOwnedPathReceipt[],
+	) => {
+		try {
+			if (
+				ownedPaths.length === 0 ||
+				ownedPaths.some(
+					(entry) => !entry.admittedNewFile || entry.baselineHash !== null,
+				)
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const head = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (head.timedOut) {
+				return { status: "refused", reason: "timed_out" } as const;
+			}
+			if (head.exitCode !== 0) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const baselineHead = requireObjectId(head.stdout, "staged recovery main");
+			const entries: VaultGitStagedRecoveryEntry[] = [];
+			for (const ownedPath of [...ownedPaths].sort((left, right) =>
+				left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+			)) {
+				if (!(await isSafeOwnedPath(options.repositoryPath, ownedPath.path))) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				if ((await readTreeEntry(runGit, baselineHead, ownedPath.path)) !== null) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const indexEntry = await readIndexEntry(runGit, ownedPath.path);
+				if (
+					indexEntry === null ||
+					(indexEntry.mode !== "100644" && indexEntry.mode !== "100755")
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const worktreeHash = await hashRecoveryPath(ownedPath.path);
+				if (worktreeHash !== null && worktreeHash !== indexEntry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				entries.push({
+					path: ownedPath.path,
+					objectId: indexEntry.objectId,
+					mode: indexEntry.mode,
+				});
+			}
+			return {
+				status: "ready",
+				plan: {
+					baselineHead,
+					unrelatedState: await captureUnrelatedState(
+						entries.map((entry) => entry.path),
+					),
+					entries,
+				},
+			} as const;
+		} catch (error) {
+			return {
+				status: "refused",
+				reason:
+					error instanceof GitProcessTimedOutError ? "timed_out" : "mismatch",
+			} as const;
+		}
+	};
+
+	// Preserve timeout classification while collapsing repeated subprocess checks.
+	const requireStagedRecoveryCommand = (
+		result: VaultGitProcessResult,
+		timeoutMessage: string,
+		failureMessage: string,
+	): string => {
+		if (result.timedOut) throw new GitProcessTimedOutError(timeoutMessage);
+		if (result.exitCode !== 0) throw new Error(failureMessage);
+		return result.stdout;
+	};
+
+	const removeStagedRecoveryRoots = async (
+		roots: readonly string[],
+	): Promise<void> => {
+		await Promise.allSettled(
+			roots.map((root) => rm(root, { recursive: true, force: true })),
+		);
+	};
+
+	// Derive an exact-object patch in an isolated index so recovery can use Git's compare-and-apply semantics.
+	const createStagedRecoveryPatch = async (
+		baselineHead: string,
+		entries: readonly VaultGitStagedRecoveryEntry[],
+	): Promise<{ readonly path: string; readonly root: string }> => {
+		const canonicalIndexPath = requireStagedRecoveryCommand(
+			await runGit([
+				"rev-parse",
+				"--path-format=absolute",
+				"--git-path",
+				"index",
+			]),
+			"timed out resolving the staged recovery index",
+			"could not resolve the staged recovery index",
+		).trim();
+		if (
+			!isAbsolute(canonicalIndexPath) ||
+			canonicalIndexPath.includes("\0")
+		) {
+			throw new Error("could not resolve the staged recovery index");
+		}
+		const temporaryRoot = await mkdtemp(
+			join(dirname(canonicalIndexPath), ".vault-git-staged-recovery-"),
+		);
+		await chmod(temporaryRoot, 0o700);
+		const temporaryIndexPath = join(temporaryRoot, "index");
+		const temporaryPatchPath = join(temporaryRoot, "patch");
+		const temporaryIndexEnvironment = { GIT_INDEX_FILE: temporaryIndexPath };
+		let preserveRoot = false;
+		try {
+			requireStagedRecoveryCommand(
+				await runGit(
+					["read-tree", baselineHead],
+					undefined,
+					temporaryIndexEnvironment,
+				),
+				"timed out creating the staged recovery index",
+				"could not create the staged recovery index",
+			);
+			await chmod(temporaryIndexPath, 0o600);
+			requireStagedRecoveryCommand(
+				await runGit(
+					["update-index", "-z", "--index-info"],
+					entries
+						.map(
+							(entry) =>
+								`${entry.mode} ${entry.objectId}\t${entry.path}\0`,
+						)
+						.join(""),
+					temporaryIndexEnvironment,
+				),
+				"timed out populating the staged recovery index",
+				"could not populate the staged recovery index",
+			);
+			await chmod(temporaryIndexPath, 0o600);
+			const patchFile = await open(temporaryPatchPath, "wx", 0o600);
+			await patchFile.close();
+			requireStagedRecoveryCommand(
+				await runGit(
+					[
+						"diff",
+						`--output=${temporaryPatchPath}`,
+						"--cached",
+						"--binary",
+						"--full-index",
+						"--no-renames",
+						"--no-ext-diff",
+						"--no-textconv",
+						baselineHead,
+						"--",
+						...entries.map((entry) => literalPathspec(entry.path)),
+					],
+					undefined,
+					temporaryIndexEnvironment,
+				),
+				"timed out deriving the staged recovery patch",
+				"could not derive the staged recovery patch",
+			);
+			await chmod(temporaryPatchPath, 0o600);
+			if ((await stat(temporaryPatchPath)).size === 0) {
+				throw new Error("could not derive the staged recovery patch");
+			}
+			preserveRoot = true;
+			return { path: temporaryPatchPath, root: temporaryRoot };
+		} finally {
+			// Best-effort cleanup must never replace the operation's timeout or
+			// mismatch classification with an unrelated filesystem failure.
+			if (!preserveRoot) {
+				await removeStagedRecoveryRoots([temporaryRoot]);
+			}
+		}
+	};
+
+	const applyStagedRecovery = async (plan: VaultGitStagedRecoveryPlan) => {
+		try {
+			if (plan.entries.length === 0) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const head = await runGit([
+				"rev-parse",
+				"--verify",
+				"refs/heads/main^{commit}",
+			]);
+			if (head.timedOut) {
+				return { status: "refused", reason: "timed_out" } as const;
+			}
+			if (
+				head.exitCode !== 0 ||
+				requireObjectId(head.stdout, "staged recovery main") !== plan.baselineHead
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const paths = plan.entries.map((entry) => entry.path);
+			if (
+				!matchesUnrelatedState(
+					await captureUnrelatedState(paths),
+					plan.unrelatedState,
+				)
+			) {
+				return { status: "refused", reason: "mismatch" } as const;
+			}
+			const stagedEntries: VaultGitStagedRecoveryEntry[] = [];
+			const missingWorktreeEntries: VaultGitStagedRecoveryEntry[] = [];
+			for (const entry of plan.entries) {
+				if (
+					!(await isSafeOwnedPath(options.repositoryPath, entry.path)) ||
+					(await readTreeEntry(runGit, plan.baselineHead, entry.path)) !== null
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const indexEntry = await readIndexEntry(runGit, entry.path);
+				if (
+					indexEntry !== null &&
+					(indexEntry.objectId !== entry.objectId || indexEntry.mode !== entry.mode)
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				const worktreeHash = await hashRecoveryPath(entry.path);
+				if (worktreeHash !== null && worktreeHash !== entry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				if (indexEntry !== null) {
+					stagedEntries.push(entry);
+					if (worktreeHash === null) missingWorktreeEntries.push(entry);
+				} else if (worktreeHash !== entry.objectId) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+			}
+			const temporaryPatchRoots: string[] = [];
+			try {
+				const worktreePatch =
+					missingWorktreeEntries.length === 0
+						? null
+						: await createStagedRecoveryPatch(
+								plan.baselineHead,
+								missingWorktreeEntries,
+							);
+				if (worktreePatch !== null) temporaryPatchRoots.push(worktreePatch.root);
+				const indexPatch =
+					stagedEntries.length === 0
+						? null
+						: await createStagedRecoveryPatch(plan.baselineHead, stagedEntries);
+				if (indexPatch !== null) temporaryPatchRoots.push(indexPatch.root);
+				if (worktreePatch !== null) {
+					requireStagedRecoveryCommand(
+						await runGit([
+							"apply",
+							"--whitespace=nowarn",
+							"--",
+							worktreePatch.path,
+						]),
+						"timed out materializing staged recovery content",
+						"could not materialize staged recovery content",
+					);
+				}
+				for (const entry of plan.entries) {
+					if ((await hashRecoveryPath(entry.path)) !== entry.objectId) {
+						return { status: "refused", reason: "mismatch" } as const;
+					}
+				}
+				if (indexPatch !== null) {
+					requireStagedRecoveryCommand(
+						await runGit([
+							"apply",
+							"--cached",
+							"--reverse",
+							"--whitespace=nowarn",
+							"--",
+							indexPatch.path,
+						]),
+						"timed out resetting the staged recovery index",
+						"could not reset the staged recovery index",
+					);
+				}
+				for (const entry of plan.entries) {
+					if (
+						(await readIndexEntry(runGit, entry.path)) !== null ||
+						(await hashRecoveryPath(entry.path)) !== entry.objectId
+					) {
+						return { status: "refused", reason: "mismatch" } as const;
+					}
+				}
+				if (
+					!matchesUnrelatedState(
+						await captureUnrelatedState(paths),
+						plan.unrelatedState,
+					)
+				) {
+					return { status: "refused", reason: "mismatch" } as const;
+				}
+				return { status: "recovered" } as const;
+			} finally {
+				await removeStagedRecoveryRoots(temporaryPatchRoots);
+			}
+		} catch (error) {
+			return {
+				status: "refused",
+				reason:
+					error instanceof GitProcessTimedOutError ? "timed_out" : "mismatch",
+			} as const;
+		}
 	};
 
 	return {
@@ -1102,6 +1457,10 @@ export function createGitRepositoryAdapter(
 
 		hashOwnedPaths,
 
+		prepareStagedRecovery,
+
+		applyStagedRecovery,
+
 		async inspectCommitAncestry(ancestor, descendant) {
 			if (
 				!/^[0-9a-f]{40,64}$/.test(ancestor) ||
@@ -1183,10 +1542,7 @@ export function createGitRepositoryAdapter(
 			const unrelated = await captureUnrelatedState(
 				request.ownedPaths.map((entry) => entry.path),
 			);
-			if (
-				unrelated.statusHex !== request.unrelatedState.statusHex ||
-				unrelated.indexHex !== request.unrelatedState.indexHex
-			) {
+			if (!matchesUnrelatedState(unrelated, request.unrelatedState)) {
 				return { status: "refused", reason: "unrelated_state_changed" };
 			}
 
@@ -1820,6 +2176,53 @@ interface TreeEntry {
 	readonly path: string;
 }
 
+async function readIndexEntry(
+	runGit: (
+		args: readonly string[],
+		input?: string,
+		env?: Readonly<Record<string, string>>,
+	) => Promise<VaultGitProcessResult>,
+	path: string,
+): Promise<TreeEntry | null> {
+	const result = await runGit([
+		"ls-files",
+		"--stage",
+		"-z",
+		"--",
+		literalPathspec(path),
+	]);
+	if (result.timedOut) {
+		throw new GitProcessTimedOutError(
+			"timed out inspecting staged recovery index entry",
+		);
+	}
+	if (result.exitCode !== 0) {
+		throw new Error("could not inspect staged recovery index entry");
+	}
+	const records = splitNul(result.stdout);
+	if (records.length === 0) return null;
+	if (records.length !== 1) {
+		throw new Error("staged recovery index entry is unmerged");
+	}
+	const record = records[0];
+	const separator = record?.indexOf("\t") ?? -1;
+	if (separator < 0 || !record) {
+		throw new Error("staged recovery index entry is malformed");
+	}
+	const [mode, objectId, stage] = record.slice(0, separator).split(" ");
+	const entryPath = record.slice(separator + 1);
+	if (
+		!mode ||
+		!objectId ||
+		!/^[0-9a-f]{40,64}$/.test(objectId) ||
+		stage !== "0" ||
+		entryPath !== path
+	) {
+		throw new Error("staged recovery index entry is malformed");
+	}
+	return { mode, objectId, path: entryPath };
+}
+
 async function readTreeEntry(
 	runGit: (
 		args: readonly string[],
@@ -1836,7 +2239,12 @@ async function readTreeEntry(
 		"--",
 		literalPathspec(path),
 	]);
-	if (result.timedOut || result.exitCode !== 0) {
+	if (result.timedOut) {
+		throw new GitProcessTimedOutError(
+			"timed out inspecting owned path baseline",
+		);
+	}
+	if (result.exitCode !== 0) {
 		throw new Error("could not inspect owned path baseline");
 	}
 	const record = splitNul(result.stdout)[0];
