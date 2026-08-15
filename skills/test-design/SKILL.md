@@ -76,7 +76,7 @@ Do not accept a brief whose expected result restates the implementation. Do not 
 - `ci-testbed`: use only when mismatch repair changes a repository-test artifact; return to its repair owner.
 - `cli-author`: brief after contract and seam selection; return before test implementation.
 - `test-runner`: use only when repair changes a repository-test artifact; return to repair mode.
-- `improve-test-architecture`: brief after Nathan selects a candidate; candidate
+- `improve-test-architecture`: brief after candidate selection; candidate
   selection does not approve a new, changed, or disputed seam; return to the
   selected improvement workflow.
 

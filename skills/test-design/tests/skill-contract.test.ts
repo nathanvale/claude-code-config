@@ -255,6 +255,7 @@ describe("agent-native testing skill contract", () => {
 		for (const owner of handbacks) expect(testDesign).toContain(`\`${owner}\``);
 		expect(testDesign).toContain("active conversation");
 		expect(testDesign).toContain("return to the current workflow");
+		expect(testDesign).not.toContain("Nathan");
 		for (const escalation of ["seam", "oracle", "fixture", "harness", "claim"]) {
 			expect(testDesign).toContain(escalation);
 		}

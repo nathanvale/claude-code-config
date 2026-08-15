@@ -112,6 +112,14 @@ describe("multi-agent smoke library", () => {
 		}
 	});
 
+	test("keeps mutation prompts aligned with guarded fixtures", () => {
+		const definition = getSmokeTest("test-design-mutation-route");
+		const fixture = definition.runtime?.mutationProof?.fixtureRelativePath;
+		expect(fixture).toBeDefined();
+		if (!fixture) return;
+		expect(definition.prompt).toContain(fixture);
+	});
+
 	test("changed proof boundaries cannot use the lightweight route", () => {
 		for (const harness of ["claude", "codex"] as const) {
 			expect(
