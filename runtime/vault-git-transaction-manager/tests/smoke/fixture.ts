@@ -117,6 +117,41 @@ export interface PreparedSmokeInterruption extends PreparedSmokeCommand {
 	kill(): Promise<void>;
 }
 
+/**
+ * Run Doctor and, when it delegates, inspect the accepted task to its durable
+ * terminal diagnosis. This preserves the public foreground/background seam in
+ * smoke rows whose assertion concerns Doctor's authoritative result.
+ */
+export async function runDoctorToTerminal(
+	fixture: Pick<SmokeFixture, "run">,
+	args: readonly string[],
+): Promise<CliProcessResult> {
+	const accepted = await fixture.run(args);
+	if (accepted.exitCode !== 0) return accepted;
+	const acceptedData = parseCliProcessJson<{
+		data?: { task_id?: string; task_state?: string };
+	}>(accepted).data;
+	if (!acceptedData?.task_id || ["closed", "unknown"].includes(acceptedData.task_state ?? "")) {
+		return accepted;
+	}
+
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		const inspection = await fixture.run([
+			"doctor",
+			"--task-id",
+			acceptedData.task_id,
+			"--json",
+		]);
+		const taskState = parseCliProcessJson<{
+			data?: { task_state?: string };
+		}>(inspection).data?.task_state;
+		if (taskState === "closed" || taskState === "unknown") return inspection;
+		await Bun.sleep(25);
+	}
+	throw new Error(`Background Doctor task ${acceptedData.task_id} did not terminate`);
+}
+
 const roots: string[] = [];
 const children = new Set<{
 	readonly child: ChildProcess;

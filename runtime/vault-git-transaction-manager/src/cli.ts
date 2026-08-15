@@ -62,6 +62,7 @@ import {
 	type VaultGitNextActionId,
 	type VaultGitRepairAction,
 	type VaultGitTransactionPhase,
+	type VaultGitTransactionState,
 } from "./model.ts";
 import { resolveVaultRepositoryIdentity } from "./repository-identity.ts";
 import {
@@ -93,7 +94,18 @@ import {
 	type VaultGitProcessPort,
 	type VaultGitRuntimePort,
 } from "./ports.ts";
-import type { VaultGitDoctorResult } from "./doctor.ts";
+import {
+	classifyVaultGitDoctorLocalReceipt,
+	type VaultGitDoctorResult,
+} from "./doctor.ts";
+import {
+	createVaultGitDoctorTaskStore,
+	type VaultGitDoctorTaskStore,
+} from "./doctor-task-store.ts";
+import {
+	isVaultGitDoctorTaskWorkerLost,
+	type VaultGitDoctorTaskState,
+} from "./doctor-task-state.ts";
 import type { VaultGitRepairResult } from "./repair.ts";
 import {
 	createVaultGitTaskStore,
@@ -124,6 +136,10 @@ import {
 import { evaluateVaultGitWorkerPolicy } from "./worker-policy.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
+const VAULT_GIT_DOCTOR_TASK_ACK_WINDOW_MS = 900;
+const VAULT_GIT_DOCTOR_TASK_ID_ENV = "VAULT_GIT_DOCTOR_TASK_ID";
+const VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION_ENV =
+	"VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION";
 // Production owns this exact closure. Runtime import-graph discovery would make
 // admission depend on parser and loader behavior instead of one reviewable list.
 const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
@@ -140,6 +156,9 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"command-contract.ts",
 	"commit-policy.ts",
 	"doctor.ts",
+	"doctor-task-state.ts",
+	"doctor-task-store.ts",
+	"doctor-worker.ts",
 	"engine.ts",
 	"git-adapter.ts",
 	"janitor.ts",
@@ -252,6 +271,8 @@ export interface VaultGitCliComposition {
 	readonly store: VaultGitReceiptStore;
 	/** Private background-task owner; production composition always provides it. */
 	readonly taskStore?: VaultGitTaskStore;
+	/** Private Background Doctor task owner; production composition always provides it. */
+	readonly doctorTaskStore?: VaultGitDoctorTaskStore;
 	readonly runtime: VaultGitRuntimePort;
 	readonly repositoryPath: string;
 	readonly remote: string;
@@ -530,6 +551,10 @@ async function createVaultGitCliCompositionFromSelection(
 		stateRoot: input.stateRoot,
 		repositoryId: store.repositoryId,
 	});
+	const doctorTaskStore = createVaultGitDoctorTaskStore({
+		stateRoot: input.stateRoot,
+		repositoryId: store.repositoryId,
+	});
 	const checker = createVaultCheckerPort(
 		repositoryPath,
 		processPort,
@@ -568,6 +593,7 @@ async function createVaultGitCliCompositionFromSelection(
 		janitor,
 		store,
 		taskStore,
+		doctorTaskStore,
 		runtime,
 		repositoryPath,
 		remote: input.remote ?? DEFAULT_REMOTE,
@@ -941,6 +967,32 @@ export async function main(
 	);
 
 	try {
+		if (
+			options.launchPrivate !== false &&
+			invocation.command === "doctor" &&
+			invocation.taskId === undefined &&
+			process.env[VAULT_GIT_DOCTOR_TASK_ID_ENV] === undefined
+		) {
+			const doctorReceipt = await composition.store.load();
+			if (
+				doctorReceipt.status === "loaded" &&
+				(invocation.transactionId === undefined ||
+					doctorReceipt.receipt.transactionId === invocation.transactionId)
+			) {
+				return launchBackgroundDoctor({
+					composition,
+					invocation: invocation as VaultGitRuntimeInvocation & {
+						readonly command: "doctor";
+					},
+					args,
+					stdout,
+					stderr,
+					runId: diagnostics.options.runId,
+					startedAt: diagnostics.options.startedAtMs,
+					now,
+				});
+			}
+		}
 		if (
 			options.launchPrivate !== false &&
 			invocation.command === "complete" &&
@@ -1516,8 +1568,14 @@ function validateInvocation(invocation: ParsedVaultGitInvocation): void {
 	if (invocation.transactionId && !/^txn_[0-9a-f]{32}$/.test(invocation.transactionId)) {
 		throw usageError("--transaction-id must be an opaque vault transaction id");
 	}
-	if (invocation.taskId && !/^task_[0-9a-f]{32}$/.test(invocation.taskId)) {
-		throw usageError("--task-id must be an opaque vault task id");
+	if (
+		invocation.taskId &&
+		!((invocation.command === "doctor"
+			? /^doctor_task_[0-9a-f]{32}$/u
+			: /^task_[0-9a-f]{32}$/u
+		).test(invocation.taskId))
+	) {
+		throw usageError("--task-id must be an opaque command-owned task id");
 	}
 	if (invocation.command === "begin") {
 		if (!invocation.event) throw usageError("begin requires --event");
@@ -1637,6 +1695,282 @@ function isSingleJsonEnvelope(output: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+async function launchBackgroundDoctor(input: EmitContext & {
+	readonly composition: VaultGitCliComposition;
+	readonly invocation: VaultGitRuntimeInvocation & { readonly command: "doctor" };
+	readonly args: readonly string[];
+	readonly stderr: CliWriter;
+}): Promise<number> {
+	const taskStore = requireDoctorTaskStore(input.composition);
+	const receipt = await input.composition.store.load();
+	const selectedReceipt =
+		receipt.status === "loaded" &&
+		(input.invocation.transactionId === undefined ||
+			receipt.receipt.transactionId === input.invocation.transactionId)
+			? receipt.receipt
+			: null;
+	const local = classifyVaultGitDoctorLocalReceipt(
+		receipt,
+		input.invocation.transactionId,
+	);
+	const activation = await input.composition.store.readActivation();
+	const admission = await taskStore.claimOrJoin(
+		{
+			repositoryId: taskStore.repositoryId,
+			activationEvidenceId: activation?.evidenceId ?? null,
+			receiptId: selectedReceipt?.receiptId ?? null,
+			receiptRevision: selectedReceipt?.revision ?? null,
+			transactionId:
+				input.invocation.transactionId ??
+				selectedReceipt?.transactionId ??
+				null,
+			normalizedInput: JSON.stringify({
+				command: "doctor",
+				transactionId: input.invocation.transactionId ?? null,
+			}),
+		},
+		new Date(input.now()).toISOString(),
+	);
+	let state = admission.state;
+	if (admission.launch === "refused") {
+		const payload = createVaultGitLifecycleResult({
+			command: "doctor",
+			outcome: "refused",
+			phase: local.phase,
+			write_permission: "denied",
+			changed_state: "none",
+			retry_safety: "operator_required",
+			blockers: [admission.reason ?? "task_input_mismatch"],
+			transaction_id: local.transactionId,
+			transaction_state: local.state,
+			task_id: state.taskId,
+			task_state: state.state,
+			task_phase: state.phase,
+			task_elapsed_ms: Math.max(0, input.now() - Date.parse(state.recordedAt)),
+			foreground_non_vault_work_allowed: true,
+			next_action: action(
+				"inspect_status",
+				"Inspect the existing Background Doctor task before retrying.",
+			),
+		});
+		return emitPayload({
+			...input,
+			payload,
+			success: false,
+			errorCode: "task_input_mismatch",
+		});
+	}
+	// A parent can die after publishing the claim but before publishing a launch.
+	// Any identical joiner may contend for the still-claimed revision; task-store
+	// CAS admits exactly one launch winner.
+	let launchWinner = admission.launch === "winner" || state.state === "claimed";
+	if (
+		!launchWinner &&
+		state.state === "launching" &&
+		state.launchExpiresAt !== null &&
+		Date.parse(state.launchExpiresAt) <= input.now()
+	) {
+		const stopped = await stopExpiredUnacknowledgedWorker(
+			state.workerPid,
+			state.workerProcessIdentity,
+		);
+		if (stopped) {
+			const recovered = await taskStore.transition(
+				state.taskId,
+				state.revision,
+				state.launchAttempt < 2
+					? {
+							state: "claimed",
+							phase: "admitted",
+							updatedAt: new Date(input.now()).toISOString(),
+							heartbeatAt: null,
+							checkpoint: "local_classified",
+							launchGeneration: null,
+							launchExpiresAt: null,
+							workerPid: null,
+							workerProcessIdentity: null,
+							launchAttempt: state.launchAttempt,
+							terminalResult: null,
+						}
+					: {
+							state: "unknown",
+							phase: "terminal",
+							updatedAt: new Date(input.now()).toISOString(),
+							heartbeatAt: state.heartbeatAt,
+							checkpoint: "terminal",
+							launchGeneration: state.launchGeneration,
+							launchExpiresAt: null,
+							workerPid: null,
+							workerProcessIdentity: null,
+							launchAttempt: state.launchAttempt,
+							terminalResult: {
+								kind: "worker_failure",
+								blocker: "worker_launch_protocol_failed",
+								retrySafety: "operator_required",
+								nextAction: {
+									id: "inspect_private_receipt",
+									summary:
+										"Inspect the exhausted Background Doctor launch evidence.",
+								},
+							},
+						},
+				state.launchGeneration,
+			);
+			state = recovered.state;
+			launchWinner =
+				recovered.status === "transitioned" &&
+				recovered.state.state === "claimed";
+		}
+	}
+	if (launchWinner) {
+		const launchGeneration =
+			`doctor_launch_${randomUUID().replaceAll("-", "")}`;
+		const launchedAt = new Date(input.now());
+		const launching = await taskStore.transition(state.taskId, state.revision, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: launchedAt.toISOString(),
+			heartbeatAt: null,
+			checkpoint: "local_classified",
+			launchGeneration,
+			launchExpiresAt: new Date(
+				launchedAt.getTime() + VAULT_GIT_DOCTOR_TASK_ACK_WINDOW_MS,
+			).toISOString(),
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: state.launchAttempt + 1,
+			terminalResult: null,
+		});
+		state = launching.state;
+		if (launching.status === "transitioned") {
+			const pid = spawnBackgroundDoctorWorker(
+				input.composition,
+				state.taskId,
+				launchGeneration,
+				input.args,
+			);
+			const registered = await taskStore.transition(state.taskId, state.revision, {
+				state: "launching",
+				phase: "admitted",
+				updatedAt: new Date(input.now()).toISOString(),
+				heartbeatAt: null,
+				checkpoint: "local_classified",
+				launchGeneration,
+				launchExpiresAt: state.launchExpiresAt,
+				workerPid: pid,
+				workerProcessIdentity: readVaultGitProcessIdentity(pid),
+				launchAttempt: state.launchAttempt,
+				terminalResult: null,
+			});
+			if (registered.status !== "transitioned") {
+				stopUnacknowledgedWorker(pid);
+			}
+			state = registered.state;
+		}
+	}
+	const acknowledgementDeadline =
+		performance.now() + VAULT_GIT_DOCTOR_TASK_ACK_WINDOW_MS;
+	while (
+		state.state !== "in_progress" &&
+		state.phase !== "terminal" &&
+		performance.now() < acknowledgementDeadline
+	) {
+		await Bun.sleep(10);
+		const loaded = await taskStore.loadByTaskId(state.taskId);
+		if (loaded.status !== "loaded") break;
+		state = loaded.state;
+	}
+	if (state.state !== "in_progress" && state.phase !== "terminal") {
+		const payload = createVaultGitLifecycleResult({
+			command: "doctor",
+			outcome: "refused",
+			phase: local.phase,
+			write_permission: "denied",
+			changed_state: "local",
+			retry_safety: "operator_required",
+			blockers: ["worker_launch_protocol_failed"],
+			transaction_id: local.transactionId,
+			transaction_state: local.state,
+			task_id: state.taskId,
+			task_state: state.state,
+			task_phase: state.phase,
+			task_elapsed_ms: Math.max(0, input.now() - Date.parse(state.recordedAt)),
+			foreground_non_vault_work_allowed: true,
+			next_action: action(
+				"inspect_status",
+				"Inspect the Background Doctor task before any repair.",
+			),
+		});
+		return emitPayload({
+			...input,
+			payload,
+			success: false,
+			errorCode: "worker_launch_protocol_failed",
+		});
+	}
+	if (state.phase === "terminal") {
+		return emitPayload({
+			...input,
+			payload: payloadForDoctorTask(state, input.now()),
+			success: state.state === "closed",
+			errorCode: state.terminalResult?.blocker ?? "worker_lost",
+		});
+	}
+	const payload = createVaultGitLifecycleResult({
+		command: "doctor",
+		outcome: "advanced",
+		phase: local.phase,
+		write_permission: "denied",
+		changed_state: "local",
+		retry_safety: "same_input_safe",
+		blockers: [],
+		transaction_id: local.transactionId,
+		transaction_state: local.state,
+		task_id: state.taskId,
+		task_state: state.state,
+		task_phase: state.phase,
+		task_heartbeat_at: state.heartbeatAt,
+		task_elapsed_ms: Math.max(0, input.now() - Date.parse(state.recordedAt)),
+		foreground_non_vault_work_allowed: true,
+		next_action: action(
+			"inspect_status",
+			"Inspect the Background Doctor task for authoritative diagnosis.",
+		),
+	});
+	return emitPayload({ ...input, payload, success: true, errorCode: "" });
+}
+
+function spawnBackgroundDoctorWorker(
+	composition: VaultGitCliComposition,
+	taskId: string,
+	launchGeneration: string,
+	args: readonly string[],
+): number {
+	const child = spawn(
+		process.execPath,
+		[join(dirname(CLI_PATH), "doctor-worker.ts"), ...args],
+		{
+			cwd: composition.repositoryPath,
+			env: {
+				...projectVaultGitBackgroundWorkerEnvironment(process.env),
+				[VAULT_GIT_DOCTOR_TASK_ID_ENV]: taskId,
+				[VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION_ENV]: launchGeneration,
+				VAULT_GIT_DOCTOR_TASK_REPOSITORY_ID:
+					requireDoctorTaskStore(composition).repositoryId,
+				VAULT_GIT_DOCTOR_TASK_DELEGATE_ENTRYPOINT:
+					composition.privateEntrypointPath ?? CLI_PATH,
+			},
+			stdio: "ignore",
+			detached: true,
+		},
+	);
+	if (child.pid === undefined) {
+		throw new Error("Background Doctor worker pid unavailable");
+	}
+	child.unref();
+	return child.pid;
 }
 
 async function launchBackgroundCompletion(input: EmitContext & {
@@ -2067,6 +2401,9 @@ type RuntimeResult =
 	| { readonly kind: "task"; readonly value: import("./model.ts").VaultGitTaskState }
 	| { readonly kind: "task_missing"; readonly taskId: string }
 	| { readonly kind: "task_corrupt"; readonly taskId: string }
+	| { readonly kind: "doctor_task"; readonly value: VaultGitDoctorTaskState }
+	| { readonly kind: "doctor_task_missing"; readonly taskId: string }
+	| { readonly kind: "doctor_task_corrupt"; readonly taskId: string }
 	| { readonly kind: "doctor"; readonly value: VaultGitDoctorResult }
 	| { readonly kind: "repair"; readonly value: VaultGitRepairResult }
 	| { readonly kind: "janitor"; readonly value: VaultGitJanitorReport }
@@ -2170,22 +2507,51 @@ async function executeInvocation(
 			};
 		case "doctor":
 			{
-				const value = await composition.engine.doctor({
-					transactionId: invocation.transactionId,
-					issueTakeoverToken: false,
-				});
-				// Both reconciliations are advisory private bookkeeping: the worker
-				// and the next doctor run reach the same terminal state. Losing a
-				// CAS race must never discard the diagnosis the operator asked for.
-				await reconcileTaskClosure(composition, value).catch(() => undefined);
-				await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
-				await authorizeTaskRepairForWritingReceipt(
-					composition,
-					invocation.transactionId,
-					value,
-				).catch(() => undefined);
+				if (invocation.taskId) {
+					const loaded = await requireDoctorTaskStore(
+						composition,
+					).loadByTaskId(invocation.taskId);
+					if (loaded.status === "absent") {
+						return {
+							kind: "doctor_task_missing",
+							taskId: invocation.taskId,
+						};
+					}
+					if (loaded.status === "corrupt") {
+						return {
+							kind: "doctor_task_corrupt",
+							taskId: invocation.taskId,
+						};
+					}
+					return {
+						kind: "doctor_task",
+						value: await reconcileStaleDoctorTask(
+							requireDoctorTaskStore(composition),
+							loaded.state,
+							composition.runtime.now(),
+						),
+					};
+				}
+				const taskId = process.env[VAULT_GIT_DOCTOR_TASK_ID_ENV];
+				const launchGeneration =
+					process.env[VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION_ENV];
+				const doctorInvocation = invocation as VaultGitRuntimeInvocation & {
+					readonly command: "doctor";
+				};
+				const value =
+					taskId && launchGeneration
+						? await executeBackgroundDoctorWorker(
+								doctorInvocation,
+								composition,
+								taskId,
+								launchGeneration,
+							)
+						: await executeAuthoritativeDoctor(
+								doctorInvocation,
+								composition,
+							);
 				return {
-				kind: "doctor",
+					kind: "doctor",
 					value,
 				};
 			}
@@ -2288,6 +2654,242 @@ async function authorizeTaskRepairForWritingReceipt(
 	});
 	if (authorization.status === "refused") {
 		throw new Error("repaired task authorization refused");
+	}
+}
+
+async function executeAuthoritativeDoctor(
+	invocation: VaultGitRuntimeInvocation & { readonly command: "doctor" },
+	composition: VaultGitCliComposition,
+): Promise<VaultGitDoctorResult> {
+	const value = await composition.engine.doctor({
+		transactionId: invocation.transactionId,
+		issueTakeoverToken: false,
+	});
+	await reconcileTaskClosure(composition, value).catch(() => undefined);
+	await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
+	await authorizeTaskRepairForWritingReceipt(
+		composition,
+		invocation.transactionId,
+		value,
+	).catch(() => undefined);
+	return value;
+}
+
+async function executeBackgroundDoctorWorker(
+	invocation: VaultGitRuntimeInvocation & { readonly command: "doctor" },
+	composition: VaultGitCliComposition,
+	taskId: string,
+	launchGeneration: string,
+): Promise<VaultGitDoctorResult> {
+	const taskStore = requireDoctorTaskStore(composition);
+	let loaded = await taskStore.loadByTaskId(taskId);
+	let acknowledgedState: VaultGitDoctorTaskState;
+	if (
+		process.env.VAULT_GIT_DOCTOR_TASK_ACKNOWLEDGED === "1" &&
+		loaded.status === "loaded" &&
+		loaded.state.state === "in_progress" &&
+		loaded.state.launchGeneration === launchGeneration &&
+		loaded.state.workerPid === process.pid &&
+		loaded.state.workerProcessIdentity !== null
+	) {
+		acknowledgedState = loaded.state;
+	} else {
+		const registrationDeadline =
+			performance.now() + VAULT_GIT_DOCTOR_TASK_ACK_WINDOW_MS;
+		while (
+			loaded.status === "loaded" &&
+			loaded.state.state === "launching" &&
+			loaded.state.launchGeneration === launchGeneration &&
+			loaded.state.workerPid === null &&
+			performance.now() < registrationDeadline
+		) {
+			await Bun.sleep(10);
+			loaded = await taskStore.loadByTaskId(taskId);
+		}
+		if (
+		loaded.status !== "loaded" ||
+		loaded.state.state !== "launching" ||
+		loaded.state.launchGeneration !== launchGeneration ||
+		loaded.state.workerPid !== process.pid ||
+		loaded.state.workerProcessIdentity === null
+		) {
+			throw new Error("Background Doctor acknowledgement refused");
+		}
+		const acknowledgedAt = composition.runtime.now().toISOString();
+		const acknowledged = await taskStore.transition(
+			taskId,
+			loaded.state.revision,
+			{
+				state: "in_progress",
+				phase: "running",
+				updatedAt: acknowledgedAt,
+				heartbeatAt: acknowledgedAt,
+				checkpoint: "checking_remote",
+				launchGeneration,
+				launchExpiresAt: null,
+				workerPid: process.pid,
+				workerProcessIdentity: loaded.state.workerProcessIdentity,
+				launchAttempt: loaded.state.launchAttempt,
+				terminalResult: null,
+			},
+			launchGeneration,
+		);
+		if (acknowledged.status !== "transitioned") {
+			throw new Error("Background Doctor acknowledgement lost");
+		}
+		acknowledgedState = acknowledged.state;
+	}
+	const heartbeat = setInterval(() => {
+		void updateDoctorTaskHeartbeat(
+			taskStore,
+			taskId,
+			launchGeneration,
+			() => composition.runtime.now(),
+		);
+	}, 5_000);
+	heartbeat.unref();
+	try {
+		const result = await executeAuthoritativeDoctor(invocation, composition);
+		const terminalAt = composition.runtime.now().toISOString();
+		await transitionDoctorTaskUntilSettled(
+			taskStore,
+			taskId,
+			{
+				state: "closed",
+				phase: "terminal",
+				updatedAt: terminalAt,
+				heartbeatAt: terminalAt,
+				checkpoint: "terminal",
+				launchGeneration,
+				launchExpiresAt: null,
+				workerPid: process.pid,
+				workerProcessIdentity: acknowledgedState.workerProcessIdentity,
+				launchAttempt: acknowledgedState.launchAttempt,
+				terminalResult: {
+					kind: "doctor_result",
+					status: result.status,
+					state: result.state,
+					phase: result.phase,
+					finding: result.finding,
+					changedState: result.changedState,
+					retrySafety: result.retrySafety,
+					nextAction: result.nextAction,
+					...(result.blocker ? { blocker: result.blocker } : {}),
+					...(result.repairAction
+						? { repairAction: result.repairAction }
+						: {}),
+					...(result.transactionId
+						? { transactionId: result.transactionId }
+						: {}),
+				},
+			},
+			launchGeneration,
+		);
+		return result;
+	} finally {
+		clearInterval(heartbeat);
+	}
+}
+
+async function updateDoctorTaskHeartbeat(
+	taskStore: VaultGitDoctorTaskStore,
+	taskId: string,
+	launchGeneration: string,
+	now: () => Date,
+): Promise<void> {
+	const loaded = await taskStore.loadByTaskId(taskId);
+	if (
+		loaded.status !== "loaded" ||
+		loaded.state.state !== "in_progress" ||
+		loaded.state.launchGeneration !== launchGeneration
+	) {
+		return;
+	}
+	const updatedAt = now().toISOString();
+	await taskStore.transition(
+		taskId,
+		loaded.state.revision,
+		{
+			state: "in_progress",
+			phase: "running",
+			updatedAt,
+			heartbeatAt: updatedAt,
+			checkpoint: loaded.state.checkpoint,
+			launchGeneration,
+			launchExpiresAt: null,
+			workerPid: loaded.state.workerPid,
+			workerProcessIdentity: loaded.state.workerProcessIdentity,
+			launchAttempt: loaded.state.launchAttempt,
+			terminalResult: null,
+		},
+		launchGeneration,
+	);
+}
+
+async function reconcileStaleDoctorTask(
+	taskStore: VaultGitDoctorTaskStore,
+	state: VaultGitDoctorTaskState,
+	now: Date,
+): Promise<VaultGitDoctorTaskState> {
+	if (
+		!isVaultGitDoctorTaskWorkerLost(
+			state,
+			now.getTime(),
+			VAULT_GIT_TASK_HEARTBEAT_STALE_MS,
+			processIdentityMatches,
+		)
+	) {
+		return state;
+	}
+	const transitioned = await taskStore.transition(
+		state.taskId,
+		state.revision,
+		{
+			state: "unknown",
+			phase: "terminal",
+			updatedAt: now.toISOString(),
+			heartbeatAt: state.heartbeatAt,
+			checkpoint: "terminal",
+			launchGeneration: state.launchGeneration,
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: state.launchAttempt,
+			terminalResult: {
+				kind: "worker_failure",
+				blocker: "worker_lost",
+				retrySafety: "operator_required",
+				nextAction: {
+					id: "inspect_private_receipt",
+					summary:
+						"Inspect the preserved Background Doctor evidence before repair.",
+				},
+			},
+		},
+		state.launchGeneration,
+	);
+	return transitioned.state;
+}
+
+async function transitionDoctorTaskUntilSettled(
+	taskStore: VaultGitDoctorTaskStore,
+	taskId: string,
+	input: Parameters<VaultGitDoctorTaskStore["transition"]>[2],
+	launchGeneration: string,
+): Promise<VaultGitDoctorTaskState> {
+	for (;;) {
+		const loaded = await taskStore.loadByTaskId(taskId);
+		if (loaded.status !== "loaded") {
+			throw new Error("Background Doctor task unavailable");
+		}
+		if (loaded.state.phase === "terminal") return loaded.state;
+		const transitioned = await taskStore.transition(
+			taskId,
+			loaded.state.revision,
+			input,
+			launchGeneration,
+		);
+		if (transitioned.status === "transitioned") return transitioned.state;
 	}
 }
 
@@ -2517,6 +3119,15 @@ async function updateTaskHeartbeat(
 function requireTaskStore(composition: VaultGitCliComposition): VaultGitTaskStore {
 	if (!composition.taskStore) throw new Error("background task store unavailable");
 	return composition.taskStore;
+}
+
+function requireDoctorTaskStore(
+	composition: VaultGitCliComposition,
+): VaultGitDoctorTaskStore {
+	if (!composition.doctorTaskStore) {
+		throw new Error("Background Doctor task store unavailable");
+	}
+	return composition.doctorTaskStore;
 }
 
 async function executeActivationInvocation(
@@ -2758,7 +3369,12 @@ function emitRuntimeResult(input: EmitContext & {
 			? input.result.value.status !== "refused"
 			: input.result.kind === "task"
 				? true
-				: input.result.kind === "task_missing" || input.result.kind === "task_corrupt"
+				: input.result.kind === "doctor_task"
+					? input.result.value.state !== "unknown"
+				: input.result.kind === "task_missing" ||
+						input.result.kind === "task_corrupt" ||
+						input.result.kind === "doctor_task_missing" ||
+						input.result.kind === "doctor_task_corrupt"
 					? false
 			: input.result.kind === "doctor"
 				? true
@@ -2835,11 +3451,80 @@ type RuntimePayload = VaultGitLifecycleResultPayload & {
 	readonly worker_eligibility?: ReturnType<typeof projectWorkerEligibility>;
 };
 
+function payloadForDoctorTask(
+	state: VaultGitDoctorTaskState,
+	now: number,
+): VaultGitLifecycleResultPayload {
+	const terminal = state.terminalResult;
+	const diagnosis = terminal?.kind === "doctor_result" ? terminal : null;
+	const workerFailure = terminal?.kind === "worker_failure" ? terminal : null;
+	return createVaultGitLifecycleResult({
+		command: "doctor",
+		outcome: workerFailure ? "refused" : "read_only",
+		phase: diagnosis?.phase ?? (workerFailure ? "human_required" : "checking"),
+		write_permission: "denied",
+		changed_state: diagnosis?.changedState ?? "none",
+		retry_safety: terminal?.retrySafety ?? "same_input_safe",
+		blockers: terminal?.blocker ? [terminal.blocker] : [],
+		transaction_id:
+			diagnosis?.transactionId ?? state.transactionId ?? undefined,
+		transaction_state: diagnosis?.state ?? (workerFailure ? "unknown" : undefined),
+		finding: diagnosis?.finding,
+		repair_action: diagnosis?.repairAction,
+		task_id: state.taskId,
+		task_state: state.state,
+		task_phase: state.phase,
+		task_heartbeat_at: state.heartbeatAt,
+		task_elapsed_ms: Math.max(0, now - Date.parse(state.recordedAt)),
+		foreground_non_vault_work_allowed: true,
+		next_action: terminal
+			? action(terminal.nextAction.id, terminal.nextAction.summary)
+			: action(
+					"inspect_status",
+					"Inspect the Background Doctor task for authoritative diagnosis.",
+				),
+	});
+}
+
 function payloadForRuntime(
 	command: Exclude<VaultGitCommand, "activation">,
 	result: Exclude<RuntimeResult, { readonly kind: "activation" }>,
 	now: number,
 ): RuntimePayload {
+	if (result.kind === "doctor_task") {
+		return payloadForDoctorTask(result.value, now);
+	}
+	if (result.kind === "doctor_task_missing") {
+		return createVaultGitLifecycleResult({
+			command,
+			outcome: "refused",
+			phase: "checking",
+			write_permission: "denied",
+			changed_state: "none",
+			retry_safety: "same_input_safe",
+			blockers: ["task_not_found"],
+			task_id: result.taskId,
+			foreground_non_vault_work_allowed: true,
+			next_action: action(
+				"change_input",
+				"Use the opaque task ID returned by doctor.",
+			),
+		});
+	}
+	if (result.kind === "doctor_task_corrupt") {
+		return createVaultGitLifecycleResult({
+			command,
+			outcome: "refused",
+			phase: "human_required",
+			write_permission: "denied",
+			changed_state: "none",
+			retry_safety: "operator_required",
+			blockers: ["receipt_corrupt"],
+			task_id: result.taskId,
+			foreground_non_vault_work_allowed: true,
+			next_action: action("inspect_private_receipt"),
+		});
+	}
 	if (result.kind === "task_missing") {
 		return createVaultGitLifecycleResult({
 			command,

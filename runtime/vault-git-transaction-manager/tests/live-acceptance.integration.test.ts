@@ -297,6 +297,232 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		});
 	}, 60_000);
 
+	test("Doctor returns local evidence while remote diagnosis continues", async () => {
+		const fixture = await createFixture();
+		const transactionId = await fixture.begin("notes/event.md");
+		const unrelatedBefore = await fixture.unrelatedSnapshot();
+		const remoteRefsBefore = fixture.remoteRefs();
+		fixture.env.VAULT_GIT_SHIM_MODE = "doctor_blocking";
+
+		const startedAt = performance.now();
+		const doctorPromise = fixture.run([
+			"doctor",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		]);
+		const foreground = await Promise.race([
+			doctorPromise,
+			Bun.sleep(1_000).then(() => null),
+		]);
+		const foregroundElapsedMs = performance.now() - startedAt;
+		if (foreground === null) {
+			await writeFile(`${fixture.shimMarker}.release`, "release\n");
+			await doctorPromise;
+		}
+
+		expect(foreground).not.toBeNull();
+		if (foreground === null) return;
+		expect(foregroundElapsedMs).toBeLessThan(1_000);
+		await waitForFile(fixture.shimMarker, 10_000);
+		expect(foreground.exitCode).toBe(0);
+		const admitted = parseCliProcessJson<{
+			data?: {
+				command?: string;
+				outcome?: string;
+				task_id?: string;
+				task_state?: string;
+				foreground_non_vault_work_allowed?: boolean;
+				next_action?: { id?: string };
+			};
+		}>(foreground);
+		expect(admitted).toMatchObject({
+			status: "ok",
+			data: {
+				command: "doctor",
+				outcome: "advanced",
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+				next_action: { id: "inspect_status" },
+			},
+		});
+		const taskId = admitted.data?.task_id;
+		expect(taskId).toMatch(/^doctor_task_[0-9a-f]{32}$/u);
+		if (!taskId) throw new Error("Background Doctor omitted task id");
+
+		const inspection = await fixture.run([
+			"doctor",
+			"--task-id",
+			taskId,
+			"--json",
+		]);
+		if (inspection.exitCode !== 0) {
+			await writeFile(`${fixture.shimMarker}.release`, "release\n");
+			throw new Error(
+				"Background Doctor inspection failed: " +
+					inspection.stdout +
+					" " +
+					inspection.stderr,
+			);
+		}
+		expect(inspection.exitCode).toBe(0);
+		expect(parseCliProcessJson(inspection)).toMatchObject({
+			status: "ok",
+			data: {
+				command: "doctor",
+				task_id: taskId,
+				task_state: "in_progress",
+				foreground_non_vault_work_allowed: true,
+			},
+		});
+		expect(await fixture.unrelatedSnapshot()).toEqual(unrelatedBefore);
+		await writeFile(`${fixture.shimMarker}.release`, "release\n");
+		let terminalInspection: CliProcessResult | null = null;
+		const terminalDeadline = Date.now() + 10_000;
+		while (Date.now() < terminalDeadline) {
+			const candidate = await fixture.run([
+				"doctor",
+				"--task-id",
+				taskId,
+				"--json",
+			]);
+			const candidateEnvelope = parseCliProcessJson<{
+				data?: { task_state?: string };
+			}>(candidate);
+			if (candidateEnvelope.data?.task_state === "closed") {
+				terminalInspection = candidate;
+				break;
+			}
+			await Bun.sleep(25);
+		}
+		expect(terminalInspection).not.toBeNull();
+		expect(
+			parseCliProcessJson(terminalInspection as CliProcessResult),
+		).toMatchObject({
+			status: "ok",
+			data: {
+				command: "doctor",
+				task_id: taskId,
+				task_state: "closed",
+				finding: "writes_in_progress",
+				transaction_state: "repairable",
+				next_action: { id: "run_repair" },
+			},
+		});
+		expect(await fixture.unrelatedSnapshot()).toEqual(unrelatedBefore);
+		expect(fixture.remoteRefs()).toBe(remoteRefsBefore);
+		const publicSurfaces = [
+			foreground.stdout,
+			inspection.stdout,
+			(terminalInspection as CliProcessResult).stdout,
+		].join("\n");
+		expect(publicSurfaces).not.toContain(fixture.stateRoot);
+		expect(publicSurfaces).not.toContain(fixture.clone);
+		expect(publicSurfaces).not.toContain("doctor remote check blocked");
+		expect(publicSurfaces).not.toMatch(/https?:\/\/[^/\s:@]+:[^/\s@]+@/u);
+	});
+
+	test("twenty Doctors join one diagnostic task", async () => {
+		const fixture = await createFixture();
+		const transactionId = await fixture.begin("notes/event.md");
+		fixture.env.VAULT_GIT_SHIM_MODE = "doctor_blocking";
+		const args = [
+			"doctor",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		] as const;
+
+		const calls = Array.from({ length: 20 }, async () => {
+			const startedAt = performance.now();
+			const result = await fixture.run(args);
+			return { result, elapsedMs: performance.now() - startedAt };
+		});
+		const settled = await Promise.race([
+			Promise.all(calls),
+			Bun.sleep(5_000).then(() => null),
+		]);
+		try {
+			expect(settled).not.toBeNull();
+			if (settled === null) return;
+			const envelopes = settled.map(({ result }) =>
+				parseCliProcessJson<{
+					status?: string;
+					data?: { task_id?: string; task_state?: string };
+				}>(result),
+			);
+			const taskIds = envelopes.map(({ data }) => data?.task_id);
+			const maximumDuration = Math.max(
+				...settled.map(({ elapsedMs }) => elapsedMs),
+			);
+
+			expect(new Set(envelopes.map(({ status }) => status))).toEqual(
+				new Set(["ok"]),
+			);
+			expect(new Set(taskIds).size).toBe(1);
+			expect(maximumDuration).toBeLessThan(2_000);
+			expect(await countDoctorTasks(fixture.stateRoot)).toBe(1);
+			await waitForFile(fixture.shimMarker, 10_000);
+			const changed = await fixture.run(["doctor", "--json"]);
+			expect(parseCliProcessJson(changed)).toMatchObject({
+				status: "error",
+				error: { code: "task_input_mismatch" },
+				data: {
+					task_id: taskIds[0],
+					next_action: { id: "inspect_status" },
+				},
+			});
+			expect(await countDoctorTasks(fixture.stateRoot)).toBe(1);
+		} finally {
+			await writeFile(`${fixture.shimMarker}.release`, "release\n");
+		}
+		const taskId = settled?.[0]
+			? parseCliProcessJson<{ data?: { task_id?: string } }>(
+					settled[0].result,
+				).data?.task_id
+			: undefined;
+		if (!taskId) throw new Error("joined Background Doctor omitted task id");
+		const terminalDeadline = Date.now() + 10_000;
+		let terminal = false;
+		while (Date.now() < terminalDeadline) {
+			const inspection = await fixture.run([
+				"doctor",
+				"--task-id",
+				taskId,
+				"--json",
+			]);
+			terminal =
+				parseCliProcessJson<{ data?: { task_state?: string } }>(inspection)
+					.data?.task_state === "closed";
+			if (terminal) break;
+			await Bun.sleep(25);
+		}
+		expect(terminal).toBe(true);
+	});
+
+	test("Doctor foreground p95 stays below one second across cold processes", async () => {
+		const fixture = await createFixture();
+		const transactionId = await fixture.begin("notes/event.md");
+		const args = [
+			"doctor",
+			"--transaction-id",
+			transactionId,
+			"--json",
+		] as const;
+		await runDoctorToTerminal(fixture, args);
+
+		const durations: number[] = [];
+		for (let sample = 0; sample < 20; sample += 1) {
+			const startedAt = performance.now();
+			const result = await fixture.run(args);
+			durations.push(performance.now() - startedAt);
+			expect(result.exitCode).toBe(0);
+		}
+		durations.sort((left, right) => left - right);
+		const p95 = durations[Math.ceil(durations.length * 0.95) - 1];
+		expect(p95).toBeLessThan(1_000);
+	}, 60_000);
+
 	test(
 		"twenty identical public completions join one task and changed input refuses",
 		async () => {
@@ -852,7 +1078,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			lease: { transaction_id: transactionId, state: "released" },
 		});
 		await rm(fixture.shimMarker, { force: true });
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -904,7 +1130,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 				continuation: { next_action_id: "run_doctor" },
 			});
 			delete fixture.env.VAULT_GIT_CHECK_MARKER;
-			const doctor = await fixture.run([
+			const doctor = await runDoctorToTerminal(fixture, [
 				"doctor",
 				"--transaction-id",
 				transactionId,
@@ -1045,7 +1271,7 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			data: { retry_safety: "operator_required" },
 			continuation: { next_action_id: "request_operator_review" },
 		});
-		const doctor = await fixture.run(["doctor", "--json"]);
+		const doctor = await runDoctorToTerminal(fixture, ["doctor", "--json"]);
 		expect(parseCliProcessJson(doctor)).toMatchObject({
 			data: {
 				finding: "remote_contract_breach",
@@ -1105,6 +1331,38 @@ interface Fixture {
 	gitBare(...args: string[]): string;
 	remoteRefs(): string;
 	unrelatedSnapshot(): Promise<unknown>;
+}
+
+async function runDoctorToTerminal(
+	fixture: Pick<Fixture, "run">,
+	args: readonly string[],
+): Promise<CliProcessResult> {
+	const accepted = await fixture.run(args);
+	if (accepted.exitCode !== 0) return accepted;
+	const acceptedData = parseCliProcessJson<{
+		data?: { task_id?: string; task_state?: string };
+	}>(accepted).data;
+	if (
+		!acceptedData?.task_id ||
+		["closed", "unknown"].includes(acceptedData.task_state ?? "")
+	) {
+		return accepted;
+	}
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		const inspection = await fixture.run([
+			"doctor",
+			"--task-id",
+			acceptedData.task_id,
+			"--json",
+		]);
+		const taskState = parseCliProcessJson<{
+			data?: { task_state?: string };
+		}>(inspection).data?.task_state;
+		if (taskState === "closed" || taskState === "unknown") return inspection;
+		await Bun.sleep(25);
+	}
+	throw new Error(`Background Doctor task ${acceptedData.task_id} did not terminate`);
 }
 
 async function createFixture(
@@ -1626,6 +1884,19 @@ async function readTaskStates(
 	throw new Error("timed out waiting for durable task history");
 }
 
+async function countDoctorTasks(stateRoot: string): Promise<number> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	let count = 0;
+	for (const repository of await readdir(managerRoot).catch(() => [])) {
+		count += (
+			await readdir(join(managerRoot, repository, "doctor-tasks")).catch(
+				() => [],
+			)
+		).length;
+	}
+	return count;
+}
+
 async function readLatestTaskRevision(history: string): Promise<{
 	readonly taskId: string;
 	readonly state: string;
@@ -1779,6 +2050,10 @@ if (mode === "atomic_unsupported" && atomic && dryRun) {
 if (mode === "remote_offline" && ["push", "fetch", "ls-remote"].includes(args[0] ?? "")) {
   process.stderr.write("fatal: unable to access remote: Could not resolve host\\n");
   process.exit(128);
+}
+if (mode === "doctor_blocking" && marker && ["fetch", "ls-remote"].includes(args[0] ?? "")) {
+  writeFileSync(marker, "doctor remote check blocked\\n");
+  while (!existsSync(marker + ".release")) await Bun.sleep(10);
 }
 if (mode === "lost_ack" && marker && existsSync(marker) && ["fetch", "ls-remote"].includes(args[0] ?? "")) {
   process.stderr.write("fatal: simulated reconciliation outage\\n");

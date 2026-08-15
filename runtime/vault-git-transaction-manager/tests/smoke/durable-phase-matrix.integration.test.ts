@@ -12,6 +12,7 @@ import {
 	assertWorktreeUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	runDoctorToTerminal,
 } from "./fixture.ts";
 
 setDefaultTimeout(180_000);
@@ -75,7 +76,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		});
 		assertRefsUnchanged(before, fixture.snapshot());
 
-		const doctor = await fixture.run(["doctor", "--json"]);
+		const doctor = await runDoctorToTerminal(fixture, ["doctor", "--json"]);
 		expect(parseCliProcessJson(doctor)).toMatchObject({
 			status: "ok",
 			data: {
@@ -129,7 +130,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		expect(afterKill.worktree).toBe(before.worktree);
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			loaded.receipt.transactionId,
@@ -199,7 +200,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		assertRefsUnchanged(before, fixture.snapshot());
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -251,7 +252,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		assertRefsUnchanged(before, fixture.snapshot());
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -307,7 +308,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		expect(afterKill.worktree).toBe(before.worktree);
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -383,7 +384,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		assertRefsUnchanged(before, fixture.snapshot());
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -418,7 +419,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			status: "loaded",
 			receipt: { transactionId, phase: "writing" },
 		});
-		const recoveryDoctor = await fixture.run([
+		const recoveryDoctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -524,7 +525,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		expect(after.worktree).toBe(before.worktree);
 		assertLedgerState(fixture, "held");
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -573,7 +574,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		});
 		assertRefsUnchanged(before, fixture.snapshot());
 
-		const doctor = await fixture.run(["doctor", "--json"]);
+		const doctor = await runDoctorToTerminal(fixture, ["doctor", "--json"]);
 		expect(parseCliProcessJson(doctor)).toMatchObject({
 			status: "ok",
 			data: {
@@ -639,7 +640,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			["refs/heads/main", VAULT_GIT_LEDGER_REF].sort(),
 		);
 
-		const doctor = await fixture.run([
+		const doctor = await runDoctorToTerminal(fixture, [
 			"doctor",
 			"--transaction-id",
 			transactionId,
@@ -707,7 +708,7 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			// The worktree must survive a mid-publication kill untouched.
 			expect(fixture.snapshot().worktree).toBe(before.worktree);
 
-			const doctor = await fixture.run([
+			const doctor = await runDoctorToTerminal(fixture, [
 				"doctor",
 				"--transaction-id",
 				transactionId,
