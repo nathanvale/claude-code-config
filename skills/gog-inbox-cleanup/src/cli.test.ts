@@ -14,7 +14,7 @@ interface CliResult {
 	stderr: string;
 }
 
-async function makeFixture(options: { missingClient?: boolean; hang?: boolean } = {}): Promise<{
+async function makeFixture(options: { missingClient?: boolean; hang?: boolean; largeOutput?: boolean } = {}): Promise<{
 	root: string;
 	configPath: string;
 	argvPath: string;
@@ -34,7 +34,9 @@ async function makeFixture(options: { missingClient?: boolean; hang?: boolean } 
 	);
 	const behavior = options.hang
 		? "setInterval(() => {}, 1000);\n"
-		: `console.log(JSON.stringify({
+		: options.largeOutput
+			? 'process.stdout.write("x".repeat(4096)); setInterval(() => {}, 1000);\n'
+			: `console.log(JSON.stringify({
   threads: [
     { id: "private-1", from: "GitHub <notifications@github.com>", subject: "Review requested", date: "2026-08-15T02:00:00Z", labels: ["INBOX", "CATEGORY_UPDATES"], messageCount: 1 },
     { id: "private-2", from: "Account <security@example.test>", subject: "Security alert", date: "2026-08-14T02:00:00Z", labels: ["INBOX"], messageCount: 1 }
@@ -210,6 +212,17 @@ describe("gog-inbox-cleanup public CLI", () => {
 				timeoutMs: 25,
 			}),
 		).rejects.toThrow("timed out");
+	});
+
+	test("terminates gog when stdout exceeds the runtime byte budget", async () => {
+		const fixture = await makeFixture({ largeOutput: true });
+
+		await expect(
+			runGogSearch({ account: "test-person@example.test", client: "test-personal" }, "newer_than:7d", 1, {
+				executable: join(fixture.root, "bin", "gog"),
+				maxBufferBytes: 256,
+			}),
+		).rejects.toThrow("gog Gmail search failed");
 	});
 
 	test("renders help without invoking gog", async () => {

@@ -326,30 +326,48 @@ describe("auditThreads", () => {
 			},
 		);
 
-		expect(result.reviewProposals.map((proposal) => ({
-			decision: proposal.decision,
-			scope: proposal.scope,
-			candidateCount: proposal.candidateCount,
-			intendedLabel: proposal.intendedLabel,
-		}))).toEqual([
+		expect(result.reviewProposals).toEqual([
 			{
 				decision: "unsubscribe-candidate",
 				scope: { type: "sender", value: "news@letters.example" },
 				candidateCount: 2,
 				intendedLabel: "Read later",
+				rationale: "Repeated lower-risk marketing rows warrant exact sender review",
+				protectedExclusions: 0,
+				nextApproval: "Separate exact review required before any future Gmail change",
 			},
 			{
 				decision: "archive-candidate",
 				scope: { type: "sender", value: "read@queue.example" },
 				candidateCount: 1,
 				intendedLabel: "Read later",
+				rationale: "An existing low-attention label makes archive reviewable, not automatic",
+				protectedExclusions: 0,
+				nextApproval: "Separate exact review required before any future Gmail change",
 			},
 			{
 				decision: "block-candidate",
 				scope: { type: "sender", value: "bulk@spam.example" },
 				candidateCount: 1,
 				intendedLabel: "Spam review",
+				rationale: "Gmail already placed this bounded row in Spam; blocking still requires review",
+				protectedExclusions: 0,
+				nextApproval: "Separate exact review required before any future Gmail change",
 			},
 		]);
+		const serialized = JSON.stringify(result.reviewProposals);
+		for (const privateValue of [
+			"newsletter-1",
+			"newsletter-2",
+			"already-labeled",
+			"spam-row",
+			"Weekly newsletter",
+			"Friday digest",
+			"Monthly digest",
+			"Marketing offer",
+		]) {
+			expect(serialized).not.toContain(privateValue);
+		}
+		expect(serialized).not.toContain('"action"');
 	});
 });

@@ -2,12 +2,14 @@ import type { GmailIdentity } from "./config";
 import type { GogSearchResponse, GogSearchThread } from "./model";
 
 const DEFAULT_GOG_TIMEOUT_MS = 30_000;
+const DEFAULT_GOG_STDOUT_MAX_BYTES = 1_048_576;
 
 /** Runtime error safe to show without forwarding private subprocess output. */
 export class GogAuditError extends Error {}
 
 interface GogSearchRuntime {
 	executable?: string;
+	maxBufferBytes?: number;
 	timeoutMs?: number;
 }
 
@@ -67,7 +69,12 @@ export async function runGogSearch(
 	runtime: GogSearchRuntime = {},
 ): Promise<GogSearchResponse> {
 	const timeoutMs = runtime.timeoutMs ?? DEFAULT_GOG_TIMEOUT_MS;
-	const stdout = await runGogProcess(buildGogSearchArgv(identity, query, max, runtime.executable), timeoutMs);
+	const maxBufferBytes = runtime.maxBufferBytes ?? DEFAULT_GOG_STDOUT_MAX_BYTES;
+	const stdout = await runGogProcess(
+		buildGogSearchArgv(identity, query, max, runtime.executable),
+		timeoutMs,
+		maxBufferBytes,
+	);
 	const response = normalizeSearchResponse(parseGogJson(stdout));
 	if (response.threads.length > max) {
 		throw new GogAuditError("gog Gmail search exceeded the requested result cap");
@@ -75,10 +82,11 @@ export async function runGogSearch(
 	return response;
 }
 
-async function runGogProcess(argv: string[], timeoutMs: number): Promise<string> {
+async function runGogProcess(argv: string[], timeoutMs: number, maxBufferBytes: number): Promise<string> {
 	const child = Bun.spawn(argv, {
+		maxBuffer: maxBufferBytes,
 		stdout: "pipe",
-		stderr: "pipe",
+		stderr: "ignore",
 	});
 	let timedOut = false;
 	const timeout = setTimeout(() => {
@@ -88,9 +96,8 @@ async function runGogProcess(argv: string[], timeoutMs: number): Promise<string>
 	let stdout: string;
 	let exitCode: number;
 	try {
-		[stdout, , exitCode] = await Promise.all([
+		[stdout, exitCode] = await Promise.all([
 			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
 			child.exited,
 		]);
 	} finally {
