@@ -270,6 +270,7 @@ export const VAULT_GIT_RECEIPT_TRANSITIONS = [
 	"deterministic_repair_available",
 	"human_intervention_required",
 	"superseded",
+	"quarantine_reconciled",
 	"closed",
 ] as const;
 

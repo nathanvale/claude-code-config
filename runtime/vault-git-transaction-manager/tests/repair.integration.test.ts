@@ -468,6 +468,92 @@ describe("deterministic push_pending repair", () => {
 			status: "reconciled",
 			transactionId: fixture.transactionId,
 		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "closed",
+				transition: "quarantine_reconciled",
+			},
+		});
+	});
+
+	test("resumes marker publication without duplicating the reconciled receipt revision", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		rmSync(join(fixture.clone, "candidate.md"));
+
+		let interruptTerminalMarker = true;
+		const interruptedStore = {
+			...fixture.store,
+			recordQuarantine: async (
+				record: Parameters<typeof fixture.store.recordQuarantine>[0],
+			) => {
+				if (record.status === "reconciled" && interruptTerminalMarker) {
+					interruptTerminalMarker = false;
+					throw new Error("injected terminal marker interruption");
+				}
+				return fixture.store.recordQuarantine(record);
+			},
+		};
+		const interruptedRepair = createVaultGitRepair({
+			...fixture.options,
+			store: interruptedStore,
+		});
+		const interrupted = await interruptedRepair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(interrupted).toMatchObject({
+			status: "refused",
+			blocker: "receipt_corrupt",
+			changedState: "partial",
+		});
+		const receiptAfterInterruption = await fixture.store.load();
+		expect(receiptAfterInterruption).toMatchObject({
+			status: "loaded",
+			receipt: { transition: "quarantine_reconciled" },
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "recovery_pending",
+		});
+
+		const resumed = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(resumed).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "local",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+		});
+		const receiptAfterResume = await fixture.store.load();
+		expect(receiptAfterResume).toEqual(receiptAfterInterruption);
+		expect(await fixture.doctor.diagnose({
+			transactionId: fixture.transactionId,
+		})).toMatchObject({
+			finding: "transaction_closed",
+			nextAction: { id: "none" },
+		});
 	});
 
 	test("resumes staged-only recovery after terminal quarantine publication is lost", async () => {

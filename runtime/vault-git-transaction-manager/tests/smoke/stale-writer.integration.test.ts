@@ -9,6 +9,7 @@ import {
 	assertRefsUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	runDoctorToTerminal,
 } from "./fixture.ts";
 
 setDefaultTimeout(180_000);
@@ -164,6 +165,37 @@ describe("row 10: takeover fences the prior writer", () => {
 		);
 		fixture.git("push", "origin", "HEAD:refs/heads/main");
 		const settled = fixture.snapshot();
+		const store = createReceiptStore({
+			stateRoot: fixture.stateRoot,
+			repositoryIdentity: "smoke-vault",
+		});
+		const receiptBeforeRecovery = await store.load();
+		if (receiptBeforeRecovery.status !== "loaded") {
+			throw new Error("quarantined receipt unavailable");
+		}
+		const diagnosedBeforeRecovery = parseCliProcessJson<{
+			data?: {
+				task_id?: string;
+				finding?: string;
+				next_action?: { id?: string };
+			};
+		}>(
+			await runDoctorToTerminal(fixture, [
+				"doctor",
+				"--transaction-id",
+				transactionId,
+				"--json",
+			]),
+		);
+		expect(diagnosedBeforeRecovery).toMatchObject({
+			status: "ok",
+			data: {
+				finding: "host_quarantined",
+				next_action: { id: "reconcile_quarantine" },
+			},
+		});
+		const firstDoctorTaskId = diagnosedBeforeRecovery.data?.task_id;
+		if (!firstDoctorTaskId) throw new Error("Doctor omitted task id");
 		const unrelatedBefore = await Promise.all(
 			["staged.md", "unstaged.md", "untracked.md"].map((path) =>
 				readFile(join(fixture.clone, path), "hex"),
@@ -208,13 +240,36 @@ describe("row 10: takeover fences the prior writer", () => {
 			),
 		).toEqual(unrelatedBefore);
 
-		const store = createReceiptStore({
-			stateRoot: fixture.stateRoot,
-			repositoryIdentity: "smoke-vault",
-		});
 		expect(await store.readQuarantine()).toMatchObject({
 			status: "reconciled",
 			transactionId,
+		});
+		const diagnosedAfterRecovery = parseCliProcessJson<{
+			data?: {
+				task_id?: string;
+				finding?: string;
+				next_action?: { id?: string };
+			};
+		}>(
+			await runDoctorToTerminal(fixture, [
+				"doctor",
+				"--transaction-id",
+				transactionId,
+				"--json",
+			]),
+		);
+		expect(diagnosedAfterRecovery).toMatchObject({
+			status: "ok",
+			data: {
+				finding: "transaction_closed",
+				next_action: { id: "none" },
+			},
+		});
+		expect(diagnosedAfterRecovery.data?.task_id).not.toBe(firstDoctorTaskId);
+		const receiptAfterRecovery = await store.load();
+		expect(receiptAfterRecovery).toMatchObject({
+			status: "loaded",
+			receipt: { revision: receiptBeforeRecovery.receipt.revision + 1 },
 		});
 	});
 });
