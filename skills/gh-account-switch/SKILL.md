@@ -1,46 +1,60 @@
 ---
 name: gh-account-switch
-description: "Switch authenticated GitHub CLI accounts and select the matching SSH identity."
-argument-hint: "<account>"
+description: "Run GitHub CLI workflows with an exact process-scoped account without changing shared gh state."
+argument-hint: "<account> [gh arguments...]"
 disable-model-invocation: true
 ---
 
-# GitHub Account Switch
+# GitHub Account Routing
 
-Switch the active `gh` account only when this skill is explicitly invoked.
+Use `ghh`. Never call `gh auth switch`; it changes shared state and races with concurrent agents.
 
 ## Route
 
-1. Run `gh auth status`; never infer the active account.
-2. Require an exact authenticated target. If missing, list the accounts and ask which one.
-3. Run `gh auth switch --hostname github.com --user <account>`.
-4. Verify `gh api user --jq .login` exactly matches the target.
+1. Require the exact GitHub account.
+2. Verify it with `ghh check --account <account> --json`.
+3. Classify the forwarded command before execution. For a repository write,
+   require `-R <owner>/<repo>` when supported or prove the exact target matches
+   `git remote get-url origin`. For a destructive operation, obtain explicit
+   confirmation before execution.
+4. Run GitHub CLI work with `ghh exec --account <account> -- <gh arguments...>`.
+5. Verify the returned owner, actor, or repository when the operation is identity-sensitive.
 
-For Git over SSH, keep token identity and SSH identity separate:
-
-| Account | SSH host |
-|---|---|
-| `nathanvale` | `github.com` |
-| `myagentdojo` | `github-myagentdojo` |
-
-Before clone, fetch, push, or remote changes, run
-`ssh -T -o BatchMode=yes git@<host>` and require `Hi <account>!`. GitHub returns
-exit `1` after successful authentication because it provides no shell.
-
-Use the explicit host when cloning:
+Example:
 
 ```sh
-gh repo clone git@<host>:<owner>/<repo>.git
+ghh exec --account nathanvale -- pr view 309 -R nathanvale/claude-code-config
 ```
+
+## Git Transport
+
+`ghh` controls GitHub CLI API identity only. Git fetch, clone, and push identity still comes from the operation URL and SSH configuration.
+
+Before a Git network write:
+
+1. Inspect the exact fetch or push URL the operation will use.
+2. For SSH, resolve aliases with `ssh -G <host>` and require the resulting
+   hostname to match a user-approved GitHub or enterprise host. Stop on any
+   other destination.
+3. Run `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes git@<host>` and
+   require `Hi <account>!`.
+4. Accept exit `1` only when the GitHub greeting names the exact account; GitHub provides no shell.
+5. For HTTPS, stop unless another owner proves the credential identity.
+
+Never rewrite a remote as part of account selection.
+
+## Dependency
+
+- `ghh` is a hard dependency. `ghh --help` owns its flags, behavior, and repair guidance.
+- If `ghh` is missing, stop. Install or sync the dotfiles `bin/ghh` command into `PATH`, then rerun `ghh check`.
 
 ## Safety
 
-- Stop when the `gh` identity or SSH greeting does not match the target.
-- Never print tokens or private keys.
-- Switching accounts does not authorize SSH key, SSH config, Git remote, or repository changes.
-
-`gh auth switch --help` owns switch flags and behavior.
+- Never call `gh auth switch` from an agent workflow.
+- Never print tokens, private keys, or credential lookup output.
+- `ghh check` is read-only. `ghh exec` inherits the side effects and retry safety of the forwarded `gh` command.
+- A verified GitHub CLI identity does not authorize Git remote, SSH config, or repository changes.
 
 ## Next Safe Action
 
-Run `gh auth status`, then switch only when an exact target account was supplied.
+Run `ghh check --account <account> --json`.
