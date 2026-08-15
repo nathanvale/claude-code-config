@@ -82,6 +82,8 @@ export type VaultGitDurabilityTarget =
 	| "current"
 	| "task_claim"
 	| "task_state"
+	| "doctor_task_claim"
+	| "doctor_task_state"
 	| "capability"
 	| "doctor_token"
 	| "checker_admission"

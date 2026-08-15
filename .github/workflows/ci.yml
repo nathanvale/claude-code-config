@@ -91,6 +91,12 @@ jobs:
       - name: Test (vault-git skill contract)
         run: bash skills/test-runner/src/test-runner.sh run -- skills/vault-git/tests/
 
+      # Bounded public-process canaries plus exact detached-worker cleanup and
+      # foreground attention budgets. Exhaustive crash/stress matrices run in
+      # vault-git-qualification.yml instead of blocking every pull request.
+      - name: Test (vault-git bounded PR gate)
+        run: bun run --cwd runtime/vault-git-transaction-manager test:pr
+
       - name: Test (agent-native test-design qualification)
         run: |
           bun skills/test-design/evals/qualification.ts deterministic

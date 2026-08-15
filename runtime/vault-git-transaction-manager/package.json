@@ -15,10 +15,21 @@
   },
   "scripts": {
     "vault-git": "bun run src/cli.ts",
-    "test": "bun test tests",
+    "test": "bun run test:default && bun run test:smoke && bun run test:live-acceptance && bun run test:pr-public && bun run test:performance",
+    "test:default": "bun test tests --path-ignore-patterns='**/smoke/**' --path-ignore-patterns='**/live-acceptance/**' --path-ignore-patterns='**/pr-acceptance/**' --path-ignore-patterns='**/performance.integration.test.ts'",
+    "test:pr": "bun run test:fixture-cleanup && bun run test:pr-public && bun run test:performance",
+    "test:pr-public": "bun test tests/pr-acceptance/manifest.test.ts --reporter=dots && bun run tests/pr-acceptance/run.ts",
+    "test:fixture-cleanup": "bun test tests/smoke/fixture-selftest.integration.test.ts -t 'cleanup terminates|cleanup refuses' --reporter=dots",
+    "test:live-acceptance": "bun test tests/live-acceptance/manifest.test.ts --reporter=dots && bun run tests/live-acceptance/run.ts",
+    "test:live-acceptance:background-doctor": "bun test tests/live-acceptance/background-doctor.integration.test.ts --reporter=dots",
+    "test:live-acceptance:completion-lifecycle": "bun test tests/live-acceptance/completion-lifecycle.integration.test.ts --reporter=dots",
+    "test:live-acceptance:concurrency-recovery": "bun test tests/live-acceptance/concurrency-recovery.integration.test.ts --reporter=dots",
+    "test:live-acceptance:publication-recovery": "bun test tests/live-acceptance/publication-recovery.integration.test.ts --reporter=dots",
+    "test:live-acceptance:host-activation": "bun test tests/live-acceptance/host-activation.integration.test.ts --reporter=dots",
+    "test:performance": "bun test tests/performance.integration.test.ts --reporter=dots",
     "test:smoke": "bun test tests/smoke",
-    "test:smoke:pr": "bun test tests/smoke/main-ahead.integration.test.ts tests/smoke/stale-writer.integration.test.ts tests/smoke/crash-resume.integration.test.ts && bun test tests/smoke/durable-phase-matrix.integration.test.ts -t 'intent_durable|leased|checking|committing|push_pending|repairable|human_required|blocked|closed|detached worker killed'",
-    "typecheck": "tsc --ignoreConfig --noEmit --strict --target ESNext --lib ESNext --module Preserve --moduleDetection force --moduleResolution bundler --allowImportingTsExtensions --verbatimModuleSyntax --skipLibCheck --noFallthroughCasesInSwitch --noImplicitOverride --resolveJsonModule --types bun,node src/*.ts tests/*.ts tests/smoke/*.ts"
+    "test:smoke:pr": "bun run test:pr-public",
+    "typecheck": "tsc --ignoreConfig --noEmit --strict --target ESNext --lib ESNext --module Preserve --moduleDetection force --moduleResolution bundler --allowImportingTsExtensions --verbatimModuleSyntax --skipLibCheck --noFallthroughCasesInSwitch --noImplicitOverride --resolveJsonModule --types bun,node src/*.ts tests/*.ts tests/live-acceptance/*.ts tests/pr-acceptance/*.ts tests/smoke/*.ts"
   },
   "dependencies": {
     "@side-quest/cli-command-facade": "workspace:*"

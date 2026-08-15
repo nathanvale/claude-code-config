@@ -168,7 +168,7 @@ const transactionIdFlag = {
 const taskIdFlag = {
 	"--task-id": {
 		type: "string",
-		description: "Select one opaque background-completion task.",
+		description: "Select one opaque command-owned background task.",
 	},
 } as const;
 const capabilityFdFlag = {
@@ -195,7 +195,7 @@ const expectedFlags = {
 	status: ["--json", "--task-id"],
 	activation: ["--json", "--no-input"],
 	preview: ["--json", "--transaction-id"],
-	doctor: ["--json", "--transaction-id"],
+	doctor: ["--json", "--transaction-id", "--task-id"],
 	repair: [
 		"--json",
 		"--no-input",
@@ -409,8 +409,11 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 	},
 	doctor: {
 		script: "vault-git",
-		summary: "Classify lifecycle state and reconcile owner-private task evidence without canonical mutation.",
-		usage: [`vault-git doctor [--transaction-id <id>] [--json] ${diagnosticsUsage}`],
+		summary: "Return local lifecycle evidence, then continue slow diagnosis in an owner-private task without canonical mutation.",
+		usage: [
+			`vault-git doctor [--transaction-id <id>] [--json] ${diagnosticsUsage}`,
+			`vault-git doctor --task-id <id> [--json] ${diagnosticsUsage}`,
+		],
 		json: true,
 		audience: "operator",
 		mutation: "local_write",
@@ -422,7 +425,7 @@ export const vaultGitContracts = defineVaultGitCommandContracts({
 		interactivity: "none",
 		resultContract: lifecycleResultContract,
 		actionAffordances,
-		flags: { ...jsonFlag, ...transactionIdFlag },
+		flags: { ...jsonFlag, ...transactionIdFlag, ...taskIdFlag },
 		exitCodes: vaultGitExitCodes,
 	},
 	repair: {
@@ -701,6 +704,15 @@ export function parseVaultGitInvocation(
 	if (priorWriterStopped && repairAction !== "stale-lease-takeover") {
 		throw usageError(
 			"--prior-writer-stopped is accepted only for repair stale-lease-takeover",
+		);
+	}
+	if (
+		command === "doctor" &&
+		transactionId !== undefined &&
+		taskId !== undefined
+	) {
+		throw usageError(
+			"doctor accepts either --transaction-id or --task-id, not both",
 		);
 	}
 	return {

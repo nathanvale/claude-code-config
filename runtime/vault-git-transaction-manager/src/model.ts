@@ -425,6 +425,56 @@ export interface VaultGitTaskTerminalResult {
 	readonly retrySafety: VaultGitRetrySafety;
 }
 
+/** Doctor-owned checkpoints projected through the shared lifecycle envelope. */
+export type VaultGitDoctorTaskCheckpoint =
+	| "local_classified"
+	| "checking_remote"
+	| "terminal";
+
+/** Sanitized authoritative Doctor result retained by a terminal Doctor Task. */
+export interface VaultGitDoctorTaskTerminalResult {
+	readonly kind: "doctor_result";
+	readonly status: "diagnosed";
+	readonly state: VaultGitTransactionState;
+	readonly phase: VaultGitTransactionPhase;
+	readonly finding: VaultGitDoctorFinding;
+	readonly changedState: "none" | "local";
+	readonly retrySafety: VaultGitRetrySafety;
+	readonly nextAction: {
+		readonly id: VaultGitEngineNextActionId;
+		readonly summary: string;
+	};
+	readonly blocker?: VaultGitBlockerId;
+	readonly repairAction?: VaultGitRepairAction;
+	readonly transactionId?: string;
+}
+
+/** Sanitized process failure retained by a terminal Doctor Task. */
+export interface VaultGitDoctorTaskWorkerFailure {
+	readonly kind: "worker_failure";
+	readonly blocker: "worker_launch_protocol_failed" | "worker_lost";
+	readonly retrySafety: "operator_required";
+	readonly nextAction: {
+		readonly id: "inspect_private_receipt";
+		readonly summary: string;
+	};
+}
+
+/** Bounded terminal evidence owned by the Doctor Task lifecycle. */
+export type VaultGitDoctorTaskTerminal =
+	| VaultGitDoctorTaskTerminalResult
+	| VaultGitDoctorTaskWorkerFailure;
+
+/** Checkpoint vocabulary admitted by either public task lifecycle. */
+export type VaultGitPublicTaskCheckpoint =
+	| VaultGitTransactionPhase
+	| VaultGitDoctorTaskCheckpoint;
+
+/** Terminal result vocabulary admitted by either public task lifecycle. */
+export type VaultGitPublicTaskTerminalResult =
+	| VaultGitTaskTerminalResult
+	| VaultGitDoctorTaskTerminal;
+
 /** Single-use private proof that one known failed attempt may be replaced. */
 export interface VaultGitTaskRepairAuthorization {
 	readonly schemaVersion: 1;
@@ -831,6 +881,8 @@ export interface VaultGitLifecycleResultPayload {
 	readonly task_id?: string;
 	/** Exact lease generation bound by the selected task. */
 	readonly lease_generation?: string;
+	/** Exact launch generation bound by a Doctor task worker. */
+	readonly task_generation?: string;
 	/** Selected task lifecycle state. */
 	readonly task_state?: VaultGitTaskLifecycleState;
 	/** Monotonic semantic worker attempt within the stable task. */
@@ -842,11 +894,11 @@ export interface VaultGitLifecycleResultPayload {
 	/** Latest observational heartbeat timestamp. */
 	readonly task_heartbeat_at?: string | null;
 	/** Last durably observed engine checkpoint. */
-	readonly task_checkpoint?: VaultGitTransactionPhase | null;
+	readonly task_checkpoint?: VaultGitPublicTaskCheckpoint | null;
 	/** Milliseconds elapsed since durable task admission. */
 	readonly task_elapsed_ms?: number;
 	/** Bounded terminal engine result, null while non-terminal. */
-	readonly task_terminal_result?: VaultGitTaskTerminalResult | null;
+	readonly task_terminal_result?: VaultGitPublicTaskTerminalResult | null;
 	/** Whether foreground work outside this vault transaction may continue. */
 	readonly foreground_non_vault_work_allowed?: boolean;
 	/** Read-side transaction state when classification produced one. */

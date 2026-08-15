@@ -100,6 +100,50 @@ export interface VaultGitDoctor {
 	diagnose(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
 }
 
+/** Cheap receipt-only classification used before slow authoritative proof. */
+export function classifyVaultGitDoctorLocalReceipt(
+	loaded: Awaited<ReturnType<VaultGitReceiptStore["load"]>>,
+	selectedTransactionId?: string,
+): {
+	readonly phase: VaultGitTransactionPhase;
+	readonly state: VaultGitTransactionState;
+	readonly transactionId?: string;
+} {
+	if (loaded.status === "absent") {
+		return { phase: "blocked", state: "absent" };
+	}
+	if (loaded.status !== "loaded") {
+		return { phase: "human_required", state: "human_required" };
+	}
+	if (
+		selectedTransactionId !== undefined &&
+		loaded.receipt.transactionId !== null &&
+		loaded.receipt.transactionId !== selectedTransactionId
+	) {
+		return {
+			phase: loaded.receipt.phase,
+			state: "human_required",
+			transactionId: loaded.receipt.transactionId,
+		};
+	}
+	const state: VaultGitTransactionState =
+		loaded.receipt.phase === "push_pending" ||
+		loaded.receipt.phase === "repairable" ||
+		loaded.receipt.phase === "human_required" ||
+		loaded.receipt.phase === "closed"
+			? loaded.receipt.phase
+			: loaded.receipt.phase === "blocked"
+				? "unknown"
+				: "active";
+	return {
+		phase: loaded.receipt.phase,
+		state,
+		...(loaded.receipt.transactionId
+			? { transactionId: loaded.receipt.transactionId }
+			: {}),
+	};
+}
+
 const summaries = {
 	begin: "Begin one transaction before canonical writes.",
 	inspectReceipt: "Inspect private receipt integrity with an operator.",
@@ -475,9 +519,10 @@ export function hasTransactionTrailer(
  */
 export function isResumedLocalCommit(
 	commit: VaultGitLocalCommitInspection,
-	receipt: { readonly localMainHead: string; readonly transactionId: string },
+	receipt: { readonly localMainHead: string; readonly transactionId: string | null },
 ): boolean {
 	return (
+		receipt.transactionId !== null &&
 		commit.status === "ok" &&
 		commit.parents.length === 1 &&
 		commit.parents[0] === receipt.localMainHead &&
