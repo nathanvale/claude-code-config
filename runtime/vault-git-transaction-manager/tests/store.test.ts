@@ -123,6 +123,44 @@ describe("private receipt store", () => {
 		});
 	});
 
+	test.each(["missing recovery plan", "extra recovery plan"] as const)(
+		"rejects a status-dependent quarantine record with %s",
+		async (shape) => {
+			const root = await fixtureRoot();
+			const store = createReceiptStore({
+				stateRoot: root,
+				repositoryIdentity: "vault@example",
+			});
+			const common = {
+				transactionId: `txn_${"1".repeat(32)}`,
+				ledgerGeneration: "a".repeat(40),
+				recordedAt: "2026-08-09T00:00:00.000Z",
+			};
+			const malformed =
+				shape === "missing recovery plan"
+					? { ...common, status: "recovery_pending" }
+					: {
+							...common,
+							status: "quarantined",
+							recoveryPlan: {
+								baselineHead: "b".repeat(40),
+								unrelatedState: { statusHex: "", indexHex: "" },
+								entries: [
+									{
+										path: "notes/example.md",
+										objectId: "c".repeat(40),
+										mode: "100644",
+									},
+								],
+							},
+						};
+
+			await expect(store.recordQuarantine(malformed as never)).rejects.toThrow(
+				"quarantine record invalid",
+			);
+		},
+	);
+
 	test("initialize interrupted before any durability phase leaves absent or readable state", async () => {
 		const complete: PortCall[] = [];
 		const baselineRoot = await fixtureRoot();

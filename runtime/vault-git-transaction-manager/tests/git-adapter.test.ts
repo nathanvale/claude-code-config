@@ -80,6 +80,57 @@ function createFakeAdapter(
 	});
 }
 
+type StagedRecoveryProbe =
+	| "read_tree"
+	| "read_index"
+	| "hash_path"
+	| "capture_unrelated";
+
+async function createStagedRecoveryAdapter(
+	probe: StagedRecoveryProbe,
+	failure: "timed_out" | "failed" = "timed_out",
+) {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-staged-recovery-probe-"));
+	fixtureRoots.push(root);
+	const repositoryPath = join(root, "repository");
+	await mkdir(repositoryPath);
+	await writeFile(join(repositoryPath, "candidate.md"), "candidate\n");
+	let resetApplied = false;
+	let injected = false;
+	const process = fakePort(({ args }) => {
+		const exactIndexProbe =
+			args[0] === "ls-files" &&
+			args.includes(":(top,literal)candidate.md");
+		const selected =
+			(probe === "read_tree" && args[0] === "ls-tree") ||
+			(probe === "read_index" && exactIndexProbe) ||
+			(probe === "hash_path" && args[0] === "hash-object") ||
+			(probe === "capture_unrelated" && args[0] === "status");
+		if (selected && !injected) {
+			injected = true;
+			return failure === "timed_out"
+				? { timedOut: true }
+				: { exitCode: 1 };
+		}
+		if (args[0] === "rev-parse") return { stdout: `${LOCAL_MAIN}\n` };
+		if (args[0] === "ls-tree") return { stdout: "" };
+		if (exactIndexProbe) {
+			return resetApplied
+				? { stdout: "" }
+				: { stdout: `100644 ${EXPECTED} 0\tcandidate.md\0` };
+		}
+		if (args[0] === "hash-object") return { stdout: `${EXPECTED}\n` };
+		if (args[0] === "reset") resetApplied = true;
+		return {};
+	});
+	return createGitRepositoryAdapter({
+		repositoryPath,
+		repositoryIdentity: "vault-git:v1:fixture",
+		process,
+		timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+	});
+}
+
 function ledgerReadResponder(
 	contentResponse: Partial<VaultGitProcessResult>,
 ): Responder {
@@ -242,6 +293,56 @@ describe("git adapter construction", () => {
 		expect(await repository.resolveCanonicalIdentity()).toEqual({
 			identity: "vault-git:v1:fixture",
 			localMainHead: LOCAL_MAIN,
+		});
+	});
+});
+
+describe("git repository staged recovery timeout classification", () => {
+	const ownedPaths = [
+		{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
+	] as const;
+	const plan = {
+		baselineHead: LOCAL_MAIN,
+		unrelatedState: { statusHex: "", indexHex: "" },
+		entries: [
+			{ path: "candidate.md", objectId: EXPECTED, mode: "100644" as const },
+		],
+	};
+
+	test.each<StagedRecoveryProbe>([
+		"read_tree",
+		"read_index",
+		"hash_path",
+		"capture_unrelated",
+	])("prepare preserves a nested %s subprocess timeout", async (probe) => {
+		const repository = await createStagedRecoveryAdapter(probe);
+
+		expect(await repository.prepareStagedRecovery?.(ownedPaths)).toEqual({
+			status: "refused",
+			reason: "timed_out",
+		});
+	});
+
+	test.each<StagedRecoveryProbe>([
+		"read_tree",
+		"read_index",
+		"hash_path",
+		"capture_unrelated",
+	])("apply preserves a nested %s subprocess timeout", async (probe) => {
+		const repository = await createStagedRecoveryAdapter(probe);
+
+		expect(await repository.applyStagedRecovery?.(plan)).toEqual({
+			status: "refused",
+			reason: "timed_out",
+		});
+	});
+
+	test("keeps a non-timeout nested probe failure as mismatch", async () => {
+		const repository = await createStagedRecoveryAdapter("read_tree", "failed");
+
+		expect(await repository.prepareStagedRecovery?.(ownedPaths)).toEqual({
+			status: "refused",
+			reason: "mismatch",
 		});
 	});
 });

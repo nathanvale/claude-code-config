@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
 	VAULT_GIT_LEDGER_REF,
+	type VaultGitOwnedPathReceipt,
 	type VaultGitStagedRecoveryEntry,
 	type VaultGitStagedRecoveryPlan,
 	type VaultGitUnrelatedStateSnapshot,
@@ -29,6 +30,8 @@ import {
 	normalizeVaultGitAllowedRemoteHosts,
 	VaultGitRemoteSafetyError,
 } from "./remote-safety.ts";
+
+class GitProcessTimedOutError extends Error {}
 
 /** Options for the injected real-process vault-owned check. */
 export interface VaultGitCheckAdapterOptions {
@@ -810,12 +813,12 @@ export function createGitRepositoryAdapter(
 			]),
 			runGit(["ls-files", "--stage", "-z", "--", ...pathspecs]),
 		]);
-		if (
-			status.timedOut ||
-			index.timedOut ||
-			status.exitCode !== 0 ||
-			index.exitCode !== 0
-		) {
+		if (status.timedOut || index.timedOut) {
+			throw new GitProcessTimedOutError(
+				"timed out capturing unrelated repository state",
+			);
+		}
+		if (status.exitCode !== 0 || index.exitCode !== 0) {
 			throw new Error("could not capture unrelated repository state");
 		}
 		return {
@@ -859,14 +862,19 @@ export function createGitRepositoryAdapter(
 		if (metadata === null) return null;
 		if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
 		const hashed = await runGit(["hash-object", "--", path]);
-		if (hashed.timedOut || hashed.exitCode !== 0) {
+		if (hashed.timedOut) {
+			throw new GitProcessTimedOutError(
+				"timed out hashing staged recovery path",
+			);
+		}
+		if (hashed.exitCode !== 0) {
 			throw new Error("could not hash staged recovery path");
 		}
 		return requireObjectId(hashed.stdout, "staged recovery content");
 	};
 
 	const prepareStagedRecovery = async (
-		ownedPaths: readonly import("./model.ts").VaultGitOwnedPathReceipt[],
+		ownedPaths: readonly VaultGitOwnedPathReceipt[],
 	) => {
 		try {
 			if (
@@ -891,7 +899,7 @@ export function createGitRepositoryAdapter(
 			const baselineHead = requireObjectId(head.stdout, "staged recovery main");
 			const entries: VaultGitStagedRecoveryEntry[] = [];
 			for (const ownedPath of [...ownedPaths].sort((left, right) =>
-				left.path.localeCompare(right.path),
+				left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 			)) {
 				if (!(await isSafeOwnedPath(options.repositoryPath, ownedPath.path))) {
 					return { status: "refused", reason: "mismatch" } as const;
@@ -926,8 +934,12 @@ export function createGitRepositoryAdapter(
 					entries,
 				},
 			} as const;
-		} catch {
-			return { status: "refused", reason: "mismatch" } as const;
+		} catch (error) {
+			return {
+				status: "refused",
+				reason:
+					error instanceof GitProcessTimedOutError ? "timed_out" : "mismatch",
+			} as const;
 		}
 	};
 
@@ -1026,8 +1038,12 @@ export function createGitRepositoryAdapter(
 				return { status: "refused", reason: "mismatch" } as const;
 			}
 			return { status: "recovered" } as const;
-		} catch {
-			return { status: "refused", reason: "mismatch" } as const;
+		} catch (error) {
+			return {
+				status: "refused",
+				reason:
+					error instanceof GitProcessTimedOutError ? "timed_out" : "mismatch",
+			} as const;
 		}
 	};
 
@@ -2021,7 +2037,12 @@ async function readIndexEntry(
 		"--",
 		literalPathspec(path),
 	]);
-	if (result.timedOut || result.exitCode !== 0) {
+	if (result.timedOut) {
+		throw new GitProcessTimedOutError(
+			"timed out inspecting staged recovery index entry",
+		);
+	}
+	if (result.exitCode !== 0) {
 		throw new Error("could not inspect staged recovery index entry");
 	}
 	const records = splitNul(result.stdout);
@@ -2064,7 +2085,12 @@ async function readTreeEntry(
 		"--",
 		literalPathspec(path),
 	]);
-	if (result.timedOut || result.exitCode !== 0) {
+	if (result.timedOut) {
+		throw new GitProcessTimedOutError(
+			"timed out inspecting owned path baseline",
+		);
+	}
+	if (result.exitCode !== 0) {
 		throw new Error("could not inspect owned path baseline");
 	}
 	const record = splitNul(result.stdout)[0];

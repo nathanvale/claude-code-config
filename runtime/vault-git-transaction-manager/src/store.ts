@@ -218,13 +218,6 @@ interface VaultGitQuarantineRecordBase {
 	readonly transactionId: string;
 	/** Superseded fencing generation. */
 	readonly ledgerGeneration: string;
-	/**
-	 * Append-only quarantine transition.
-	 *
-	 * `takeover_pending` marks a superseding abandonment admitted but not yet
-	 * proven remote; doctor reconciles it against the observed ledger
-	 * generation before any host write authority returns.
-	 */
 	/** Injected transition timestamp. */
 	readonly recordedAt: string;
 }
@@ -232,8 +225,15 @@ interface VaultGitQuarantineRecordBase {
 /** Append-only host quarantine transition. */
 export type VaultGitQuarantineRecord =
 	| (VaultGitQuarantineRecordBase & {
+			/**
+			 * Append-only quarantine transition.
+			 *
+			 * `takeover_pending` marks a superseding abandonment admitted but not
+			 * yet proven remote; doctor reconciles it against the observed ledger
+			 * generation before any host write authority returns.
+			 */
 			readonly status: "takeover_pending" | "quarantined" | "reconciled";
-	  })
+		  })
 	| (VaultGitQuarantineRecordBase & {
 			/** Recovery intent persisted before any canonical worktree or index mutation. */
 			readonly status: "recovery_pending";

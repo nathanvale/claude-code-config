@@ -660,6 +660,9 @@ async function reconcileQuarantine(
 		const prepared = await options.repository.prepareStagedRecovery(
 			receipt.ownedPaths,
 		);
+		if (prepared.status === "refused" && prepared.reason === "timed_out") {
+			return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "none", "same_input_safe");
+		}
 		if (prepared.status === "ready") {
 			recoveryPlan = prepared.plan;
 			try {
@@ -681,6 +684,9 @@ async function reconcileQuarantine(
 		}
 		const recovered = await options.repository.applyStagedRecovery(recoveryPlan);
 		if (recovered.status !== "recovered") {
+			if (recovered.reason === "timed_out") {
+				return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "partial", "same_input_safe");
+			}
 			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics, "partial");
 		}
 		try {

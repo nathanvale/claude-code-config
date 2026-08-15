@@ -558,6 +558,64 @@ describe("deterministic push_pending repair", () => {
 		);
 	});
 
+	test.each([
+		["prepare", "none"],
+		["apply", "partial"],
+	] as const)(
+		"keeps a timed-out staged recovery %s retry-safe and quarantined",
+		async (stage, changedState) => {
+			const fixture = await repairFixture("host-a", "stale");
+			await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+			const token = await fixture.store.readDoctorToken(
+				fixture.transactionId,
+				fixture.ledgerHead,
+			);
+			await fixture.repair.run({
+				action: "stale-lease-takeover",
+				transactionId: fixture.transactionId,
+				remote: "origin",
+				expectedLedgerGeneration: fixture.ledgerHead,
+				doctorToken: token,
+				priorWriterStopped: true,
+			});
+			const repository = {
+				...fixture.repository,
+				...(stage === "prepare"
+					? {
+							prepareStagedRecovery: async () =>
+								({ status: "refused", reason: "timed_out" }) as const,
+						}
+					: {
+							applyStagedRecovery: async () =>
+								({ status: "refused", reason: "timed_out" }) as const,
+						}),
+			};
+			const repair = createVaultGitRepair({
+				...fixture.options,
+				repository,
+			});
+
+			const result = await repair.run({
+				action: "reconcile-quarantine",
+				transactionId: fixture.transactionId,
+				remote: "origin",
+				capability: fixture.ownerCapability,
+			});
+
+			expect(result).toMatchObject({
+				status: "refused",
+				state: "superseded",
+				blocker: "host_quarantined",
+				changedState,
+				retrySafety: "same_input_safe",
+				nextAction: { id: "reconcile_quarantine" },
+			});
+			expect(await fixture.store.readQuarantine()).toMatchObject({
+				status: stage === "prepare" ? "quarantined" : "recovery_pending",
+			});
+		},
+	);
+
 	test("refuses a stale doctor proof after owned content changes", async () => {
 		const fixture = await repairFixture("host-a", "stale");
 		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
