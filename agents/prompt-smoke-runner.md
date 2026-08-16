@@ -1,6 +1,6 @@
 ---
 name: prompt-smoke-runner
-description: Runs instruction health checks and multi-agent smoke tests, returning a pass/fail summary. Use after startup instruction, rule, or delivery changes.
+description: Runs instruction health checks and automation-requested multi-agent smoke tests, returning a pass/fail summary.
 model: haiku
 disallowedTools:
   - Write
@@ -38,7 +38,7 @@ For Codex, the smoke command disables MCP server startup so instruction-only che
 
 The smoke runner already uses harness-aware warning and timeout defaults. Use `--warn-after-ms` or `--timeout-ms` only when you need to override that policy for one run.
 
-Only run smoke tests when the caller requests them or when shared behavior or propagation logic changed. If unsure, run only the health check.
+Only run smoke tests when the caller explicitly requests them. Never infer a smoke run from startup, shared-behavior, or propagation changes. If unsure, run only the health check.
 
 To run a subset:
 ```bash

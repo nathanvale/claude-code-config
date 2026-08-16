@@ -48,7 +48,4 @@ Route startup-instruction changes to the right owner and prove health after edit
 
 ```bash
 scripts/agent-instructions.sh check
-bun scripts/multi-agent-smoke.ts --tests boundary,propagation
 ```
-
-Use focused smoke only when shared startup behavior or delivery changed.
