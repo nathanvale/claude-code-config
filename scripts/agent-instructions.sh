@@ -321,8 +321,7 @@ inspect_staged_relevance() {
 check_staged_worktree_alignment() {
 	local index_present
 	local path
-	local status
-	local worktree_present
+	local statusGw
 	for path in ${matched_paths[@]+"${matched_paths[@]}"}; do
 		index_present=false
 		worktree_present=false
