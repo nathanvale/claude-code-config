@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { CredentialError, credentialsFromItem } from "./credentials.ts";
+import {
+	CredentialError,
+	credentialProviderMetadata,
+	credentialsFromItem,
+} from "./credentials.ts";
 
 describe("credentialsFromItem", () => {
 	test("maps standard and custom fields without persisting them", () => {
@@ -40,6 +44,21 @@ describe("credentialsFromItem", () => {
 			);
 		} catch (error) {
 			expect(String(error)).not.toContain("do-not-print");
+		}
+	});
+
+	test("defaults to the scoped 1Password broker instead of with-env", () => {
+		const originalWrapper = process.env.BFT_OP_WRAPPER;
+		delete process.env.BFT_OP_WRAPPER;
+		try {
+			const metadata = credentialProviderMetadata();
+			expect(metadata.wrapper).toEndWith(
+				"/code/dotfiles/bin/with-one-password-token",
+			);
+			expect(metadata.wrapper).not.toContain("with-env");
+		} finally {
+			if (originalWrapper === undefined) delete process.env.BFT_OP_WRAPPER;
+			else process.env.BFT_OP_WRAPPER = originalWrapper;
 		}
 	});
 });

@@ -1,6 +1,14 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Credentials } from "./model.ts";
 
-const DEFAULT_WRAPPER = "/Users/nathanvale/code/dotfiles/bin/with-env";
+const DEFAULT_WRAPPER = join(
+	homedir(),
+	"code",
+	"dotfiles",
+	"bin",
+	"with-one-password-token",
+);
 const DEFAULT_VAULT = "API Credentials";
 const DEFAULT_ITEM = "BFT / Glofox";
 const CREDENTIAL_PROCESS_TIMEOUT_MS = 15_000;
