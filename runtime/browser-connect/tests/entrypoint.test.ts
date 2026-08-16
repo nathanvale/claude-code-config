@@ -816,7 +816,7 @@ function fakeAdapterRuntime(script: {
  */
 const PINNED = {
 	"chrome-devtools-mcp": "1.5.0",
-	"agent-browser": "0.31.2",
+	"agent-browser": "0.34.0",
 	"playwright-cdp": "0.1.17",
 } as const;
 
@@ -3126,7 +3126,7 @@ describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22
 			adapterId: "agent-browser",
 		});
 		expect(agent.run.stdout).toMatch(
-			/^repair_preview adapter=agent-browser state=absent posture=operator run_id=u5-repair duration_ms=\d+ package=agent-browser pin=0\.31\.2 scope=user lifecycle_scripts=required\n$/,
+			/^repair_preview adapter=agent-browser state=absent posture=operator run_id=u5-repair duration_ms=\d+ package=agent-browser pin=0\.34\.0 scope=user lifecycle_scripts=required\n$/,
 		);
 	});
 
