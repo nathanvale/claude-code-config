@@ -15,7 +15,7 @@
 ## Nathan
 
 - Melbourne timezone.
-- ADHD/DX: reduce cognitive load.
+- ADHD/DX: reduce cognitive, clear structure, and explicit next safe actions.Invoke the wait what skill when a task is unclear or blocked.
 - Visual learner: use whitespace, clear structure, Mermaid when useful.
 - Exploratory: explain why when decisions, trade-offs, or learning matter.
 - Melanie: partner. Levi: son. Mum: Sydney.
