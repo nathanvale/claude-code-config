@@ -12,6 +12,10 @@ _Avoid_: activation admission, credentials, SSH secrets
 Public semantic result that denies a Vault write and names its cause, preserved safe state, and one next action.
 _Avoid_: activation error, generic blocker, permission failure
 
+**Owner Pause Mode**:
+Explicit host-local operator selection that stops new Transaction Manager use and routes the configured vault through the skill-owned Direct Git Mode. It freezes receipts and ledger evidence for later reconciliation; it is not transaction repair, activation revocation, or an automatic fallback.
+_Avoid_: disabled safety, missing CLI, raw-Git bypass, activation blocked
+
 **Doctor Continuation**:
 External state change, inspection, or terminal action selected by Doctor after read-only diagnosis. Doctor itself is never its own immediate continuation.
 _Avoid_: retry Doctor, diagnostic loop

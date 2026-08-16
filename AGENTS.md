@@ -94,7 +94,7 @@
 - Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
 - Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
-- Before any file edit, verify isolation. In every code repo, isolate first with the `worktree` skill (new/attach); never edit its main checkout. The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; only when its CLI reports the `activation_blocked` blocker, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time. Read-only work stays in the main checkout.
+- Before any file edit, verify isolation. In every code repo, isolate first with the `worktree` skill (new/attach); never edit its main checkout. The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill, which must honor its owner-controlled pause marker before invoking the transaction manager; never create vault worktrees; allow only one canonical writer at a time. Read-only work stays in the main checkout.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
