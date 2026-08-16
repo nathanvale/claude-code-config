@@ -94,12 +94,15 @@
 - Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
 - Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
-- Before any file edit, verify isolation. In every code repo, isolate first with the `worktree` skill (new/attach); never edit its main checkout. The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; only when its CLI reports the `activation_blocked` blocker, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time. Read-only work stays in the main checkout.
+- Before code-repo file edits, verify isolation with the `worktree` skill (new/attach); never edit the main checkout.
+- Treat the configured Super-vault in `~/.config/context/vault.md` as the sole worktree-isolation exception.
+- Route vault writes through the `vault-git` skill; it must honor the owner-controlled pause marker before invoking the transaction manager.
+- Never create vault worktrees; allow only one canonical writer.
+- Keep read-only vault work in the main checkout.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
 - Protected branches: no direct commits.
-
 ## Communication
 
 - Chat tone: warm, concise, low-cognitive-load; plain words and short sentences for a smart, non-technical reader; no em or en dashes.
@@ -107,12 +110,10 @@
 - Questions and failures: ask one question with options and a reasoned recommendation; state what broke, user impact, and the next action; omit logs unless asked.
 - Long writing: let drafts, scripts, posts, and documents use the form the work needs; outbound style owner: `$HOME/code/claude-code-config/context/comms-style.md`.
 - Tracker and forge identifiers in human-facing surfaces: render as clickable links keeping the key as visible text; never invent a host; owner: `$HOME/code/claude-code-config/context/tracker-links.md`.
-
 ## Personal Context
 
 - Keep relationship labels only when contextually relevant.
 - Lookup facts live in `$HOME/code/claude-code-config/context/personal.md` or the nearest owning `$HOME/code/claude-code-config/context/` file.
-
 ## Project Truth
 
 - Prefer repo-local/package-local `AGENTS.md` when present.

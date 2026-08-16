@@ -2,7 +2,7 @@
 
 ## Purpose
 
-- Route every configured Super-vault write through `vault-git`.
+- Route configured Super-vault writes through the owner-selected write mode.
 - Enforce one fenced writer across laptop and Mac Mini clones.
 - Commit only transaction-owned paths.
 - Keep capabilities, receipts, recovery proofs, and activation admission private under XDG state.
@@ -13,6 +13,19 @@ Runtime owner: `runtime/vault-git-transaction-manager/`.
 Workflow owner: `skills/vault-git/SKILL.md`.
 
 Command contract owner: `runtime/vault-git-transaction-manager/src/command-contract.ts`.
+
+## Owner Pause Mode
+
+The host-local marker `${XDG_CONFIG_HOME:-$HOME/.config}/context/vault-git-paused` pauses Transaction Manager routing on that host.
+
+- Only an explicit human-owner request may create or remove it.
+- The `vault-git` skill checks it before any transaction-manager command.
+- A pause is safe only after inspection rules out an active worker and unknown publication.
+- Pause mode preserves private receipts, capabilities, task state, activation evidence, and Remote Ledger evidence for later reconciliation.
+- Direct Git Mode keeps one canonical writer, exact paths, unrelated-state preservation, vault checks, explicit commit approval, and explicit push approval.
+- Other hosts need their own marker. Do not assume one laptop marker pauses a Mac Mini writer.
+
+Re-enable only after the operator proves no direct Git writer remains, local and remote `main` align, preserved transaction evidence is settled, and the Remote Ledger is reconciled. Removing the marker is the final step, not the reconciliation mechanism.
 
 ## Agent Route
 
@@ -26,7 +39,7 @@ Command contract owner: `runtime/vault-git-transaction-manager/src/command-contr
 
 Keep read-only vault access outside a transaction.
 
-Never use raw Git for vault writes. Raw Git bypasses fencing and private recovery evidence.
+Never use raw Git for vault writes while Transaction Manager Workflow is selected. In Owner Pause Mode, follow the skill's Direct Git Mode instead.
 
 ## Lifecycle
 
@@ -85,7 +98,7 @@ Keep live activation off until the operator completes both admissions.
 - Record the host-owned rollout receipt.
 - Admit activation through the runtime owner only after reconciliation passes.
 
-Unadmitted writes return blocker `activation_blocked`. The `vault-git` skill owns the bounded legacy fallback for that blocker only.
+Unadmitted writes return blocker `activation_blocked`. Follow the CLI's named repair hint; this blocker never selects Direct Git Mode.
 
 Activation record owner: `runtime/vault-git-transaction-manager/src/store.ts`.
 
