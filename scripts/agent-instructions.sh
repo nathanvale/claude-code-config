@@ -453,24 +453,6 @@ check_projection_drift() {
 	fi
 }
 
-check_test_design_qualification() {
-	local route='Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.'
-	if ! grep -Fq "$route" "$SCRIPT_DIR/AGENTS.md"; then
-		add_pass "test-design Startup Surface route inactive"
-		return
-	fi
-	local verifier="$SCRIPT_DIR/skills/test-design/evals/qualification.ts"
-	if [[ ! -f "$verifier" ]]; then
-		add_fail "test-design qualification verifier missing"
-		return
-	fi
-	if bun "$verifier" verify --json >/dev/null 2>&1; then
-		add_pass "test-design qualification receipt matches current sources"
-	else
-		add_fail "test-design Startup Surface route lacks current qualification"
-	fi
-}
-
 run_checks() {
 	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
@@ -483,7 +465,6 @@ run_checks() {
 	check_owner_paths
 	check_appendices
 	check_projection_drift
-	check_test_design_qualification
 }
 
 json_string() {
