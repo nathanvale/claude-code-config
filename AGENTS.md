@@ -27,7 +27,7 @@
 - Analysis-only or brainstorming request: ask before implementing.
 - Ambiguity: assume and state low-risk choices; ask one question for high-risk choices.
 - In Codex, when one genuine yes/no approval blocks an otherwise-ready task, invoke `agent-plugin-playground:agent-attention` automatically; keep multi-choice or unclear decisions in Codex.
-- Execute in small, reviewable steps.
+- Code reviews require human permission. An explicit review request counts. Otherwise explain the concrete risk, expected benefit, exact scope, likely time and cost, and why cheaper checks are insufficient; wait for approval before invoking any review workflow. If declined, skip the review and continue the requested work.
 - Test meaningful changes.
 - Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.
 - Preserve unrelated user/agent changes.
@@ -99,7 +99,7 @@
 - Route vault writes through the `vault-git` skill; it must honor the owner-controlled pause marker before invoking the transaction manager.
 - Never create vault worktrees; allow only one canonical writer.
 - Keep read-only vault work in the main checkout.
-- Main-direct override (`$HOME/code/claude-code-config`, `$HOME/code/dotfiles` only): work and commit directly on `main`; no PRs, no worktree isolation. Complex commits must pass `compound-engineering:ce-code-review` on the exact final diff, findings resolved, before commit; complex = behavior-changing code, contracts, startup-instruction or security surfaces (docs included), or multi-file changes touching behavior or policy; splitting a change set never downgrades it; trivial only when none apply (typo, mechanical, non-behavioral doc); unclear = complex. Overrides isolation, ask-before-commit, and protected-branch lines for these repos only; one canonical writer at a time. Decision: `docs/adr/0035-main-direct-mode-for-config-repos.md`.
+- Main-direct override (`$HOME/code/claude-code-config`, `$HOME/code/dotfiles` only): work and commit directly on `main`; no PRs, no worktree isolation. For complex commits, propose `compound-engineering:ce-code-review` on the exact final diff under the Core permission rule; run it only when approved and resolve findings before commit. A declined review does not block the commit. Complex = behavior-changing code, contracts, startup-instruction or security surfaces (docs included), or multi-file changes touching behavior or policy; splitting a change set never downgrades it; trivial only when none apply (typo, mechanical, non-behavioral doc); unclear = complex. Overrides isolation, ask-before-commit, and protected-branch lines for these repos only; one canonical writer at a time. Decision: `docs/adr/0035-main-direct-mode-for-config-repos.md`.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
