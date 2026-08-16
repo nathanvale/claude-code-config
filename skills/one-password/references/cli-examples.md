@@ -96,7 +96,7 @@ VAULT="<token-scoped vault>"
 TOKEN_WRAPPER="$HOME/code/dotfiles/bin/with-one-password-token"
 value="$(
   "$TOKEN_WRAPPER" op item get "$ITEM_TITLE" --vault "$VAULT" --format json |
-    FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_LABEL); if(!f?.value) process.exit(2); process.stdout.write(f.value);})'
+    FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const matches=(item.fields||[]).filter(x=>x.label===process.env.FIELD_LABEL && x.type==="CONCEALED"); if(matches.length!==1 || !matches[0].value) process.exit(2); process.stdout.write(matches[0].value);})'
 )"
 echo "field_len:${#value}"
 case "$value" in sk-*) echo "field_prefix:sk" ;; *) echo "field_prefix:other" ;; esac
