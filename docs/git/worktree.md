@@ -20,6 +20,8 @@ These do NOT override the rule: a handoff saying "start a fresh branch" (start i
 
 Allowed in the main checkout: read-only work (analysis, review, search, tests without edits) and operations that target it by design (`setup sync` from main, worktree management itself, pull/fetch).
 
+Repo exception: claude-code-config and dotfiles run main-direct mode — implementation happens in the main checkout on `main`; complex commits are gated by `compound-engineering:ce-code-review` per the AGENTS.md "Context And Git" override (the contract owner); decision: `docs/adr/0035-main-direct-mode-for-config-repos.md`.
+
 ## Verbs
 
 | Verb | What it does | Side effects |

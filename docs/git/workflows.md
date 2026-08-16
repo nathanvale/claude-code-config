@@ -5,6 +5,7 @@ Step-by-step procedures for common git operations.
 ## Commit (Conventional Commits)
 
 0. **Check branch**: `git branch --show-current` -- if on a protected branch (main, master, or repo-configured protected branches):
+   - Main-direct repos (claude-code-config, dotfiles -- AGENTS.md "Context And Git" override): skip this step and commit on main; complex commits still need the ce-code-review gate first
    - If your agent supports branching: create a feature branch first (`git checkout -b <type>/<description>`)
    - If your agent cannot branch: **stop and ask the user** rather than committing directly
 1. **Check status**: `git status --porcelain -b`
@@ -48,7 +49,7 @@ Quick WIP save -- no ceremony.
 
 **Note**: `--no-verify` is acceptable for WIP checkpoints only. Never for final commits.
 
-**Branch restriction**: Checkpoints are blocked on protected branches (main, master). Create a feature branch first.
+**Branch restriction**: Checkpoints are blocked on protected branches (main, master). Create a feature branch first. Main-direct repos (claude-code-config, dotfiles) checkpoint on main.
 
 ## PR (Pull Request)
 
@@ -189,7 +190,7 @@ DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.na
 Run checks in parallel groups where possible:
 
 **Group A (local, ~50ms total) -- run in parallel:**
-1. **Branch check**: `git symbolic-ref --short HEAD` -- must be on a feature branch (not protected). If HEAD is detached, abort.
+1. **Branch check**: `git symbolic-ref --short HEAD` -- must be on a feature branch (not protected). If HEAD is detached, abort. Main-direct repos (claude-code-config, dotfiles) do not use this workflow -- no PRs; use the Commit workflow on main.
 2. **Working tree check**: `git status --porcelain -b` -- verify there are changes to commit OR existing unpushed commits.
 3. **Remote check**: `git remote get-url origin` -- verify remote exists.
 

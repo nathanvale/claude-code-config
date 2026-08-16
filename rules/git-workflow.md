@@ -9,6 +9,7 @@ This rule reinforces the shared git policy in AGENTS.md with Claude-specific beh
 ### Safety reinforcement
 - NEVER force push, hard reset, clean -f, or checkout/restore .
 - NEVER commit to main/master -- create a feature branch first
+- Main-direct exception (claude-code-config, dotfiles): commit to main; complex commits must pass `compound-engineering:ce-code-review` on the exact final diff, findings resolved, first (AGENTS.md override)
 - NEVER use git add . or git add -A -- stage specific files
 - ALWAYS use conventional commits: type(scope): subject
 
