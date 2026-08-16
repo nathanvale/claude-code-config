@@ -707,13 +707,16 @@ async function reconcileQuarantine(
 			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 		}
 		try {
-			const [hashes, unrelated] = await Promise.all([
-				options.repository.hashOwnedPaths(ownedPaths),
-				options.repository.captureUnrelatedState(ownedPaths),
-			]);
-			if (
-				JSON.stringify(unrelated) !== JSON.stringify(receipt.unrelatedState) ||
-				hashes.some(
+				const [hashes, unrelated] = await Promise.all([
+					options.repository.hashOwnedPaths(ownedPaths),
+					options.repository.captureUnrelatedState(ownedPaths),
+				]);
+				if (
+					// This branch publishes only receipt and quarantine metadata. Preserve
+					// unrelated unstaged worktree drift while fencing the exact index that
+					// staged recovery and later commits depend on.
+					unrelated.indexHex !== receipt.unrelatedState.indexHex ||
+					hashes.some(
 					(hash) =>
 						receipt.ownedPaths.find((entry) => entry.path === hash.path)
 							?.baselineHash !== hash.contentHash,

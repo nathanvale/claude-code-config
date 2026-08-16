@@ -399,7 +399,7 @@ describe("deterministic push_pending repair", () => {
 		expect(await fixture.store.readQuarantine()).toBeNull();
 	});
 
-	test("reconcile-quarantine refuses a tampered owned path, then clears after baseline restoration", async () => {
+	test("reconcile-quarantine refuses a tampered owned path and preserves unrelated worktree drift", async () => {
 		const fixture = await repairFixture("host-a", "stale");
 		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
 		const token = await fixture.store.readDoctorToken(
@@ -449,8 +449,12 @@ describe("deterministic push_pending repair", () => {
 		});
 
 		// Restoring the admitted-new owned path to its absent baseline makes the
-		// determinism gate provable again.
+		// determinism gate provable again. Unrelated unstaged state is not an
+		// authority input and reconciliation never mutates it.
 		rmSync(join(fixture.clone, "candidate.md"));
+		git(fixture.clone, "rm", "--cached", "--ignore-unmatch", "candidate.md");
+		const unrelatedDraft = join(fixture.clone, "unrelated-draft.md");
+		writeFileSync(unrelatedDraft, "preserve me\n");
 		const reconciled = await fixture.repair.run({
 			action: "reconcile-quarantine",
 			transactionId: fixture.transactionId,
@@ -475,6 +479,50 @@ describe("deterministic push_pending repair", () => {
 				transition: "quarantine_reconciled",
 			},
 		});
+		expect(readFileSync(unrelatedDraft, "utf8")).toBe("preserve me\n");
+	});
+
+	test("reconcile-quarantine refuses unrelated staged index drift", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const takeover = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
+
+		rmSync(join(fixture.clone, "candidate.md"));
+		git(fixture.clone, "rm", "--cached", "--ignore-unmatch", "candidate.md");
+		const unrelatedStaged = join(fixture.clone, "unrelated-staged.md");
+		writeFileSync(unrelatedStaged, "preserve staged bytes\n");
+		git(fixture.clone, "add", "unrelated-staged.md");
+
+		const result = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "none",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "quarantined",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(unrelatedStaged, "utf8")).toBe(
+			"preserve staged bytes\n",
+		);
 	});
 
 	test("resumes marker publication without duplicating the reconciled receipt revision", async () => {

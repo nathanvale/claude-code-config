@@ -483,7 +483,10 @@ export function createVaultGitTransactionEngine(
 
 		async repair(input) {
 			const restriction = await activationRestriction("continuation");
-			if (restriction) {
+			// Quarantine reconciliation restores and closes already-owned local
+			// recovery evidence. It must remain available when Activation is the
+			// reason the host cannot return to an ordinary transaction path.
+			if (restriction && input.action !== "reconcile-quarantine") {
 				const receipt = await receiptForActivation();
 				return {
 					status: "refused",

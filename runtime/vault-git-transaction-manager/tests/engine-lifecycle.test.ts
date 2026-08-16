@@ -488,6 +488,75 @@ describe("transaction engine lifecycle", () => {
 		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({ status: "admitted" });
 	});
 
+	test("allows quarantine reconciliation while activation is restricted", async () => {
+		let activationAdmitted = true;
+		const fixture = await engineFixture(undefined, {
+			activationAuthority: {
+				async validate() {
+					return activationAdmitted
+						? { status: "admitted" as const, evidenceId: "fixture" }
+						: { status: "denied" as const, reason: "revalidation_unavailable" as const };
+				},
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["notes/new.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		const owner = await fixture.store.readCapability(begun.receiptId, "owner");
+		await fixture.store.recordQuarantine({
+			transactionId: begun.transactionId,
+			ledgerGeneration: GENERATION,
+			status: "quarantined",
+			recordedAt: "2026-08-09T00:00:02.000Z",
+		});
+		Object.assign(fixture.repository, {
+			hashOwnedPaths: async (paths: readonly string[]) =>
+				paths.map((path) => ({ path, contentHash: null })),
+		} satisfies Pick<VaultGitRepositoryPort, "hashOwnedPaths">);
+		activationAdmitted = false;
+
+		expect(
+			await fixture.engine.repair({
+				action: "reconcile-quarantine",
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability: owner,
+			}),
+		).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "local",
+			nextAction: { id: "none" },
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "closed",
+				transition: "quarantine_reconciled",
+				nextSafeAction: "none",
+			},
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			transactionId: begun.transactionId,
+			status: "reconciled",
+		});
+		expect(
+			await fixture.engine.repair({
+				action: "resume",
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability: owner,
+			}),
+		).toMatchObject({ status: "refused", blocker: "activation_blocked" });
+	});
+
 	for (const [reason, restrictionNextAction, retrySafety] of [
 		["human_capability_required", "return_to_human_review", "operator_required"],
 		["evidence_changed", "prepare_fresh", "same_input_unsafe"],
