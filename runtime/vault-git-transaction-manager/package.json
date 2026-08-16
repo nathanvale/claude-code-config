@@ -4,12 +4,6 @@
   "private": true,
   "type": "module",
   "description": "Facade-backed transaction boundary for configured Super-vault writes.",
-  "sideQuest": {
-    "sourceLinkedBin": true
-  },
-  "bin": {
-    "vault-git": "./src/cli.ts"
-  },
   "exports": {
     ".": "./src/index.ts"
   },

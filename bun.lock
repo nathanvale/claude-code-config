@@ -113,9 +113,6 @@
     "runtime/vault-git-transaction-manager": {
       "name": "@side-quest/vault-git-transaction-manager",
       "version": "0.1.0",
-      "bin": {
-        "vault-git": "./src/cli.ts",
-      },
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },

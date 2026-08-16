@@ -1163,7 +1163,10 @@ async function resolveDefaultComposition(
 		process.env.VAULT_GIT_STATE_ROOT ??
 		process.env.XDG_STATE_HOME ??
 		join(homedir(), ".local", "state");
-	const activationIdentity = resolveDefaultActivationIdentity();
+	const activationIdentity = await resolveDefaultActivationIdentity(
+		process.env,
+		homedir(),
+	);
 	const allowedRemoteHosts = resolveDefaultAllowedRemoteHosts();
 	const input: VaultGitCliCompositionInput = {
 		repositoryPath,
@@ -1174,7 +1177,10 @@ async function resolveDefaultComposition(
 			process.env.VAULT_GIT_REPOSITORY_IDENTITY ??
 			DEFAULT_LEGACY_STATE_IDENTITY,
 		actor: process.env.VAULT_GIT_ACTOR ?? process.env.USER ?? "operator",
-		host: process.env.VAULT_GIT_HOST ?? hostname(),
+		host:
+			activationIdentity.status === "configured"
+				? activationIdentity.value.hostId
+				: (process.env.VAULT_GIT_HOST ?? hostname()),
 		remote: process.env.VAULT_GIT_REMOTE ?? DEFAULT_REMOTE,
 		...(allowedRemoteHosts ? { allowedRemoteHosts } : {}),
 		...(activationIdentity.status === "configured"
@@ -1197,7 +1203,7 @@ function resolveDefaultAllowedRemoteHosts(): readonly string[] | undefined {
 	return configured.split(",").map((host) => host.trim());
 }
 
-function resolveDefaultActivationIdentity():
+type ResolvedDefaultActivationIdentity =
 	| {
 			readonly status: "configured";
 			readonly value: VaultGitCliActivationIdentityInput;
@@ -1205,11 +1211,24 @@ function resolveDefaultActivationIdentity():
 	| {
 			readonly status: "missing";
 			readonly missingConfiguration: readonly VaultGitActivationConfigurationField[];
-		  } {
-	const hostId = process.env.VAULT_GIT_HOST;
-	const sshIdentityFilePath = process.env.VAULT_GIT_SSH_IDENTITY_FILE_PATH;
-	const sshIdentityPublicKeyPath = process.env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
-	const sshKnownHostsPath = process.env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
+	  };
+
+/**
+ * Resolve the default activation identity from the fixture environment lane
+ * or, when every fixture variable is unset, the persisted Vault Git Host
+ * Enrollment lane. Production daily-driver execution leaves the four legacy
+ * activation variables unset.
+ * @internal
+ */
+export async function resolveDefaultActivationIdentity(
+	env: Readonly<Record<string, string | undefined>>,
+	homeDir: string,
+	executingPath?: string,
+): Promise<ResolvedDefaultActivationIdentity> {
+	const hostId = env.VAULT_GIT_HOST;
+	const sshIdentityFilePath = env.VAULT_GIT_SSH_IDENTITY_FILE_PATH;
+	const sshIdentityPublicKeyPath = env.VAULT_GIT_SSH_PUBLIC_KEY_PATH;
+	const sshKnownHostsPath = env.VAULT_GIT_SSH_KNOWN_HOSTS_PATH;
 	const configured: Record<
 		VaultGitActivationConfigurationField,
 		string | undefined
@@ -1222,6 +1241,26 @@ function resolveDefaultActivationIdentity():
 	const missingConfiguration = VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS.filter(
 		(field) => !configured[field],
 	);
+	if (
+		missingConfiguration.length ===
+		VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS.length
+	) {
+		return resolvePersistedActivationIdentity({
+			configRoot: join(
+				env.XDG_CONFIG_HOME ?? join(homeDir, ".config"),
+				"context",
+				"vault-git",
+			),
+			dataRoot: join(
+				env.XDG_DATA_HOME ?? join(homeDir, ".local", "share"),
+				"context",
+				"vault-git",
+			),
+			gitBinaryPath: env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
+			sshBinaryPath: env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
+			...(executingPath === undefined ? {} : { executingPath }),
+		});
+	}
 	if (
 		missingConfiguration.length > 0 ||
 		!hostId ||
@@ -1239,13 +1278,199 @@ function resolveDefaultActivationIdentity():
 			runtimeVersion: Bun.version,
 			executablePath: CLI_PATH,
 			executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
-			gitBinaryPath: process.env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
-			sshBinaryPath: process.env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
+			gitBinaryPath: env.VAULT_GIT_GIT_BINARY_PATH ?? "/usr/bin/git",
+			sshBinaryPath: env.VAULT_GIT_SSH_BINARY_PATH ?? "/usr/bin/ssh",
 			sshIdentityFilePath,
 			sshIdentityPublicKeyPath,
 			sshKnownHostsPath,
 		},
 	};
+}
+
+const PERSISTED_HOST_HANDLE_PATTERN = /^host_[a-f0-9]{32}$/;
+const PERSISTED_RUNTIME_DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+
+/**
+ * Resolve activation identity input from the persisted Activation
+ * Configuration and the exact content-addressed selected Installed Runtime.
+ *
+ * Setup owns these record schemas
+ * (runtime/setup/src/vault-git-host-enrollment.ts); this is a read-only
+ * fail-closed projection of their smallest stable shape. Persisted enrollment
+ * configures activation only when the executing image is the selected
+ * Installed Runtime by canonical real path; a source-run invocation (Bun
+ * interpreter executing checkout source) must fail closed to missing rather
+ * than admit the unchanged installed file.
+ * @internal
+ */
+export async function resolvePersistedActivationIdentity(options: {
+	readonly configRoot: string;
+	readonly dataRoot: string;
+	readonly gitBinaryPath?: string;
+	readonly sshBinaryPath?: string;
+	/** Executing program image; defaults to `process.execPath`. */
+	readonly executingPath?: string;
+}): Promise<ResolvedDefaultActivationIdentity> {
+	const missing = {
+		status: "missing",
+		missingConfiguration: VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS,
+	} as const;
+	const [activation, selection] = await Promise.all([
+		readPersistedOwnerJson(join(options.configRoot, "activation.json")).then(
+			parsePersistedActivation,
+		),
+		readPersistedOwnerJson(
+			join(options.configRoot, "runtime-selection.json"),
+		).then(parsePersistedSelection),
+	]);
+	if (!activation || !selection) return missing;
+	const executablePath = join(
+		options.dataRoot,
+		"runtimes",
+		selection.selectedDigest,
+		"vault-git",
+	);
+	if (!(await installedRuntimeMatches(executablePath, selection.selectedDigest))) {
+		return missing;
+	}
+	const executingPath = options.executingPath ?? process.execPath;
+	if (!(await executingImageIsInstalledRuntime(executingPath, executablePath))) {
+		return missing;
+	}
+	return {
+		status: "configured",
+		value: {
+			hostId: activation.hostHandle,
+			runtimeBinaryPath: executingPath,
+			runtimeVersion: Bun.version,
+			executablePath,
+			executableSourcePaths: [executablePath],
+			gitBinaryPath: options.gitBinaryPath ?? "/usr/bin/git",
+			sshBinaryPath: options.sshBinaryPath ?? "/usr/bin/ssh",
+			sshIdentityFilePath: activation.sshIdentityFilePath,
+			sshIdentityPublicKeyPath: activation.sshPublicKeyPath,
+			sshKnownHostsPath: activation.sshKnownHostsPath,
+		},
+	};
+}
+
+async function readPersistedOwnerJson(path: string): Promise<unknown> {
+	try {
+		const entry = await lstat(path, { bigint: true });
+		if (
+			entry.isSymbolicLink() ||
+			!entry.isFile() ||
+			(entry.mode & 0o077n) !== 0n
+		) {
+			return undefined;
+		}
+		return JSON.parse(await readFile(path, "utf8"));
+	} catch {
+		return undefined;
+	}
+}
+
+function parsePersistedActivation(value: unknown):
+	| {
+			readonly hostHandle: string;
+			readonly sshIdentityFilePath: string;
+			readonly sshPublicKeyPath: string;
+			readonly sshKnownHostsPath: string;
+	  }
+	| undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	const expectedKeys = [
+		"host_handle",
+		"schema_version",
+		"ssh_identity_file_path",
+		"ssh_known_hosts_path",
+		"ssh_public_key_path",
+	];
+	const paths = [
+		record.ssh_identity_file_path,
+		record.ssh_public_key_path,
+		record.ssh_known_hosts_path,
+	];
+	if (
+		Object.keys(record).sort().join("\0") !== expectedKeys.join("\0") ||
+		record.schema_version !== 1 ||
+		typeof record.host_handle !== "string" ||
+		!PERSISTED_HOST_HANDLE_PATTERN.test(record.host_handle) ||
+		!paths.every((path) => typeof path === "string" && isAbsolute(path))
+	) {
+		return undefined;
+	}
+	return {
+		hostHandle: record.host_handle,
+		sshIdentityFilePath: record.ssh_identity_file_path as string,
+		sshPublicKeyPath: record.ssh_public_key_path as string,
+		sshKnownHostsPath: record.ssh_known_hosts_path as string,
+	};
+}
+
+function parsePersistedSelection(
+	value: unknown,
+): { readonly selectedDigest: string } | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).sort().join("\0") !==
+			["prior_digest", "schema_version", "selected_digest"].join("\0") ||
+		record.schema_version !== 1 ||
+		typeof record.selected_digest !== "string" ||
+		!PERSISTED_RUNTIME_DIGEST_PATTERN.test(record.selected_digest) ||
+		!(record.prior_digest === null ||
+			(typeof record.prior_digest === "string" &&
+				PERSISTED_RUNTIME_DIGEST_PATTERN.test(record.prior_digest)))
+	) {
+		return undefined;
+	}
+	return { selectedDigest: record.selected_digest };
+}
+
+/**
+ * Symlink aliases of the same installed image may pass; a different image,
+ * including the Bun interpreter on a source run, must fail closed.
+ */
+async function executingImageIsInstalledRuntime(
+	executingPath: string,
+	installedPath: string,
+): Promise<boolean> {
+	try {
+		const [executingRealPath, installedRealPath] = await Promise.all([
+			realpath(executingPath),
+			realpath(installedPath),
+		]);
+		return executingRealPath === installedRealPath;
+	} catch {
+		return false;
+	}
+}
+
+async function installedRuntimeMatches(
+	path: string,
+	digest: string,
+): Promise<boolean> {
+	try {
+		const entry = await lstat(path);
+		if (
+			entry.isSymbolicLink() ||
+			!entry.isFile() ||
+			(entry.mode & 0o111) === 0
+		) {
+			return false;
+		}
+		return (
+			createHash("sha256").update(await readFile(path)).digest("hex") === digest
+		);
+	} catch {
+		return false;
+	}
 }
 
 /**

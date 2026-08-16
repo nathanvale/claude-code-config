@@ -27,10 +27,17 @@ import {
 } from "./command-contract.ts";
 import { diagnoseFindings } from "./doctor.ts";
 import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
-import { SETUP_COMMANDS, type SetupCommand, type SetupResult } from "./model.ts";
+import { SETUP_COMMANDS, type SetupActionId, type SetupCommand, type SetupResult } from "./model.ts";
 import { planSetup } from "./planner.ts";
 import { renderCatalog, renderDoctor, renderSetupResult } from "./renderer.ts";
 import { InvalidTargetError, resolveProjectRepoRoot } from "./scope.ts";
+import {
+	createVaultGitHostEnrollment,
+	type VaultGitHostEnrollment,
+	type VaultGitHostEnrollmentInput,
+	type VaultGitHostEnrollmentResult,
+} from "./vault-git-host-enrollment.ts";
+import { inspectVaultGitWorkState } from "./vault-git-work-state.ts";
 
 /** Runtime adapters keep command-surface tests deterministic and mutation-free. */
 export interface SetupCliRuntime {
@@ -46,6 +53,10 @@ export interface SetupCliRuntime {
 	checkDomains?: (input: SetupInspectionInput, base: SetupResult) => Promise<SetupResult>;
 	/** Discovery adapter; tests use a failing implementation to prove wrapping. */
 	commands?: () => Promise<CommandsResult> | CommandsResult;
+	/** Setup-owned deep domain owner; injected by tests and embedded callers. */
+	vaultGitHostEnrollment?: VaultGitHostEnrollment;
+	/** One-shot private stdin reader used only by a named input contract. */
+	readPrivateStdin?: () => Promise<string>;
 }
 
 /** Optional CLI entry-point dependencies used by tests and embedded callers. */
@@ -75,12 +86,23 @@ type CommandsResult = ReturnType<typeof projectSetupCommandDiscoveryTree>;
 export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): SetupCliRuntime {
 	const sourceRepoRoot = overrides.sourceRepoRoot ?? resolve(import.meta.dir, "../../..");
 	const homeDir = overrides.homeDir ?? homedir();
+	const environment = overrides.env ?? process.env;
 	const stateRoot = join(homeDir, ".local/state/setup");
+	const vaultGitStateRoot = environment.XDG_STATE_HOME ?? join(homeDir, ".local", "state");
+	const vaultGitHostEnrollment = overrides.vaultGitHostEnrollment ??
+		createVaultGitHostEnrollment({
+			configRoot: join(environment.XDG_CONFIG_HOME ?? join(homeDir, ".config"), "context", "vault-git"),
+			dataRoot: join(environment.XDG_DATA_HOME ?? join(homeDir, ".local", "share"), "context", "vault-git"),
+			selectorPath: join(homeDir, ".bun", "bin", "vault-git"),
+			sourceRepoRoot,
+			runtimeEntrypoint: join(sourceRepoRoot, "runtime", "vault-git-transaction-manager", "src", "cli.ts"),
+			inspectWorkState: async () => inspectVaultGitWorkState(vaultGitStateRoot),
+		});
 	const runtime: SetupCliRuntime = {
 		sourceRepoRoot,
 		homeDir,
 		now: () => Date.now(),
-		env: process.env,
+		env: environment,
 		stdoutIsTTY: process.stdout.isTTY === true,
 		inspect: async (input) => {
 			if (input.scope !== "project") return inspectSetup(input);
@@ -91,6 +113,8 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
 		},
 		apply: async (input: SetupInspectionInput) => applySetupDomains(normalizeProjectInput(input), { stateRoot, inspect: runtime.inspect }),
 		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetupDomains(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
+		vaultGitHostEnrollment,
+		readPrivateStdin: async () => Bun.stdin.text(),
 		...overrides,
 	};
 	if (!overrides.inspect) runtime.checkDomains = async (input, base) => checkSetupDomains(normalizeProjectInput(input), base, { stateRoot });
@@ -183,6 +207,9 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 	if (command === "commands") {
 		return { result: await (runtime.commands?.() ?? projectSetupCommandDiscoveryTree()), exitCode: 0, human: "", contractCommand: "commands" };
 	}
+	if (command === "sync" && invocation.domain === "vault-git") {
+		return vaultGitExecution(invocation, runtime);
+	}
 	const input: SetupInspectionInput = {
 		scope: invocation.scope,
 		sourceRepoRoot: runtime.sourceRepoRoot,
@@ -190,7 +217,7 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 		homeDir: runtime.homeDir,
 	};
 	if (command === "sync" && !invocation.check) {
-		const result = await runtime.apply(input);
+		const result = await attachVaultGitStatus(await runtime.apply(input), invocation, runtime);
 		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, renderOptions), contractCommand: "sync" };
 	}
 	if (command === "unlink") {
@@ -215,11 +242,159 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 		};
 		return { result, exitCode: diagnosis.station === "doctor.healthy" ? 0 : 1, human: renderDoctor(result, renderOptions), contractCommand: "doctor" };
 	}
+	const result = command === "sync"
+		? await attachVaultGitStatus(plan, invocation, runtime)
+		: plan;
 	return {
-		result: plan,
-		exitCode: command === "sync" && plan.state !== "healthy" ? 1 : 0,
-		human: renderSetupResult(plan, renderOptions),
+		result,
+		exitCode: command === "sync" && result.state !== "healthy" ? 1 : 0,
+		human: renderSetupResult(result, renderOptions),
 		contractCommand: command,
+	};
+}
+
+/** Plain user sync projects Vault Git domain status only; it never mutates it. */
+async function attachVaultGitStatus(
+	result: SetupResult,
+	invocation: ParsedSetupInvocation,
+	runtime: SetupCliRuntime,
+): Promise<SetupResult> {
+	if (invocation.scope !== "user" || !runtime.vaultGitHostEnrollment) return result;
+	return { ...result, vault_git: await runtime.vaultGitHostEnrollment.inspect() };
+}
+
+async function vaultGitExecution(
+	invocation: ParsedSetupInvocation,
+	runtime: SetupCliRuntime,
+): Promise<CommandExecution> {
+	const owner = runtime.vaultGitHostEnrollment;
+	if (!owner) throw new Error("Host Enrollment owner is unavailable");
+	let result: VaultGitHostEnrollmentResult;
+	if (invocation.rollback) {
+		result = await owner.rollback(invocation.check);
+	} else if (invocation.inputStdin) {
+		const input = await readVaultGitHostEnrollmentInput(runtime);
+		result = invocation.check ? await owner.preview(input) : await owner.apply(input);
+	} else {
+		result = await owner.inspect();
+	}
+	const projection = projectVaultGitStation(result);
+	const projected = projectVaultGitSetupResult(result, projection, runtime);
+	return {
+		result: projected,
+		exitCode: projection.exitCode,
+		human: renderSetupResult(projected, {
+			verbose: invocation.verbose,
+			color: runtime.stdoutIsTTY && !invocation.noColor &&
+				runtime.env.NO_COLOR === undefined && runtime.env.TERM !== "dumb",
+		}),
+		contractCommand: "sync",
+	};
+}
+
+async function readVaultGitHostEnrollmentInput(
+	runtime: SetupCliRuntime,
+): Promise<VaultGitHostEnrollmentInput> {
+	const source = await runtime.readPrivateStdin?.();
+	if (source === undefined || source.length > 16_384) {
+		throw new CliUsageError("Private Host Enrollment input is unavailable");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(source);
+	} catch {
+		throw new CliUsageError("Private Host Enrollment input is invalid");
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new CliUsageError("Private Host Enrollment input is invalid");
+	}
+	const record = parsed as Record<string, unknown>;
+	const expected = [
+		"ssh_identity_file_path",
+		"ssh_known_hosts_path",
+		"ssh_public_key_path",
+	].sort();
+	if (
+		Object.keys(record).sort().join("\0") !== expected.join("\0") ||
+		!expected.every((key) => typeof record[key] === "string" && record[key] !== "")
+	) {
+		throw new CliUsageError("Private Host Enrollment input is invalid");
+	}
+	return {
+		sshIdentityFilePath: record.ssh_identity_file_path as string,
+		sshPublicKeyPath: record.ssh_public_key_path as string,
+		sshKnownHostsPath: record.ssh_known_hosts_path as string,
+	};
+}
+
+interface VaultGitStationProjection {
+	readonly station: string;
+	readonly state: SetupResult["state"];
+	readonly nextAction: SetupActionId;
+	readonly exitCode: 0 | 1;
+}
+
+/** One exhaustive terminal-station projection per Host Enrollment outcome. */
+function projectVaultGitStation(
+	result: VaultGitHostEnrollmentResult,
+): VaultGitStationProjection {
+	switch (result.station) {
+		case "vault_git.host_enrollment_inputs_required":
+			return { station: "sync.vault_git_inputs_required", state: "clean_slate", nextAction: "provide_host_enrollment_inputs", exitCode: 0 };
+		case "vault_git.repository_ssh_prerequisite":
+			return { station: "sync.vault_git_ssh_prerequisite", state: "blocked", nextAction: "provision_repository_ssh", exitCode: 1 };
+		case "vault_git.host_enrollment_ready":
+			return { station: "sync.vault_git_enrollment_ready", state: "changes", nextAction: "apply_host_enrollment", exitCode: 1 };
+		case "vault_git.runtime_selected":
+			return result.state === "enrolled"
+				? { station: "sync.vault_git_selected", state: "healthy", nextAction: "setup_healthy", exitCode: 0 }
+				: result.state === "noop"
+					? { station: "sync.vault_git_noop", state: "noop", nextAction: "setup_healthy", exitCode: 0 }
+					: { station: "sync.vault_git_applied", state: "applied", nextAction: "setup_healthy", exitCode: 0 };
+		case "vault_git.runtime_selection_blocked":
+			return { station: "sync.vault_git_selection_blocked", state: "blocked", nextAction: "wait_for_vault_git_idle", exitCode: 1 };
+		case "vault_git.rollback_ready":
+			return { station: "sync.vault_git_rollback_ready", state: "changes", nextAction: "apply_vault_git_rollback", exitCode: 1 };
+		case "vault_git.rollback_applied":
+			return { station: "sync.vault_git_rollback_applied", state: "applied", nextAction: "setup_healthy", exitCode: 0 };
+		case "vault_git.rollback_blocked":
+			return { station: "sync.vault_git_rollback_blocked", state: "blocked", nextAction: "wait_for_vault_git_idle", exitCode: 1 };
+		default:
+			return unreachableVaultGitStation(result);
+	}
+}
+
+function unreachableVaultGitStation(result: never): never {
+	throw new Error(
+		`Unmapped Vault Git Host Enrollment station: ${(result as { station?: string }).station ?? "unknown"}`,
+	);
+}
+
+function projectVaultGitSetupResult(
+	result: VaultGitHostEnrollmentResult,
+	projection: VaultGitStationProjection,
+	runtime: SetupCliRuntime,
+): SetupResult {
+	return {
+		command: "sync",
+		scope: "user",
+		state: projection.state,
+		findings: [],
+		domains: [{
+			domain: "vault-git",
+			planned: [], applied: [], deferred: [], preserved: [], failed: [],
+		}],
+		operations: [],
+		projection_targets: [],
+		counts: {
+			catalog: 0, managed: 0, external: 0, planned: 0,
+			blockers: projection.state === "blocked" ? 1 : 0,
+		},
+		catalog_root: runtime.sourceRepoRoot,
+		destination_roots: [],
+		station: projection.station,
+		next_action: projection.nextAction,
+		vault_git: result,
 	};
 }
 

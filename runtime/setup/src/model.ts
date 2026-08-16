@@ -1,3 +1,5 @@
+import type { VaultGitHostEnrollmentResult } from "./vault-git-host-enrollment.ts";
+
 /** Package-owned result contract for Setup inspection and mutation outcomes. */
 export const SETUP_RESULT_CONTRACT_ID = "setup.result" as const;
 
@@ -104,6 +106,12 @@ export const SETUP_ACTION_IDS = [
 	"inspect_catalog",
 	"use_source",
 	"discover_external",
+	"provide_host_enrollment_inputs",
+	"apply_host_enrollment",
+	"preview_host_enrollment_repair",
+	"provision_repository_ssh",
+	"wait_for_vault_git_idle",
+	"apply_vault_git_rollback",
 ] as const;
 
 export type SetupActionId = (typeof SETUP_ACTION_IDS)[number];
@@ -207,6 +215,8 @@ export interface SetupResult {
 	evidence_fingerprint?: string;
 	/** Captured child diagnostics; CLI writes this only to stderr. */
 	child_output?: string;
+	/** Sanitized Setup-owned Host Enrollment and Runtime Selection projection. */
+	vault_git?: VaultGitHostEnrollmentResult;
 }
 
 /** Explicit migration disposition for superseded projector behavior. */

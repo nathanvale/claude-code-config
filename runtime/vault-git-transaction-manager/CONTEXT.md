@@ -16,6 +16,22 @@ _Avoid_: activation error, generic blocker, permission failure
 Explicit host-local operator selection that stops new Transaction Manager use and routes the configured vault through the skill-owned Direct Git Mode. It freezes receipts and ledger evidence for later reconciliation; it is not transaction repair, activation revocation, or an automatic fallback.
 _Avoid_: disabled safety, missing CLI, raw-Git bypass, activation blocked
 
+**Vault Git Host Enrollment**:
+Setup-owned domain behind explicit `setup sync --domain vault-git` that validates private SSH prerequisites, persists Activation Configuration, installs the Installed Runtime, and owns Runtime Selection and rollback.
+_Avoid_: vault-git self-install, ad hoc PATH setup, generic bins projection
+
+**Installed Runtime**:
+One immutable compiled Vault Git executable stored side by side under the XDG data root at its own SHA-256 content address, built only from clean merged source.
+_Avoid_: source-linked bin, dev checkout execution
+
+**Runtime Selection**:
+The atomic managed-symlink choice of exactly one Installed Runtime. Selection and rollback refuse during active or uncertain vault work and invalidate prior activation, so fresh Prepared Evidence and human Activation Review are required.
+_Avoid_: first-PATH-hit lookup, silent upgrade
+
+**Host Handle**:
+One generated stable non-secret host identifier preserved across re-enrollment inside Activation Configuration. The OS hostname is not durable identity.
+_Avoid_: hostname, machine serial
+
 **Doctor Continuation**:
 External state change, inspection, or terminal action selected by Doctor after read-only diagnosis. Doctor itself is never its own immediate continuation.
 _Avoid_: retry Doctor, diagnostic loop
