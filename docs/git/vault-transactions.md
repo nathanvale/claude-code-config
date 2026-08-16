@@ -98,7 +98,7 @@ Keep live activation off until the operator completes both admissions.
 - Record the host-owned rollout receipt.
 - Admit activation through the runtime owner only after reconciliation passes.
 
-Unadmitted writes return blocker `activation_blocked`. The `vault-git` skill owns the bounded legacy fallback for that blocker only.
+Unadmitted writes return blocker `activation_blocked`. Follow the CLI's named repair hint; this blocker never selects Direct Git Mode.
 
 Activation record owner: `runtime/vault-git-transaction-manager/src/store.ts`.
 

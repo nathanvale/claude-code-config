@@ -18,6 +18,14 @@ Check `${XDG_CONFIG_HOME:-$HOME/.config}/context/vault-git-paused` before invoki
 - Marker absent: use the Transaction Manager Workflow below.
 - Never create or remove the marker without an explicit owner request. Each host has its own marker.
 
+### Pause Entry Inspection
+
+Before creating the marker, run the read-only package command `bun run --silent vault-git status --json` from `runtime/vault-git-transaction-manager`.
+
+- Proceed only when the result proves transaction state `absent` or `closed` and reports no unknown publication.
+- Stop on every other state or blocker. Follow the emitted continuation; do not create the marker.
+- Treat an existing marker as the owner's durable attestation that this inspection passed. Do not rerun the Transaction Manager while paused.
+
 ## Direct Git Mode
 
 1. Work only in the configured vault's canonical `main` checkout. Never create a vault worktree.
