@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createVaultCheckerPort } from "../src/cli.ts";
@@ -15,7 +15,21 @@ describe("vault checker process boundary", () => {
 		await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 	});
 
-	test("uses the admitted absolute runtime with an isolated environment", async () => {
+	test("uses the canonical admitted runtime through its verified bun alias with an isolated environment", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-checker-runtime-"));
+		roots.push(root);
+		const runtimeDir = join(root, "runtime");
+		await mkdir(runtimeDir, { recursive: true });
+		const runtimeBinary = join(runtimeDir, "vault-git");
+		await writeFile(runtimeBinary, "#!/bin/sh\nexit 64\n");
+		await chmod(runtimeBinary, 0o755);
+		await symlink("vault-git", join(runtimeDir, "bun"));
+		const vaultRoot = join(root, "vault");
+		await mkdir(vaultRoot, { recursive: true });
+		await writeFile(
+			join(vaultRoot, "package.json"),
+			'{"name":"fixture-vault","scripts":{"check":"bun scripts/check.ts"}}\n',
+		);
 		const requests: VaultGitProcessRequest[] = [];
 		const processPort: VaultGitProcessPort = {
 			async run(request) {
@@ -28,27 +42,54 @@ describe("vault checker process boundary", () => {
 				};
 			},
 		};
-		const checker = createVaultCheckerPort(
-			"/private/isolated-vault",
-			processPort,
-			"/admitted/runtime/bin/bun",
-		);
+		const checker = createVaultCheckerPort(vaultRoot, processPort, runtimeBinary);
 
 		await checker.runCheck();
 
+		const canonical = await realpath(runtimeBinary);
 		expect(requests).toEqual([
 			{
-				command: "/admitted/runtime/bin/bun",
-				args: ["run", "check", "--json"],
-				cwd: "/private/isolated-vault",
+				command: canonical,
+				args: ["exec", "bun scripts/check.ts --json"],
+				cwd: vaultRoot,
 				env: {
 					LC_ALL: "C",
-					PATH: "/admitted/runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+					BUN_BE_BUN: "1",
+					PATH: `${dirname(canonical)}:/usr/bin:/bin:/usr/sbin:/sbin`,
 				},
 				environmentMode: "isolated",
 				timeoutMs: 15_000,
 			},
 		]);
+	});
+
+	test("a missing bun alias refuses checker execution instead of spawning", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-checker-runtime-"));
+		roots.push(root);
+		const runtimeDir = join(root, "runtime");
+		await mkdir(runtimeDir, { recursive: true });
+		const runtimeBinary = join(runtimeDir, "vault-git");
+		await writeFile(runtimeBinary, "#!/bin/sh\nexit 64\n");
+		await chmod(runtimeBinary, 0o755);
+		const vaultRoot = join(root, "vault");
+		await mkdir(vaultRoot, { recursive: true });
+		await writeFile(
+			join(vaultRoot, "package.json"),
+			'{"name":"fixture-vault","scripts":{"check":"bun scripts/check.ts"}}\n',
+		);
+		const requests: VaultGitProcessRequest[] = [];
+		const processPort: VaultGitProcessPort = {
+			async run(request) {
+				requests.push(request);
+				return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+			},
+		};
+		const checker = createVaultCheckerPort(vaultRoot, processPort, runtimeBinary);
+
+		await expect(checker.runCheck()).rejects.toThrow(
+			"vault checker runtime unusable",
+		);
+		expect(requests).toHaveLength(0);
 	});
 
 	test("binds the deterministic frontmatter schema read by the checker", async () => {

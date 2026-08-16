@@ -237,6 +237,40 @@ describe("Vault Git Host Enrollment", () => {
 		});
 	});
 
+	test("apply installs a realpath-verified bun alias and repairs a missing alias on reinstall", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
+		temporaryRoots.push(root);
+		const { sourceRepoRoot, runtimeEntrypoint } = await createSourceFixture(root);
+		const privateInput = await createSshFixture(root);
+		const configRoot = join(root, "config");
+		const dataRoot = join(root, "data");
+		const selectorPath = join(root, "bin", "vault-git");
+		const enrollment = createVaultGitHostEnrollment({
+			configRoot,
+			dataRoot,
+			selectorPath,
+			sourceRepoRoot,
+			runtimeEntrypoint,
+			inspectWorkState: async () => "clear",
+		});
+
+		const applied = await enrollment.apply(privateInput);
+		if (applied.state !== "applied") throw new Error("expected applied enrollment");
+		const runtimeRoot = join(dataRoot, "runtimes", applied.installedRuntime.digest);
+		const aliasPath = join(runtimeRoot, "bun");
+		expect((await lstat(aliasPath)).isSymbolicLink()).toBe(true);
+		expect(await realpath(aliasPath)).toBe(
+			await realpath(join(runtimeRoot, "vault-git")),
+		);
+
+		await rm(aliasPath);
+		const repaired = await enrollment.apply(privateInput);
+		expect(repaired.state).toBe("noop");
+		expect(await realpath(aliasPath)).toBe(
+			await realpath(join(runtimeRoot, "vault-git")),
+		);
+	});
+
 	test("active work allows installation but refuses Runtime Selection", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
 		temporaryRoots.push(root);

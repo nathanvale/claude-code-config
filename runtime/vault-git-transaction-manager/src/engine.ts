@@ -25,10 +25,12 @@ import {
 	type VaultGitActivationValidationScope,
 	type VaultGitAtomicCloseResult,
 	type VaultGitCheckPort,
-	type VaultGitOwnedPathContentHash,
+	type VaultGitCheckResult,
 	type VaultGitRepositoryPort,
 	type VaultGitRuntimePort,
+	type VaultGitValidationFailureClass,
 } from "./ports.ts";
+import type { VaultGitValidationFailure } from "./model.ts";
 import {
 	buildVaultCommitMessage,
 	validateVaultCommitLabel,
@@ -150,6 +152,8 @@ export interface VaultGitEngineResult {
 	readonly diagnosticsReference?: string;
 	/** Cause-specific public activation refusal with one safe continuation. */
 	readonly activationRestriction?: VaultGitActivationRestriction;
+	/** Stage-classified Validation Failure carried for later Doctor routing. */
+	readonly validationFailure?: VaultGitValidationFailure;
 }
 
 /**
@@ -1049,22 +1053,34 @@ export function createVaultGitTransactionEngine(
 			}
 			const transactionId = loaded.transactionId;
 			const leaseGeneration = loaded.leaseGeneration;
-			// Bind checked bytes to committed blobs: hash owned content immediately
-			// before the check so a writer racing the check window is refused.
-			let expectedContentHashes: readonly VaultGitOwnedPathContentHash[] | undefined;
-			if (options.repository.hashOwnedPaths) {
-				try {
-					expectedContentHashes = await options.repository.hashOwnedPaths(
-						checking.ownedPaths.map((path) => path.path),
-					);
-				} catch {
-					// The durable phase is now checking, and direct completion
-					// replays refuse from that phase; doctor and repair own resume.
-					return refusal("active", checking.phase, "completion_interrupted", "run_doctor", "Run doctor to resume completion; owned-path content capture did not complete.", "local", "same_input_safe");
-				}
-			}
-			const checked = await options.check.run();
+			// The validation candidate freezes owned bytes and Git file modes at
+			// candidate setup; those exact bindings gate the later commit so a
+			// writer or chmod racing the check window is refused.
+			const checked = await options.check.run({
+				baselineHead: checking.localMainHead,
+				ownedPaths: checking.ownedPaths,
+				transactionId,
+			});
 			if (checked.status === "failed") {
+				const validationFailure = validationFailureOf(checked);
+				if (checked.failureClass !== "vault_content") {
+					// Setup, budget, and cleanup failures prove nothing about vault
+					// content; they must not offer deterministic repair. The durable
+					// phase stays checking so doctor classifies the interrupted check
+					// and `repair resume` re-enters the attempt.
+					return {
+						...refusal(
+							"active",
+							checking.phase,
+							"completion_interrupted",
+							"run_doctor",
+							validationRefusalSummary(checked.failureClass),
+							"local",
+							"same_input_safe",
+						),
+						validationFailure,
+					};
+				}
 				const repairable = nextVaultGitReceipt(checking, {
 					phase: "repairable",
 					transition: "deterministic_repair_available",
@@ -1072,8 +1088,12 @@ export function createVaultGitTransactionEngine(
 					recordedAt: options.runtime.now().toISOString(),
 				});
 				await options.store.append(repairable);
-				return refusal("repairable", repairable.phase, "vault_check_failed", "run_repair", "Repair the vault-owned check failure before replaying completion.", "local", "same_input_unsafe");
+				return {
+					...refusal("repairable", repairable.phase, "vault_check_failed", "run_repair", "Repair the vault-owned check failure before replaying completion.", "local", "same_input_unsafe"),
+					validationFailure,
+				};
 			}
+			const expectedContentHashes = checked.checkedPaths;
 			const committing = nextVaultGitReceipt(checking, {
 				phase: "committing",
 				transition: "commit_candidate_frozen",
@@ -1091,7 +1111,7 @@ export function createVaultGitTransactionEngine(
 				baselineHead: committing.localMainHead,
 				ownedPaths: committing.ownedPaths,
 				unrelatedState: committing.unrelatedState,
-				...(expectedContentHashes ? { expectedContentHashes } : {}),
+				expectedContentHashes,
 				message,
 				author: committing.actor,
 				timestamp: options.runtime.now().toISOString(),
@@ -1430,6 +1450,35 @@ function stateForPhase(phase: VaultGitReceipt["phase"]): VaultGitTransactionStat
 
 function nextForState(state: VaultGitTransactionState): VaultGitEngineNextActionId { return state === "push_pending" ? "run_doctor" : state === "repairable" ? "run_repair" : state === "human_required" ? "request_operator_review" : "none"; }
 function summaryForState(state: VaultGitTransactionState): string { return state === "push_pending" ? "Run doctor before selecting a publication repair." : state === "repairable" ? "Run the recorded deterministic repair." : state === "human_required" ? "Ask an operator to inspect conflicting evidence." : "No transaction action remains."; }
+
+/** Rebuild the exact closed pairing so no carrier property leaks into it. */
+function validationFailureOf(
+	checked: Extract<VaultGitCheckResult, { status: "failed" }>,
+): VaultGitValidationFailure {
+	switch (checked.failureClass) {
+		case "candidate_setup":
+			return { failureClass: "candidate_setup", stage: "candidate_setup" };
+		case "vault_content":
+			return { failureClass: "vault_content", stage: "vault_check" };
+		case "candidate_cleanup":
+			return { failureClass: "candidate_cleanup", stage: "candidate_cleanup" };
+		case "stage_budget_exceeded":
+			return { failureClass: "stage_budget_exceeded", stage: checked.stage };
+	}
+}
+
+function validationRefusalSummary(
+	failureClass: Exclude<VaultGitValidationFailureClass, "vault_content">,
+): string {
+	switch (failureClass) {
+		case "candidate_setup":
+			return "Run doctor; the validation candidate could not be prepared.";
+		case "stage_budget_exceeded":
+			return "Run doctor; a validation stage exceeded its duration budget.";
+		case "candidate_cleanup":
+			return "Run doctor; validation candidate cleanup did not finish.";
+	}
+}
 
 function validateBegin(input: VaultGitBeginInput): void {
 	if (input.requestedPaths.length === 0) throw new Error("begin requires owned paths");

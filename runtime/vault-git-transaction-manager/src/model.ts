@@ -516,6 +516,119 @@ export interface VaultGitTaskStateInput {
 	readonly recordedAt: string;
 }
 
+/** Closed Validation Candidate stage vocabulary. */
+export const VAULT_GIT_VALIDATION_STAGES = [
+	"candidate_setup",
+	"vault_check",
+	"candidate_cleanup",
+] as const;
+
+/** One Validation Candidate stage owning a product-owned duration budget. */
+export type VaultGitValidationStage =
+	(typeof VAULT_GIT_VALIDATION_STAGES)[number];
+
+/** Closed Validation Failure Class vocabulary routed through Doctor. */
+export const VAULT_GIT_VALIDATION_FAILURE_CLASSES = [
+	"candidate_setup",
+	"vault_content",
+	"stage_budget_exceeded",
+	"candidate_cleanup",
+] as const;
+
+/** One stable Validation Failure Class. */
+export type VaultGitValidationFailureClass =
+	(typeof VAULT_GIT_VALIDATION_FAILURE_CLASSES)[number];
+
+/**
+ * Stage-classified validation failure carried for later Doctor routing.
+ * A closed union so impossible class/stage pairings cannot be represented:
+ * only `stage_budget_exceeded` varies its stage.
+ */
+export type VaultGitValidationFailure =
+	| {
+			readonly failureClass: "candidate_setup";
+			readonly stage: "candidate_setup";
+	  }
+	| { readonly failureClass: "vault_content"; readonly stage: "vault_check" }
+	| {
+			readonly failureClass: "candidate_cleanup";
+			readonly stage: "candidate_cleanup";
+	  }
+	| {
+			readonly failureClass: "stage_budget_exceeded";
+			readonly stage: VaultGitValidationStage;
+	  };
+
+/**
+ * Manifest fields whose presence makes a vault dependency-bearing. Single
+ * dependency-eligibility owner shared by checker admission (which demands a
+ * lockfile for these shapes) and the Validation Candidate (which cannot
+ * materialize them in isolation and must refuse before the check spawns).
+ */
+export const VAULT_GIT_LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"optionalDependencies",
+	"peerDependencies",
+	"peerDependenciesMeta",
+	"trustedDependencies",
+	"bundledDependencies",
+	"bundleDependencies",
+	"patchedDependencies",
+	"overrides",
+	"resolutions",
+	"catalog",
+	"catalogs",
+	"workspaces",
+] as const;
+
+/** Parse one vault package manifest into its validated object shape. */
+export function parseVaultGitManifest(
+	manifestBytes: Uint8Array,
+): Record<string, unknown> {
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
+	} catch {
+		throw new Error("vault package manifest is not valid JSON");
+	}
+	if (
+		typeof manifest !== "object" ||
+		manifest === null ||
+		Array.isArray(manifest)
+	) {
+		throw new Error("vault package manifest is not an object");
+	}
+	return manifest as Record<string, unknown>;
+}
+
+/** First declared dependency surface, or undefined when dependency-free. */
+export function findVaultGitDependencySurface(
+	manifest: Readonly<Record<string, unknown>>,
+): string | undefined {
+	return VAULT_GIT_LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
+		Object.hasOwn(manifest, field),
+	);
+}
+
+/** The manifest's check script line, or undefined when unavailable. */
+export function findVaultGitCheckScript(
+	manifest: Readonly<Record<string, unknown>>,
+): string | undefined {
+	const scripts = manifest.scripts;
+	if (
+		typeof scripts !== "object" ||
+		scripts === null ||
+		Array.isArray(scripts)
+	) {
+		return undefined;
+	}
+	const script = (scripts as Record<string, unknown>).check;
+	return typeof script === "string" && script.trim().length > 0
+		? script.trim()
+		: undefined;
+}
+
 /** Bounded engine result retained by a terminal task revision. */
 export interface VaultGitTaskTerminalResult {
 	readonly outcome: VaultGitResultOutcome;
@@ -523,6 +636,8 @@ export interface VaultGitTaskTerminalResult {
 	readonly changedState: VaultGitChangedState;
 	readonly blocker: VaultGitBlockerId | null;
 	readonly retrySafety: VaultGitRetrySafety;
+	/** Stage-classified validation failure preserved for Doctor routing. */
+	readonly validationFailure?: VaultGitValidationFailure;
 }
 
 /** Doctor-owned checkpoints projected through the shared lifecycle envelope. */

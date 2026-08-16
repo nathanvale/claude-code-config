@@ -448,6 +448,7 @@ async function compileRuntime(
 		const runtimeRoot = join(runtimesRoot, digest);
 		const runtimeExecutable = join(runtimeRoot, "vault-git");
 		await chmod(stagedExecutable, 0o755);
+		await symlink("vault-git", join(stagingRoot, "bun"));
 		try {
 			await rename(stagingRoot, runtimeRoot);
 			await syncDirectory(runtimesRoot);
@@ -459,9 +460,33 @@ async function compileRuntime(
 		if (!(await runtimeMatches(runtimeExecutable, digest))) {
 			throw new Error("Installed Vault Git runtime digest mismatch");
 		}
+		await ensureRuntimeBunAlias(runtimeRoot);
 		return { digest };
 	} finally {
 		await rm(stagingRoot, { recursive: true, force: true });
+	}
+}
+
+/**
+ * The immutable Installed Runtime directory carries a `bun` alias to the
+ * exact selected executable bytes so an isolated vault-check PATH can
+ * resolve nested `bun` without ambient authority. Derive and realpath-verify
+ * the alias rather than trusting another binary; a pre-alias runtime
+ * directory installed by an earlier Setup is repaired here on reinstall.
+ */
+async function ensureRuntimeBunAlias(runtimeRoot: string): Promise<void> {
+	const aliasPath = join(runtimeRoot, "bun");
+	try {
+		await symlink("vault-git", aliasPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	}
+	const [alias, executable] = await Promise.all([
+		realpath(aliasPath),
+		realpath(join(runtimeRoot, "vault-git")),
+	]);
+	if (alias !== executable) {
+		throw new Error("Installed Vault Git runtime bun alias is invalid");
 	}
 }
 

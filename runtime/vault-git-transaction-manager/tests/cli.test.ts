@@ -966,6 +966,10 @@ describe("vault-git CLI composition", () => {
 				blocker: "vault_check_failed",
 				changedState: "local",
 				retrySafety: "operator_required",
+				validationFailure: {
+					failureClass: "vault_content",
+					stage: "vault_check",
+				},
 			},
 		});
 		const base = fakeComposition(fakeEngine());
@@ -995,6 +999,10 @@ describe("vault-git CLI composition", () => {
 		expect(JSON.parse(run.stdout).data.task_attempt_number).toBe(2);
 		expect(JSON.parse(run.stdout).data.task_previous_failure).toMatchObject({
 			blocker: "vault_check_failed",
+			validationFailure: {
+				failureClass: "vault_content",
+				stage: "vault_check",
+			},
 		});
 		expect(run.stdout).toContain(state.leaseGeneration);
 
@@ -1533,6 +1541,90 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 		if (moved.status !== "transitioned") throw new Error("seed transition failed");
 		return { store, taskId: admitted.state.taskId };
 	}
+
+	test("the private completion worker copies the engine validation failure into the durable terminal task", async () => {
+		const stateRoot = await temp("vault-git-worker-validation-failure-");
+		const { store, taskId } = await seedTask(stateRoot, {
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-13T09:00:01.000Z",
+			heartbeatAt: null,
+			checkpoint: null,
+			launchGeneration: LAUNCH,
+			launchExpiresAt: "2026-08-13T09:10:00.000Z",
+			workerPid: process.pid,
+			workerProcessIdentity: "f".repeat(64),
+			launchAttempt: 1,
+			terminalResult: null,
+		});
+		const engine = fakeEngine({
+			async complete() {
+				return {
+					status: "refused",
+					state: "repairable",
+					phase: "repairable",
+					writePermission: "denied",
+					changedState: "local",
+					retrySafety: "same_input_unsafe",
+					nextAction: {
+						id: "run_repair",
+						summary: "Repair the vault-owned check failure before replaying completion.",
+					},
+					blocker: "vault_check_failed",
+					validationFailure: {
+						failureClass: "vault_content",
+						stage: "vault_check",
+					},
+				};
+			},
+		});
+		const base = fakeComposition(engine);
+		const composition: VaultGitCliComposition = {
+			...base,
+			taskStore: store,
+			runtime: {
+				...base.runtime,
+				now: () => new Date("2026-08-13T09:00:02.000Z"),
+			},
+		};
+		const run = await runVaultGitForTest(
+			[
+				"complete",
+				"--transaction-id",
+				TXN_ID,
+				"--summary",
+				"docs(vault): background completion",
+				"--capability-fd",
+				"7",
+				"--json",
+			],
+			{
+				composition,
+				launchPrivate: false,
+				readCapability: async () => new Uint8Array(32),
+				env: {
+					VAULT_GIT_TASK_ID: taskId,
+					VAULT_GIT_TASK_LAUNCH_GENERATION: LAUNCH,
+				},
+			},
+		);
+		expect(run.exitCode).toBe(1);
+		const reloaded = await store.loadByTaskId(taskId);
+		expect(reloaded).toMatchObject({
+			status: "loaded",
+			state: {
+				state: "repair_needed",
+				phase: "terminal",
+				terminalResult: {
+					blocker: "vault_check_failed",
+					validationFailure: {
+						failureClass: "vault_content",
+						stage: "vault_check",
+					},
+				},
+			},
+		});
+	});
 
 	// Point 4 + contextual split: a live Completion Task read through the REAL store
 	// projects the authoritative union with semantic action_id inspect_completion_task

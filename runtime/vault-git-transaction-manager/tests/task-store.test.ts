@@ -171,6 +171,67 @@ describe("private task store", () => {
 		});
 	});
 
+	test("persists the bounded validation-failure projection durably and reloads it for later routing", async () => {
+		const stateRoot = await temporaryDirectories.create(
+			"vault-git-task-validation-failure-",
+		);
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		});
+		const admitted = await store.claimOrJoin(
+			taskClaimInput({
+				receiptId: "receipt_0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+				transactionId: "txn_0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+				leaseGeneration: "a".repeat(40),
+				recordedAt: "2026-08-17T09:00:00.000Z",
+			}),
+		);
+		if (admitted.status === "refused") throw new Error("test claim refused");
+		const failed = await store.transition(
+			admitted.state.taskId,
+			admitted.state.revision,
+			{
+				state: "repair_needed",
+				phase: "terminal",
+				updatedAt: "2026-08-17T09:00:01.000Z",
+				heartbeatAt: null,
+				checkpoint: "checking",
+				launchGeneration: "launch_0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+				launchAttempt: 1,
+				terminalResult: {
+					outcome: "refused",
+					phase: "checking",
+					changedState: "local",
+					blocker: "completion_interrupted",
+					retrySafety: "same_input_safe",
+					validationFailure: {
+						failureClass: "stage_budget_exceeded",
+						stage: "vault_check",
+					},
+				},
+			},
+		);
+		expect(failed.status).toBe("transitioned");
+		const reloaded = await createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: "vault@example",
+		}).loadByTaskId(admitted.state.taskId);
+		expect(reloaded).toMatchObject({
+			status: "loaded",
+			state: {
+				state: "repair_needed",
+				terminalResult: {
+					blocker: "completion_interrupted",
+					validationFailure: {
+						failureClass: "stage_budget_exceeded",
+						stage: "vault_check",
+					},
+				},
+			},
+		});
+	});
+
 	test("uses the exact repository namespace selected by the receipt store", async () => {
 		const stateRoot = await temporaryDirectories.create("vault-git-task-namespace-");
 		const repositoryId = "a".repeat(64);

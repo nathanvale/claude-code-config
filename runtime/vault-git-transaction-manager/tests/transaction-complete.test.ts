@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
+	chmod,
+	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -29,11 +31,13 @@ import {
 	admittedActivationAuthorityForTest,
 } from "./activation-fixture.ts";
 import type {
+	VaultGitOwnedPathContentHash,
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
 	VaultGitProcessResult,
 	VaultGitRemotePort,
 	VaultGitRuntimePort,
+	VaultGitValidationFailure,
 } from "../src/ports.ts";
 import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
 
@@ -123,6 +127,18 @@ process.stdout.write(result.stdout)
 	});
 });
 
+async function fenceFor(
+	adapter: {
+		hashOwnedPaths?: (
+			paths: readonly string[],
+		) => Promise<readonly VaultGitOwnedPathContentHash[]>;
+	},
+	paths: readonly string[],
+): Promise<readonly VaultGitOwnedPathContentHash[]> {
+	if (!adapter.hashOwnedPaths) throw new Error("hash owned paths unavailable");
+	return adapter.hashOwnedPaths(paths);
+}
+
 describe("exact owned-path commit", () => {
 	test("commits only admitted content and preserves unrelated staged, unstaged, and untracked state", async () => {
 		const repository = await repositoryFixture();
@@ -143,6 +159,7 @@ describe("exact owned-path commit", () => {
 			baselineHead: repository.head,
 			ownedPaths: cleanAdmission.paths,
 			unrelatedState: cleanAdmission.unrelatedState,
+			expectedContentHashes: await fenceFor(repository.adapter, ["owned.md"]),
 			message: `docs(vault): update owned note\n\nVault-Event: note_created\nVault-Transaction: txn_${"2".repeat(32)}\nVault-Actor: agent-a\n`,
 			author: "agent-a",
 			timestamp: "2026-08-09T00:00:00.000Z",
@@ -169,6 +186,10 @@ describe("exact owned-path commit", () => {
 			baselineHead: repository.head,
 			ownedPaths: admission.paths,
 			unrelatedState: admission.unrelatedState,
+			expectedContentHashes: await fenceFor(repository.adapter, [
+				"-owned.md",
+				":magic*[x]\n.md",
+			]),
 			message: `docs(vault): update literal notes\n\nVault-Event: note_created\nVault-Transaction: txn_${"3".repeat(32)}\nVault-Actor: agent-a\n`,
 			author: "agent-a",
 			timestamp: "2026-08-09T00:00:00.000Z",
@@ -199,6 +220,12 @@ describe("exact owned-path commit", () => {
 			baselineHead: repository.head,
 			ownedPaths: admission.paths,
 			unrelatedState: admission.unrelatedState,
+			expectedContentHashes: await fenceFor(repository.adapter, [
+				"source.md",
+				"destination.md",
+				"new.md",
+				"deleted.md",
+			]),
 			message: `docs(vault): move and update admitted notes\n\nVault-Event: document_moved\nVault-Transaction: txn_${"4".repeat(32)}\nVault-Actor: agent-a\n`,
 			author: "agent-a",
 			timestamp: "2026-08-09T00:00:00.000Z",
@@ -211,6 +238,32 @@ describe("exact owned-path commit", () => {
 				.filter(Boolean)
 				.sort(),
 		).toEqual(["deleted.md", "destination.md", "new.md", "source.md"]);
+	});
+
+	test("refuses to commit when the checked byte and mode fence is absent", async () => {
+		const repository = await repositoryFixture();
+		const admission = await repository.adapter.inspectOwnedPaths(["owned.md"]);
+		if (admission.status !== "admitted") throw new Error("admission failed");
+		await writeFile(join(repository.root, "owned.md"), "owned after\n");
+		if (!repository.adapter.commitExact) throw new Error("exact commit unavailable");
+		const request = {
+			baselineHead: repository.head,
+			ownedPaths: admission.paths,
+			unrelatedState: admission.unrelatedState,
+			message: `docs(vault): update owned note\n\nVault-Event: note_created\nVault-Transaction: txn_${"9".repeat(32)}\nVault-Actor: agent-a\n`,
+			author: "agent-a",
+			timestamp: "2026-08-09T00:00:00.000Z",
+		};
+		expect(
+			await repository.adapter.commitExact(
+				request as unknown as Parameters<
+					NonNullable<typeof repository.adapter.commitExact>
+				>[0],
+			),
+		).toEqual({ status: "refused", reason: "checked_content_changed" });
+		expect(git(repository.root, "rev-parse", "refs/heads/main")).toBe(
+			repository.head,
+		);
 	});
 
 	test("refuses ignored paths and symlink escapes before admission", async () => {
@@ -238,6 +291,7 @@ describe("exact owned-path commit", () => {
 				baselineHead: repository.head,
 				ownedPaths: admission.paths,
 				unrelatedState: admission.unrelatedState,
+				expectedContentHashes: [],
 				message: `docs(vault): add admitted note\n\nVault-Event: note_created\nVault-Transaction: txn_${"6".repeat(32)}\nVault-Actor: agent-a\n`,
 				author: "agent-a",
 				timestamp: "2026-08-09T00:00:00.000Z",
@@ -260,6 +314,7 @@ describe("exact owned-path commit", () => {
 				baselineHead: repository.head,
 				ownedPaths: admission.paths,
 				unrelatedState: admission.unrelatedState,
+				expectedContentHashes: await fenceFor(repository.adapter, ["owned.md"]),
 				message: `docs(vault): freeze admitted note\n\nVault-Event: note_created\nVault-Transaction: txn_${"5".repeat(32)}\nVault-Actor: agent-a\n`,
 				author: "agent-a",
 				timestamp: "2026-08-09T00:00:00.000Z",
@@ -300,6 +355,7 @@ describe("exact owned-path commit", () => {
 				baselineHead: repository.head,
 				ownedPaths: admission.paths,
 				unrelatedState: admission.unrelatedState,
+				expectedContentHashes: await fenceFor(repository.adapter, ["owned.md"]),
 				message: `docs(vault): update owned note\n\nVault-Event: note_created\nVault-Transaction: txn_${"7".repeat(32)}\nVault-Actor: agent-a\n`,
 				author: "agent-a",
 				timestamp: "2026-08-09T00:00:00.000Z",
@@ -341,6 +397,7 @@ describe("exact owned-path commit", () => {
 				baselineHead: head,
 				ownedPaths: admission.paths,
 				unrelatedState: admission.unrelatedState,
+				expectedContentHashes: await fenceFor(adapter, ["deleted.md"]),
 				message: `docs(vault): delete admitted note\n\nVault-Event: document_deleted\nVault-Transaction: txn_${"8".repeat(32)}\nVault-Actor: agent-a\n`,
 				author: "agent-a",
 				timestamp: "2026-08-09T00:00:00.000Z",
@@ -445,8 +502,161 @@ describe("complete transaction", () => {
 			phase: "repairable",
 			blocker: "vault_check_failed",
 			nextAction: { id: "run_repair" },
+			validationFailure: { failureClass: "vault_content", stage: "vault_check" },
 		});
 		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("a candidate setup failure keeps the checking phase and routes to doctor, never deterministic repair", async () => {
+		const fixture = await engineRepositoryFixture({
+			checkFailure: { failureClass: "candidate_setup", stage: "candidate_setup" },
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "checking",
+			blocker: "completion_interrupted",
+			retrySafety: "same_input_safe",
+			nextAction: { id: "run_doctor" },
+			validationFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			},
+		});
+		const loaded = await fixture.store.load();
+		expect(loaded).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "checking" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("a stage budget breach carries its stage and never collapses into vault_check_failed", async () => {
+		const fixture = await engineRepositoryFixture({
+			checkFailure: { failureClass: "stage_budget_exceeded", stage: "vault_check" },
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "checking",
+			blocker: "completion_interrupted",
+			nextAction: { id: "run_doctor" },
+			validationFailure: {
+				failureClass: "stage_budget_exceeded",
+				stage: "vault_check",
+			},
+		});
+		const loaded = await fixture.store.load();
+		expect(loaded).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "checking" },
+		});
+	});
+
+	test("a candidate cleanup failure refuses toward doctor without offering repair", async () => {
+		const fixture = await engineRepositoryFixture({
+			checkFailure: {
+				failureClass: "candidate_cleanup",
+				stage: "candidate_cleanup",
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "owned after\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "checking",
+			blocker: "completion_interrupted",
+			nextAction: { id: "run_doctor" },
+			validationFailure: {
+				failureClass: "candidate_cleanup",
+				stage: "candidate_cleanup",
+			},
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+	});
+
+	test("refuses completion when the owned file mode changes while the vault check runs", async () => {
+		const fixture = await engineRepositoryFixture({
+			async onCheck(clone) {
+				await chmod(join(clone, "owned.md"), 0o755);
+			},
+		});
+		const begun = await fixture.engine.begin({
+			event: "note_created",
+			requestedPaths: ["owned.md"],
+			remote: "origin",
+			leaseDurationMs: 60_000,
+		});
+		if (begun.status !== "admitted" || !begun.receiptId || !begun.transactionId) {
+			throw new Error("begin failed");
+		}
+		await writeFile(join(fixture.clone, "owned.md"), "validated content\n");
+		const capability = await fixture.store.readCapability(begun.receiptId, "owner");
+		expect(
+			await fixture.engine.complete({
+				transactionId: begun.transactionId,
+				remote: "origin",
+				capability,
+				summary: "docs(vault): record admitted note",
+			}),
+		).toMatchObject({
+			status: "refused",
+			phase: "repairable",
+			blocker: "completion_baseline_changed",
+			nextAction: { id: "run_repair" },
+		});
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.mainHead);
 	});
 
 	test("refuses completion when owned content changes while the vault check runs", async () => {
@@ -1031,6 +1241,8 @@ async function repositoryFixture(
 
 interface EngineFixtureOptions {
 	readonly checkPasses?: boolean;
+	/** Classified failure returned instead of running the simulated check. */
+	readonly checkFailure?: VaultGitValidationFailure;
 	/** Runs inside the injected vault check with the clone root. */
 	readonly onCheck?: (clone: string) => Promise<void>;
 	/** Optional per-request interception; "throw" simulates an adapter throw. */
@@ -1125,11 +1337,39 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 		repositoryIdentity: "fixture-vault",
 		activationAuthority: admittedActivationAuthorityForTest,
 		check: {
-			async run() {
+			async run(request) {
+				// Freeze bindings before the racing writer runs, mirroring the
+				// candidate module: checked bytes and modes are captured at setup.
+				const checkedPaths: VaultGitOwnedPathContentHash[] = [];
+				for (const entry of request.ownedPaths) {
+					const metadata = await lstat(join(clone, entry.path)).catch(
+						() => null,
+					);
+					if (metadata === null) {
+						checkedPaths.push({
+							path: entry.path,
+							contentHash: null,
+							fileMode: null,
+						});
+						continue;
+					}
+					checkedPaths.push({
+						path: entry.path,
+						contentHash: git(clone, "hash-object", "--", entry.path),
+						fileMode: (metadata.mode & 0o111) !== 0 ? "100755" : "100644",
+					});
+				}
 				await options.onCheck?.(clone);
+				if (options.checkFailure) {
+					return { status: "failed" as const, ...options.checkFailure };
+				}
 				return options.checkPasses === false
-					? { status: "failed" as const, reason: "check_failed" as const }
-					: { status: "passed" as const };
+					? {
+							status: "failed" as const,
+							failureClass: "vault_content" as const,
+							stage: "vault_check" as const,
+						}
+					: { status: "passed" as const, checkedPaths };
 			},
 		},
 	});

@@ -6,6 +6,7 @@ import type {
 	VaultGitStagedRecoveryPlan,
 	VaultGitStateSnapshot,
 	VaultGitUnrelatedStateSnapshot,
+	VaultGitValidationFailure,
 } from "./model.ts";
 
 /** Exact current checker implementation fingerprint. */
@@ -420,12 +421,17 @@ export type VaultGitOwnedPathInspection =
 			readonly reason: VaultGitOwnedPathRefusalReason;
 	  };
 
-/** One owned path bound to the exact worktree content hash observed pre-check. */
+/** One owned path bound to the exact frozen content observed at check time. */
 export interface VaultGitOwnedPathContentHash {
 	/** Repository-relative owned leaf path. */
 	readonly path: string;
-	/** Blob object id of current worktree content, or null when absent. */
+	/** Blob object id of the frozen content, or null when absent. */
 	readonly contentHash: string | null;
+	/**
+	 * Exact Git file mode of the frozen entry, or null when absent. Required
+	 * so no checker can bind content while silently bypassing the mode fence.
+	 */
+	readonly fileMode: "100644" | "100755" | null;
 }
 
 /** Read-only preparation outcome for one staged-only quarantine recovery. */
@@ -447,11 +453,12 @@ export interface VaultGitExactCommitRequest {
 	/** Exact unrelated state recorded at admission or the latest join. */
 	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
 	/**
-	 * Content hashes captured immediately before the vault-owned check ran.
-	 * When present, the frozen candidate blobs must equal these hashes so the
-	 * committed bytes are exactly the checked bytes.
+	 * Content hashes and Git file modes frozen inside the Validation
+	 * Candidate. The frozen candidate blobs must equal these bindings so the
+	 * committed bytes are exactly the checked bytes; a request without them
+	 * cannot commit.
 	 */
-	readonly expectedContentHashes?: readonly VaultGitOwnedPathContentHash[];
+	readonly expectedContentHashes: readonly VaultGitOwnedPathContentHash[];
 	/** Complete manager-owned commit message. */
 	readonly message: string;
 	/** Non-secret admitted actor identity. */
@@ -552,15 +559,35 @@ export interface VaultGitRepositoryPort {
 	) => Promise<VaultGitLocalCommitInspection>;
 }
 
-/** Result from the injected vault-owned validation command. */
-export type VaultGitCheckResult =
-	| { readonly status: "passed" }
-	| { readonly status: "failed"; readonly reason: "check_failed" | "timed_out" };
+export type {
+	VaultGitValidationFailure,
+	VaultGitValidationFailureClass,
+	VaultGitValidationStage,
+} from "./model.ts";
 
-/** Injected vault-owned check boundary run from the resolved vault root. */
+/** Exact Validation Candidate composition request for one completion check. */
+export interface VaultGitCheckRequest {
+	/** Exact local main object admitted at begin. */
+	readonly baselineHead: string;
+	/** Frozen admitted leaf set overlaid onto that baseline. */
+	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
+	/** Public transaction selector recorded as Candidate Residue ownership. */
+	readonly transactionId?: string;
+}
+
+/** Classified result from the injected vault-owned validation command. */
+export type VaultGitCheckResult =
+	| {
+			readonly status: "passed";
+			/** Frozen bindings the later commit must reproduce exactly. */
+			readonly checkedPaths: readonly VaultGitOwnedPathContentHash[];
+	  }
+	| ({ readonly status: "failed" } & VaultGitValidationFailure);
+
+/** Injected vault-owned check boundary run inside one Validation Candidate. */
 export interface VaultGitCheckPort {
-	/** Run the admitted repository's own deterministic check command. */
-	run(): Promise<VaultGitCheckResult>;
+	/** Run the vault's deterministic check against the exact frozen candidate. */
+	run(request: VaultGitCheckRequest): Promise<VaultGitCheckResult>;
 }
 
 /** Deterministic process, identity, randomness, and interruption boundary. */

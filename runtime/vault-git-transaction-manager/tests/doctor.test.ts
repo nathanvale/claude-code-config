@@ -174,7 +174,11 @@ describe("vault-git doctor", () => {
 			inspectOwnedPaths: () => Promise.reject(new Error("not used")),
 			hashOwnedPaths: (paths) =>
 				Promise.resolve(
-					paths.map((path) => ({ path, contentHash: "d".repeat(40) })),
+					paths.map((path) => ({
+						path,
+						contentHash: "d".repeat(40),
+						fileMode: "100644" as const,
+					})),
 				),
 			captureUnrelatedState: () =>
 				Promise.resolve({ statusHex: "", indexHex: "" }),

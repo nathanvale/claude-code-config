@@ -517,7 +517,7 @@ describe("transaction engine lifecycle", () => {
 		});
 		Object.assign(fixture.repository, {
 			hashOwnedPaths: async (paths: readonly string[]) =>
-				paths.map((path) => ({ path, contentHash: null })),
+				paths.map((path) => ({ path, contentHash: null, fileMode: null })),
 		} satisfies Pick<VaultGitRepositoryPort, "hashOwnedPaths">);
 		activationAdmitted = false;
 
@@ -849,7 +849,7 @@ describe("transaction engine lifecycle", () => {
 			async run() {
 				checkStarted.resolve();
 				await releaseCheck.promise;
-				return { status: "passed" };
+				return { status: "passed", checkedPaths: [] };
 			},
 		};
 		const fixture = await engineFixture(undefined, {
@@ -894,7 +894,7 @@ describe("transaction engine lifecycle", () => {
 				async run() {
 					checkStarted.resolve();
 					await releaseCheck.promise;
-					return { status: "passed" };
+					return { status: "passed", checkedPaths: [] };
 				},
 			},
 		});
@@ -926,7 +926,7 @@ describe("transaction engine lifecycle", () => {
 	test("revocation after local commit preserves commit evidence and prevents remote close", async () => {
 		let admitted = true;
 		const fixture = await engineFixture(undefined, {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 			activationAuthority: {
 				async validate() {
 					return admitted
@@ -969,7 +969,7 @@ describe("transaction engine lifecycle", () => {
 
 	test("takeover after local commit preserves commit evidence and prevents remote close", async () => {
 		const fixture = await engineFixture(undefined, {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 		});
 		fixture.repository.onCommit = async () => {
 			fixture.remote.generation = "d".repeat(40);
@@ -1198,7 +1198,7 @@ describe("transaction engine lifecycle", () => {
 	test("revocation during the pre-commit fence prevents the local commit", async () => {
 		let admitted = true;
 		const fixture = await engineFixture(undefined, {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 			activationAuthority: {
 				async validate() {
 					return admitted
@@ -1229,7 +1229,7 @@ describe("transaction engine lifecycle", () => {
 	test("revocation during the pre-close fence preserves the commit without publishing", async () => {
 		let admitted = true;
 		const fixture = await engineFixture(undefined, {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 			activationAuthority: {
 				async validate() {
 					return admitted
@@ -1259,7 +1259,7 @@ describe("transaction engine lifecycle", () => {
 
 	test("recovers a crash after local commit by re-driving one publication to closed", async () => {
 		const fixture = await engineFixture("after_local_commit", {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 		});
 		Object.assign(fixture.repository, { inspectLocalCommit: localCommitProbe(fixture.repository) });
 		Object.assign(fixture.remote, { reconcileAtomicClose: reconcileProbe(fixture.remote) });
@@ -1282,7 +1282,7 @@ describe("transaction engine lifecycle", () => {
 			runtime: new FakeRuntime(),
 			repositoryIdentity: "canonical-vault",
 			activationAuthority: persistedActivationAuthorityForTest(recoveredStore),
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 		});
 		const diagnosed = await recoveredEngine.doctor({ transactionId: begun.transactionId });
 		expect(diagnosed).toMatchObject({ state: "push_pending", repairAction: "retry-push" });
@@ -1294,7 +1294,7 @@ describe("transaction engine lifecycle", () => {
 
 	test("adopts an already-published release when a crash preempts the terminal receipt", async () => {
 		const fixture = await engineFixture("after_release_publication", {
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 		});
 		Object.assign(fixture.repository, { inspectLocalCommit: localCommitProbe(fixture.repository) });
 		Object.assign(fixture.remote, { reconcileAtomicClose: reconcileProbe(fixture.remote) });
@@ -1318,7 +1318,7 @@ describe("transaction engine lifecycle", () => {
 			runtime: new FakeRuntime(),
 			repositoryIdentity: "canonical-vault",
 			activationAuthority: persistedActivationAuthorityForTest(recoveredStore),
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 		});
 		const diagnosed = await recoveredEngine.doctor({ transactionId: begun.transactionId });
 		expect(diagnosed).toMatchObject({ state: "push_pending", repairAction: "close-verified" });
@@ -1411,7 +1411,7 @@ describe("transaction engine lifecycle", () => {
 			ledger: { git: remote, clock: runtime },
 			runtime,
 			repositoryIdentity: "canonical-vault",
-			check: { async run() { return { status: "passed" }; } },
+			check: { async run() { return { status: "passed", checkedPaths: [] }; } },
 			activationAuthority: {
 				async validate(scope) {
 					scopes.push(scope ?? "admission");
@@ -1525,7 +1525,11 @@ class FakeRepository implements VaultGitRepositoryPort {
 		return { statusHex: "", indexHex: "" };
 	}
 	async hashOwnedPaths(paths: readonly string[]) {
-		return paths.map((path) => ({ path, contentHash: "e".repeat(40) }));
+		return paths.map((path) => ({
+			path,
+			contentHash: "e".repeat(40),
+			fileMode: "100644" as const,
+		}));
 	}
 	async commitExact() {
 		this.commitExactCalls += 1;

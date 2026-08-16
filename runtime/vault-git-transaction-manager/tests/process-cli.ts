@@ -1,8 +1,11 @@
 #!/usr/bin/env bun
 
+import { homedir } from "node:os";
+
 import {
 	createVaultGitCliComposition,
 	main,
+	resolveDefaultActivationIdentity,
 } from "../src/cli.ts";
 import {
 	evaluateVaultGitPreparedEvidence,
@@ -134,6 +137,13 @@ const { identity: repositoryIdentity } = await resolveVaultRepositoryIdentity({
 	process: createNodeProcessPort(),
 	timeoutMs: 5_000,
 });
+// This wrapper builds composition input directly, so it must also resolve the
+// admitted activation identity the production default composition would have
+// resolved; the vault check fails closed without that single runtime binding.
+const activationIdentity = await resolveDefaultActivationIdentity(
+	process.env,
+	homedir(),
+);
 const baseInput = {
 	repositoryPath,
 	checkRepositoryPath: required("VAULT_GIT_CHECK_REPOSITORY_PATH"),
@@ -148,6 +158,9 @@ const baseInput = {
 					process.env.VAULT_GIT_TEST_LEASE_DURATION_MS,
 				),
 			}
+		: {}),
+	...(activationIdentity.status === "configured"
+		? { activationIdentity: activationIdentity.value }
 		: {}),
 	privateEntrypointPath: import.meta.path,
 } as const;

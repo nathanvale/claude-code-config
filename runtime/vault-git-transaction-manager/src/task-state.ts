@@ -8,6 +8,7 @@ import {
 	VAULT_GIT_RESULT_OUTCOMES,
 	VAULT_GIT_RETRY_SAFETIES,
 	VAULT_GIT_TRANSACTION_PHASES,
+	VAULT_GIT_VALIDATION_STAGES,
 	type VaultGitTaskState,
 	type VaultGitTaskStateInput,
 	type VaultGitTaskRepairAuthorization,
@@ -574,8 +575,19 @@ function isTaskTerminalResult(value: unknown): boolean {
 		return false;
 	}
 	const record = value as Record<string, unknown>;
+	const keys = Object.keys(record).length;
+	// Legacy persisted results carry exactly five keys; new writes may add one
+	// bounded validation-failure projection with its closed class/stage pairing.
+	if (keys !== 5 && keys !== 6) return false;
+	if (keys === 6) {
+		if (
+			!Object.hasOwn(record, "validationFailure") ||
+			!isTaskValidationFailure(record.validationFailure)
+		) {
+			return false;
+		}
+	}
 	return (
-		Object.keys(record).length === 5 &&
 		Object.hasOwn(record, "outcome") &&
 		Object.hasOwn(record, "phase") &&
 		Object.hasOwn(record, "changedState") &&
@@ -589,6 +601,33 @@ function isTaskTerminalResult(value: unknown): boolean {
 				VAULT_GIT_BLOCKER_IDS.includes(record.blocker as never))) &&
 		VAULT_GIT_RETRY_SAFETIES.includes(record.retrySafety as never)
 	);
+}
+
+/** Enforce the closed class/stage pairing so unknown pairs fail closed. */
+function isTaskValidationFailure(value: unknown): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).length !== 2 ||
+		!Object.hasOwn(record, "failureClass") ||
+		!Object.hasOwn(record, "stage")
+	) {
+		return false;
+	}
+	switch (record.failureClass) {
+		case "candidate_setup":
+			return record.stage === "candidate_setup";
+		case "vault_content":
+			return record.stage === "vault_check";
+		case "candidate_cleanup":
+			return record.stage === "candidate_cleanup";
+		case "stage_budget_exceeded":
+			return VAULT_GIT_VALIDATION_STAGES.includes(record.stage as never);
+		default:
+			return false;
+	}
 }
 
 function isExactIsoTimestamp(value: string): boolean {

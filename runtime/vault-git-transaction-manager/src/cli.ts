@@ -51,13 +51,17 @@ import {
 	createGitAdapter,
 	createGitRepositoryAdapter,
 	createNodeProcessPort,
-	createVaultOwnedCheckPort,
 } from "./git-adapter.ts";
+import { createVaultOwnedCheckPort } from "./validation-candidate.ts";
+import { resolveVaultGitInstalledRuntimeRunner } from "./installed-runtime-runner.ts";
 import {
 	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS,
 	createVaultGitActivationRestriction,
+	findVaultGitCheckScript,
+	findVaultGitDependencySurface,
 	isVaultGitNextActionId,
+	parseVaultGitManifest,
 	resolveVaultGitDoctorTerminalNextAction,
 	type VaultGitLifecycleResultPayload,
 	type VaultGitActivationConfigurationField,
@@ -176,6 +180,7 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"doctor-worker.ts",
 	"engine.ts",
 	"git-adapter.ts",
+	"installed-runtime-runner.ts",
 	"janitor.ts",
 	"model.ts",
 	"next-safe-action.ts",
@@ -190,6 +195,7 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"task-lifecycle.ts",
 	"task-store.ts",
 	"task-worker.ts",
+	"validation-candidate.ts",
 	"worker-policy.ts",
 ] as const;
 const CLI_FACADE_EXECUTABLE_SOURCE_NAMES = [
@@ -253,22 +259,6 @@ const DEFAULT_TIMEOUTS = {
 // and outcome reconciliation inside the private child. Its process budget must
 // span the whole ceremony rather than reuse one Git push deadline.
 const STALE_TAKEOVER_PRIVATE_LAUNCH_TIMEOUT_MS = 120_000;
-const LOCKFILE_REQUIRING_MANIFEST_FIELDS = [
-	"dependencies",
-	"devDependencies",
-	"optionalDependencies",
-	"peerDependencies",
-	"peerDependenciesMeta",
-	"trustedDependencies",
-	"bundledDependencies",
-	"bundleDependencies",
-	"patchedDependencies",
-	"overrides",
-	"resolutions",
-	"catalog",
-	"catalogs",
-	"workspaces",
-] as const;
 const RESOLVED_DEPENDENCY_MANIFEST_FIELDS = [
 	"dependencies",
 	"devDependencies",
@@ -528,11 +518,6 @@ async function createVaultGitCliCompositionFromSelection(
 		...(gitBinary ? { gitBinary } : {}),
 		...(admittedGitEnvironment ? { admittedGitEnvironment } : {}),
 	});
-	const check = createVaultOwnedCheckPort({
-		repositoryPath: checkRepositoryPath,
-		process: processPort,
-		timeoutMs: DEFAULT_TIMEOUTS.localMs,
-	});
 	const git = createGitAdapter({
 		repositoryPath,
 		process: processPort,
@@ -563,6 +548,16 @@ async function createVaultGitCliCompositionFromSelection(
 			}),
 			)
 			: selectedStore;
+	// The vault check runs only under the single admitted runtime binding in
+	// activationIdentity; absence fails closed inside the candidate module
+	// instead of falling back to the executing image or ambient PATH.
+	const check = createVaultOwnedCheckPort({
+		repositoryPath: checkRepositoryPath,
+		privateStateRoot: store.paths.repositoryRoot,
+		process: processPort,
+		runtimeBinaryPath: input.activationIdentity?.runtimeBinaryPath ?? null,
+		...(gitBinary ? { gitBinary } : {}),
+	});
 	const taskStore = createVaultGitTaskStore({
 		stateRoot: input.stateRoot,
 		repositoryId: store.repositoryId,
@@ -1480,8 +1475,9 @@ async function installedRuntimeMatches(
  * @param processPort - Bounded scrubbed subprocess boundary
  * @returns Fingerprint, check, registry, and exact repair operations
  * @throws When fingerprint source files are missing or unreadable, dependency
- * or workspace metadata has no valid bun.lock, or the package.json check
- * script does not name exactly one repository-relative entrypoint file
+ * or workspace metadata has no valid bun.lock, the package.json check
+ * script does not name exactly one repository-relative entrypoint file, or
+ * the admitted installed-runtime runner is unusable at execution time
  *
  * @example
  * ```typescript
@@ -1494,18 +1490,22 @@ export function createVaultCheckerPort(
 	processPort: VaultGitProcessPort,
 	runtimeBinaryPath: string = process.execPath,
 ): VaultGitCheckerPort {
-	const run = (args: readonly string[]) =>
-		processPort.run({
-			command: runtimeBinaryPath,
+	const run = async (args: readonly string[]) => {
+		const runner = await resolveVaultGitInstalledRuntimeRunner(
+			runtimeBinaryPath,
+		);
+		if (runner.status !== "resolved") {
+			throw new Error(`vault checker runtime unusable: ${runner.reason}`);
+		}
+		return processPort.run({
+			command: runner.command,
 			args,
 			cwd: repositoryPath,
-			env: {
-				LC_ALL: "C",
-				PATH: `${dirname(runtimeBinaryPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
-			},
+			env: runner.environment,
 			environmentMode: "isolated",
 			timeoutMs: DEFAULT_TIMEOUTS.localMs,
 		});
+	};
 	return {
 		async fingerprint() {
 			// KTD10 admission covers the executed surface: the entrypoint is the
@@ -1563,8 +1563,18 @@ export function createVaultCheckerPort(
 				dependencyBundleHash: dependencyHash.digest("hex"),
 			};
 		},
-		runCheck() {
-			return run(["run", "check", "--json"]);
+		async runCheck() {
+			// Never dispatch through `run check`: bun's run-script lane prepends
+			// the machine-shared /tmp bun-node shim ahead of the isolated PATH,
+			// handing nested `bun` to ambient bytes instead of the verified alias.
+			const manifest = parseVaultGitManifest(
+				await readFile(join(repositoryPath, "package.json")),
+			);
+			const script = findVaultGitCheckScript(manifest);
+			if (script === undefined) {
+				throw new Error("vault check script is unavailable");
+			}
+			return run(["exec", `${script} --json`]);
 		},
 		readRepairRegistry() {
 			return run(["run", "scripts/vault-repair-registry.ts"]);
@@ -1608,32 +1618,13 @@ async function readCheckerLockfileBinding(
 }
 
 function assertDependencyFreeManifest(manifestBytes: Uint8Array): void {
-	const manifest = parseManifest(manifestBytes);
-	const dependencySurface = LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
-		Object.hasOwn(manifest, field),
-	);
+	const manifest = parseVaultGitManifest(manifestBytes);
+	const dependencySurface = findVaultGitDependencySurface(manifest);
 	if (dependencySurface !== undefined) {
 		throw new Error(
 			`bun.lock is required when package.json declares ${dependencySurface}`,
 		);
 	}
-}
-
-function parseManifest(manifestBytes: Uint8Array): Record<string, unknown> {
-	let manifest: unknown;
-	try {
-		manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
-	} catch {
-		throw new Error("vault package manifest is not valid JSON");
-	}
-	if (
-		typeof manifest !== "object" ||
-		manifest === null ||
-		Array.isArray(manifest)
-	) {
-		throw new Error("vault package manifest is not an object");
-	}
-	return manifest as Record<string, unknown>;
 }
 
 function assertValidBunLockfile(
@@ -1659,10 +1650,8 @@ function assertValidBunLockfile(
 	) {
 		throw new Error("bun.lock contract is invalid");
 	}
-	const manifest = parseManifest(manifestBytes);
-	const dependencySurface = LOCKFILE_REQUIRING_MANIFEST_FIELDS.find((field) =>
-		Object.hasOwn(manifest, field),
-	);
+	const manifest = parseVaultGitManifest(manifestBytes);
+	const dependencySurface = findVaultGitDependencySurface(manifest);
 	const packages = record.packages;
 	if (
 		dependencySurface !== undefined &&
@@ -1736,21 +1725,8 @@ function assertDeclaredDependencyResolutions(
  * files appear, so an unresolvable checker surface can never be admitted.
  */
 function resolveCheckEntrypoint(manifestBytes: Uint8Array): string {
-	let manifest: unknown;
-	try {
-		manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
-	} catch {
-		throw new Error("vault package manifest is not valid JSON");
-	}
-	const scripts =
-		typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)
-			? (manifest as Record<string, unknown>).scripts
-			: undefined;
-	const script =
-		typeof scripts === "object" && scripts !== null && !Array.isArray(scripts)
-			? (scripts as Record<string, unknown>).check
-			: undefined;
-	if (typeof script !== "string" || script.trim().length === 0) {
+	const script = findVaultGitCheckScript(parseVaultGitManifest(manifestBytes));
+	if (script === undefined) {
 		throw new Error("vault check script is unavailable");
 	}
 	const candidates = [
@@ -3026,6 +3002,9 @@ async function executeBackgroundWorkerCompletion(
 					changedState: result.changedState,
 					blocker: result.blocker ?? null,
 					retrySafety: result.retrySafety,
+					...(result.validationFailure
+						? { validationFailure: result.validationFailure }
+						: {}),
 				},
 			},
 			fence: { expectedLaunchGeneration: launchGeneration },

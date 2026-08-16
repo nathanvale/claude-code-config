@@ -34,6 +34,7 @@ import { vaultGitActions } from "../src/command-contract.ts";
 import {
 	createVaultCheckerPort,
 	createVaultGitCliComposition,
+	VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
 } from "../src/cli.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
 import { resolveVaultRepositoryIdentity } from "../src/repository-identity.ts";
@@ -622,6 +623,21 @@ describe("vault-git catalog-driven process boundary", () => {
 				actor: "agent-hygiene",
 				host: "host-hygiene",
 				activationAuthority: admittedActivationAuthorityForTest,
+				// The hygiene completion runs the vault check, which refuses
+				// without an admitted runtime binding; bind the executing runtime
+				// explicitly like the legacy activation env lane does.
+				activationIdentity: {
+					hostId: "host-hygiene",
+					runtimeBinaryPath: process.execPath,
+					runtimeVersion: Bun.version,
+					executablePath: cliPath,
+					executableSourcePaths: VAULT_GIT_PRODUCTION_EXECUTABLE_SOURCE_PATHS,
+					gitBinaryPath: "/usr/bin/git",
+					sshBinaryPath: "/usr/bin/ssh",
+					sshIdentityFilePath: join(fixture.root, "writer"),
+					sshIdentityPublicKeyPath: join(fixture.root, "writer.pub"),
+					sshKnownHostsPath: join(fixture.root, "known_hosts"),
+				},
 			});
 			await admitActivationForTest(foreground.store);
 			await admitActivationForTest(hygiene.store);
@@ -1020,6 +1036,17 @@ async function createFixture(
 	const bare = join(root, "remote.git");
 	const clone = join(root, "vault");
 	const stateRoot = join(root, "state");
+	// The vault check refuses without an admitted runtime binding, so the
+	// fixture configures the legacy activation env lane explicitly; it binds
+	// the executing runtime instead of relying on any ambient fallback.
+	const publicKeyPath = join(root, "writer.pub");
+	const privateKeyPath = join(root, "writer");
+	const knownHostsPath = join(root, "known_hosts");
+	await writeFile(publicKeyPath, "ssh-ed25519 fixture-public-key\n");
+	await writeFile(privateKeyPath, "fixture-private-key\n", { mode: 0o600 });
+	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n", {
+		mode: 0o600,
+	});
 	git(root, ["init", "--bare", bare]);
 	git(root, ["clone", bare, clone]);
 	git(clone, ["switch", "-c", "main"]);
@@ -1115,6 +1142,9 @@ async function createFixture(
 		VAULT_GIT_ACTOR: "agent-a",
 		VAULT_GIT_HOST: "host-a",
 		VAULT_GIT_REMOTE: "origin",
+		VAULT_GIT_SSH_IDENTITY_FILE_PATH: privateKeyPath,
+		VAULT_GIT_SSH_PUBLIC_KEY_PATH: publicKeyPath,
+		VAULT_GIT_SSH_KNOWN_HOSTS_PATH: knownHostsPath,
 	};
 	const run = (args: readonly string[]) =>
 		runCliProcess({

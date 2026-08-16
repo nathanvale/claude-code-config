@@ -151,6 +151,62 @@ describe("durable task state", () => {
 		expect(refined.repairReentryBlocked).toBe(true);
 	});
 
+	test("accepts only the closed validation class/stage pairings and fails closed on unknown pairs", () => {
+		const record = (validationFailure: Record<string, unknown>) => ({
+			schemaVersion: 1,
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			revision: 7,
+			state: "unknown",
+			phase: "terminal",
+			recordedAt: "2026-08-12T11:30:00.000Z",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "push_pending",
+			launchGeneration: "launch_44444444444444444444444444444444",
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				outcome: "refused",
+				phase: "push_pending",
+				changedState: "partial",
+				blocker: "human_required",
+				retrySafety: "operator_required",
+				validationFailure,
+			},
+		});
+		const accepted = parseVaultGitTaskState(
+			record({ failureClass: "stage_budget_exceeded", stage: "candidate_setup" }),
+		);
+		expect(accepted.terminalResult?.validationFailure).toEqual({
+			failureClass: "stage_budget_exceeded",
+			stage: "candidate_setup",
+		});
+		expect(() =>
+			parseVaultGitTaskState(
+				record({ failureClass: "candidate_cleanup", stage: "candidate_setup" }),
+			),
+		).toThrow();
+		expect(() =>
+			parseVaultGitTaskState(
+				record({ failureClass: "vault_content", stage: "candidate_cleanup" }),
+			),
+		).toThrow();
+		expect(() =>
+			parseVaultGitTaskState(
+				record({
+					failureClass: "candidate_setup",
+					stage: "candidate_setup",
+					extra: 1,
+				}),
+			),
+		).toThrow();
+	});
+
 	test("advances observational progress and a safe terminal result without changing task identity", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",

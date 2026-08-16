@@ -27,8 +27,8 @@ import {
 	type VaultGitLedgerAppendResult,
 	type VaultGitLedgerReadResult,
 	type VaultGitAtomicCloseReconciliation,
-	type VaultGitCheckPort,
 	type VaultGitMainInspection,
+	type VaultGitOwnedPathContentHash,
 	type VaultGitOwnedPathInspection,
 	type VaultGitProcessPort,
 	type VaultGitProcessRequest,
@@ -51,54 +51,6 @@ function matchesUnrelatedState(
 	right: VaultGitUnrelatedStateSnapshot,
 ): boolean {
 	return left.statusHex === right.statusHex && left.indexHex === right.indexHex;
-}
-
-/** Options for the injected real-process vault-owned check. */
-export interface VaultGitCheckAdapterOptions {
-	/** Canonical vault root used as the checker working directory. */
-	readonly repositoryPath: string;
-	/** Injectable bounded subprocess runner. */
-	readonly process: VaultGitProcessPort;
-	/** Hard checker deadline. */
-	readonly timeoutMs: number;
-	/** Bun executable override. @defaultValue "bun" */
-	readonly bunBinary?: string;
-}
-
-/**
- * Create the real-process default for the injected vault-owned check port.
- *
- * @param options - Canonical root, process boundary, and hard deadline
- * @returns A shell-free `bun run check` invocation rooted at the vault
- * @throws Never; command and timeout failures are represented in the result
- *
- * @example
- * ```typescript
- * const check = createVaultOwnedCheckPort({
- *   repositoryPath: "/srv/vault",
- *   process: createNodeProcessPort(),
- *   timeoutMs: 60_000,
- * })
- * ```
- */
-export function createVaultOwnedCheckPort(
-	options: VaultGitCheckAdapterOptions,
-): VaultGitCheckPort {
-	return {
-		async run() {
-			const checked = await options.process.run({
-				command: options.bunBinary ?? "bun",
-				args: ["run", "check"],
-				cwd: options.repositoryPath,
-				env: { LC_ALL: "C" },
-				timeoutMs: options.timeoutMs,
-			});
-			if (checked.timedOut) return { status: "failed", reason: "timed_out" };
-			return checked.exitCode === 0
-				? { status: "passed" }
-				: { status: "failed", reason: "check_failed" };
-		},
-	};
 }
 
 /**
@@ -849,15 +801,15 @@ export function createGitRepositoryAdapter(
 
 	const hashOwnedPaths = async (
 		ownedPaths: readonly string[],
-	): Promise<readonly { path: string; contentHash: string | null }[]> => {
-		const hashes: { path: string; contentHash: string | null }[] = [];
+	): Promise<readonly VaultGitOwnedPathContentHash[]> => {
+		const hashes: VaultGitOwnedPathContentHash[] = [];
 		for (const path of ownedPaths) {
 			const metadata = await lstat(resolve(options.repositoryPath, path)).catch(
 				(error: unknown) =>
 					isMissingFilesystemEntry(error) ? null : Promise.reject(error),
 			);
 			if (metadata === null) {
-				hashes.push({ path, contentHash: null });
+				hashes.push({ path, contentHash: null, fileMode: null });
 				continue;
 			}
 			// hash-object applies the same attribute filters as `git add`, so the
@@ -869,6 +821,7 @@ export function createGitRepositoryAdapter(
 			hashes.push({
 				path,
 				contentHash: requireObjectId(hashed.stdout, "owned path content"),
+				fileMode: (metadata.mode & 0o111) !== 0 ? "100755" : "100644",
 			});
 		}
 		return hashes;
@@ -1511,6 +1464,12 @@ export function createGitRepositoryAdapter(
 		},
 
 		async commitExact(request) {
+			// The type requires the fence, but a JS caller can still omit it;
+			// absent checked bytes and modes must refuse, never publish
+			// unchecked state.
+			if (!request.expectedContentHashes) {
+				return { status: "refused", reason: "checked_content_changed" };
+			}
 			const localHead = await runGit([
 				"rev-parse",
 				"--verify",
@@ -1593,24 +1552,23 @@ export function createGitRepositoryAdapter(
 					return { status: "refused", reason: "candidate_mismatch" };
 				}
 				const treeId = requireObjectId(treeResult.stdout, "candidate tree");
-				if (request.expectedContentHashes) {
-					// Bind the checked bytes to the committed blobs: the frozen tree
-					// must carry exactly the content hashed before the vault check ran.
-					const expectedByPath = new Map(
-						request.expectedContentHashes.map((entry) => [
-							entry.path,
-							entry.contentHash,
-						]),
-					);
-					for (const ownedPath of request.ownedPaths) {
-						const frozen = await readTreeEntry(runGit, treeId, ownedPath.path);
-						const expected = expectedByPath.get(ownedPath.path);
-						if (
-							!expectedByPath.has(ownedPath.path) ||
-							(frozen?.objectId ?? null) !== (expected ?? null)
-						) {
-							return { status: "refused", reason: "checked_content_changed" };
-						}
+				// Bind the checked bytes and Git file modes to the committed tree:
+				// the frozen tree must carry exactly the content and mode captured
+				// inside the validation candidate, so a concurrent write or chmod
+				// between check and commit refuses instead of publishing unchecked
+				// state.
+				const expectedByPath = new Map(
+					request.expectedContentHashes.map((entry) => [entry.path, entry]),
+				);
+				for (const ownedPath of request.ownedPaths) {
+					const frozen = await readTreeEntry(runGit, treeId, ownedPath.path);
+					const expected = expectedByPath.get(ownedPath.path);
+					if (
+						expected === undefined ||
+						(frozen?.objectId ?? null) !== expected.contentHash ||
+						(frozen?.mode ?? null) !== expected.fileMode
+					) {
+						return { status: "refused", reason: "checked_content_changed" };
 					}
 				}
 				const changed = await runGit([
@@ -1945,7 +1903,12 @@ export function createNodeProcessPort(): VaultGitProcessPort {
 
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 
-const CONTROLLED_GIT_ENVIRONMENT = {
+/**
+ * Hook-free, prompt-free, config-isolated environment for spawned Git.
+ * Shared with the Validation Candidate module's internal Git invocations.
+ * @internal
+ */
+export const CONTROLLED_GIT_ENVIRONMENT = {
 	GIT_CONFIG_COUNT: "2",
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_KEY_0: "core.hooksPath",

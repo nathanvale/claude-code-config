@@ -59,3 +59,19 @@ _Avoid_: timeout, retry delay, grace period
 **Durable Exclusive Publish**:
 The crash-safe sequence that publishes bytes to a path so a torn write is never observed: staged temp, file sync, exclusive link or overwrite, directory sync. The primitive owns the ordering only; the caller supplies the race policy for a pre-existing destination (refuse, or yield as the losing writer).
 _Avoid_: atomic write, save, commit
+
+**Validation Candidate**:
+One private disposable checkout composed from the exact Admitted Baseline plus frozen Owned Path bytes and Git file modes, held beneath the owner-private state root, where the vault's own check runs under the activation-bound runtime in an isolated scrubbed environment. The frozen bindings gate the later commit.
+_Avoid_: temp clone, scratch worktree, checking the live worktree
+
+**Validation Failure Class**:
+Closed public classification of one Validation Candidate run: `candidate_setup`, `vault_content`, `stage_budget_exceeded` with its stage, or `candidate_cleanup`. Only `vault_content` may offer Deterministic Repair; cleanup owns the class whenever it cannot settle or remove its record.
+_Avoid_: check failed, generic timeout, collapsed error code
+
+**Validation Stage Budget**:
+One product-owned monotonic duration budget per candidate stage (`candidate_setup`, `vault_check`, `candidate_cleanup`) that bounds even held-open work. No caller timeout flags; cleanup always draws a fresh budget after earlier stages exhaust theirs.
+_Avoid_: caller timeout flag, shared deadline
+
+**Candidate Residue**:
+Bounded owner-private record durably published before its candidate is built, binding candidate path, owning transaction, stage, and age so an abandoned candidate is never ownerless. Later Janitor routing may remove residue only after age and active-ownership checks.
+_Avoid_: orphaned clone, leftover temp directory, diagnostic log
