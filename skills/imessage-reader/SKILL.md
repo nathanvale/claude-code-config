@@ -43,10 +43,13 @@ inside this skill.
    Keep it foreground and non-persistent. Stop when the bound is reached, the
    user asks, or the process reports an unknown state; never leave it running in
    the background.
-7. For a send, show the exact recipient or stable chat, exact text, attachment,
+7. Render each proposed reply as a fenced `text` block so Codex exposes an
+   editable text block. Put only the exact message body inside the fence; keep
+   recipient, attachment, service, and explanation outside it.
+8. For a send, show the exact recipient or stable chat, exact text, attachment,
    and service. Obtain fresh confirmation immediately before running `imsg
    send`.
-8. After a send, report the returned acknowledgment honestly. A `sent` result
+9. After a send, report the returned acknowledgment honestly. A `sent` result
    proves Messages accepted the request, not that the recipient read or received
    it. If the result is unknown, inspect the exact resolved target once using a
    narrow time window and result limit. Never broaden the inspection. If that
