@@ -57,7 +57,20 @@ describe("row 10: takeover fences the prior writer", () => {
 
 		const refused = await staleWriter.trigger();
 		expect(refused.exitCode).toBe(1);
-		expect(parseCliProcessJson(refused)).toMatchObject({
+		const refusedEnvelope = parseCliProcessJson(refused) as {
+			status: string;
+			error: { code: string };
+			data: {
+				next_action?: {
+					id?: string;
+					kind?: string;
+					action_id?: string;
+					argv?: string[];
+				};
+			};
+			continuation?: { next_action_id?: string };
+		};
+		expect(refusedEnvelope).toMatchObject({
 			status: "error",
 			error: { code: "host_quarantined" },
 			data: {
@@ -67,6 +80,23 @@ describe("row 10: takeover fences the prior writer", () => {
 				changed_state: "none",
 			},
 			continuation: { next_action_id: "reconcile_quarantine" },
+		});
+		// Regression: a superseded engine result omits its own transaction id, but the
+		// invocation carried the exact one. The reconcile_quarantine continuation must be
+		// an executable invoke whose argv binds that invocation transaction id — proving
+		// the value.transactionId ?? invocationTransactionId fallback, not a fail-closed
+		// none.
+		expect(refusedEnvelope.data.next_action).toMatchObject({
+			id: "reconcile_quarantine",
+			kind: "invoke",
+			action_id: "reconcile_quarantine",
+			argv: [
+				"repair",
+				"reconcile-quarantine",
+				"--transaction-id",
+				transactionId,
+				"--json",
+			],
 		});
 		assertRefsUnchanged(refsAfterTakeover, fixture.snapshot());
 		expect(await readFile(join(fixture.clone, "notes/event.md"), "hex")).toBe(
@@ -111,7 +141,13 @@ describe("row 10: takeover fences the prior writer", () => {
 			"--json",
 		]);
 		expect(reconciled.exitCode).toBe(0);
-		expect(parseCliProcessJson(reconciled)).toMatchObject({
+		const reconciledEnvelope = parseCliProcessJson(reconciled) as {
+			status: string;
+			data: { next_action?: { id?: string; kind?: string; action_id?: string } };
+			continuation?: unknown;
+			runtime_actions?: unknown;
+		};
+		expect(reconciledEnvelope).toMatchObject({
 			status: "ok",
 			data: {
 				outcome: "repaired",
@@ -119,8 +155,17 @@ describe("row 10: takeover fences the prior writer", () => {
 				phase: "closed",
 				changed_state: "local",
 			},
-			continuation: { next_action_id: "none" },
 		});
+		// A settled reconciliation is a legitimate terminal none: the union carries
+		// id/action_id "none", and a legitimate terminal stop omits the continuation and
+		// any runtime action entirely.
+		expect(reconciledEnvelope.data.next_action).toMatchObject({
+			id: "none",
+			kind: "none",
+			action_id: "none",
+		});
+		expect(reconciledEnvelope.continuation).toBeUndefined();
+		expect(reconciledEnvelope.runtime_actions).toBeUndefined();
 		assertRefsUnchanged(settled, fixture.snapshot());
 
 		const store = createReceiptStore({

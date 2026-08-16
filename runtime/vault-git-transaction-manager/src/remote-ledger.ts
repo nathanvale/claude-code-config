@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
 	VAULT_GIT_EVENT_TYPES,
 	VAULT_GIT_LEDGER_REF,
+	isVaultGitOwnedPathLeaf,
 	type VaultGitBlockerId,
 	type VaultGitEventType,
 	type VaultGitReceipt,
@@ -927,19 +928,7 @@ function isOneLine(value: unknown): value is string {
 	);
 }
 
-function isOwnedPath(value: unknown): value is string {
-	if (typeof value !== "string" || value.length === 0 || value.startsWith("/"))
-		return false;
-	const segments = value.split("/");
-	if (segments[0] === ".git") return false;
-	return segments.every(
-		(segment) =>
-			segment.length > 0 &&
-			segment !== "." &&
-			segment !== ".." &&
-			segment.toLowerCase() !== ".git",
-	);
-}
+const isOwnedPath = isVaultGitOwnedPathLeaf;
 
 function isIsoDate(value: unknown): value is string {
 	return (

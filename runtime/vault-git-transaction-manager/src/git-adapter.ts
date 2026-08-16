@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
 	VAULT_GIT_LEDGER_REF,
+	isVaultGitOwnedPathLeaf,
 	type VaultGitOwnedPathReceipt,
 	type VaultGitStagedRecoveryEntry,
 	type VaultGitStagedRecoveryPlan,
@@ -2269,29 +2270,15 @@ async function isSafeOwnedPath(
 	repositoryPath: string,
 	path: string,
 ): Promise<boolean> {
-	if (
-		path.length === 0 ||
-		isAbsolute(path) ||
-		/[\0\r]/.test(path) ||
-		path.endsWith("/")
-	) {
+	// Share the pure Owned Path leaf rule (model.ts) with receipt custody and the
+	// remote ledger, then compose the on-disk realpath containment check that only
+	// this adapter can perform. A nested or differently-cased `.git` admitted here
+	// would be rejected downstream, escaping begin() as a raw throw instead of an
+	// owned_path_not_admitted refusal.
+	if (!isVaultGitOwnedPathLeaf(path)) {
 		return false;
 	}
 	const segments = path.split("/");
-	// Keep at least as strict as isOwnedPath in store.ts: a nested or
-	// differently-cased `.git` admitted here would be rejected there, escaping
-	// begin() as a raw throw instead of an owned_path_not_admitted refusal.
-	if (
-		segments.some(
-			(segment) =>
-				segment.length === 0 ||
-				segment === "." ||
-				segment === ".." ||
-				segment.toLowerCase() === ".git",
-		)
-	) {
-		return false;
-	}
 	const root = await realpath(repositoryPath);
 	const candidate = resolve(root, path);
 	const fromRoot = relative(root, candidate);

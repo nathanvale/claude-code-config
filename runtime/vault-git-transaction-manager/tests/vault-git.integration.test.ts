@@ -401,11 +401,34 @@ describe("vault-git catalog-driven process boundary", () => {
 			const result = await fixture.run(args);
 			expect(result.exitCode).toBe(2);
 			expect(result.stderr).toBe("");
-			expect(parseCliProcessJson(result)).toMatchObject({
+			const envelope = parseCliProcessJson(result) as {
+				status: string;
+				error: { code: string };
+				data: { next_action: { id: string; kind: string; action_id: string } };
+				continuation?: {
+					requires_operator?: boolean;
+					constraints?: { id: string }[];
+					next_action_id?: string;
+				};
+				runtime_actions?: unknown[];
+			};
+			expect(envelope).toMatchObject({
 				status: "error",
 				error: { code: "invalid_usage" },
-				continuation: { next_action_id: "change_input" },
 			});
+			// A generic usage failure keeps the compat id change_input but fails closed:
+			// terminal none union, no runtime action, operator-review continuation.
+			expect(envelope.data.next_action).toMatchObject({
+				id: "change_input",
+				kind: "none",
+				action_id: "none",
+			});
+			expect(envelope.continuation?.next_action_id).toBeUndefined();
+			expect(envelope.continuation?.requires_operator).toBe(true);
+			expect((envelope.continuation?.constraints ?? []).map((c) => c.id)).toContain(
+				"continuation_unavailable",
+			);
+			expect(envelope.runtime_actions).toBeUndefined();
 		}
 	});
 
@@ -457,54 +480,78 @@ describe("vault-git catalog-driven process boundary", () => {
 		);
 	}, 60_000);
 
+	// An un-admitted runtime routes its guidance through the review_prepared
+	// restriction. review_prepared is a command handoff that needs an evidence
+	// reference the restriction cannot carry, so the authoritative union fails closed:
+	// the compat id stays review_prepared, the union is a terminal none, the
+	// continuation requires operator review with a continuation_unavailable constraint
+	// (also a blocker alongside activation_blocked), and no runtime action is emitted.
+	// The restriction cause (admission_missing) explains the stop.
+	function assertReviewPreparedRestriction(
+		envelope: unknown,
+		outcome: "read_only" | "refused",
+	): void {
+		const e = envelope as {
+			data?: {
+				outcome?: string;
+				changed_state?: string;
+				blockers?: string[];
+				next_action?: { id?: string; kind?: string; action_id?: string };
+				activation_restriction?: {
+					cause?: { id?: string };
+					next_action?: { id?: string; kind?: string; action_id?: string };
+				};
+			};
+			continuation?: {
+				requires_operator?: boolean;
+				constraints?: { id?: string }[];
+				next_action_id?: string;
+			};
+			runtime_actions?: unknown[];
+		};
+		expect(e.data?.outcome).toBe(outcome);
+		expect(e.data?.blockers).toContain("activation_blocked");
+		expect(e.data?.blockers).toContain("continuation_unavailable");
+		// Compat id preserved; authoritative union fails closed.
+		expect(e.data?.next_action).toMatchObject({
+			id: "review_prepared",
+			kind: "none",
+			action_id: "none",
+		});
+		expect(e.data?.activation_restriction?.cause?.id).toBe("admission_missing");
+		expect(e.data?.activation_restriction?.next_action).toMatchObject({
+			id: "review_prepared",
+			kind: "none",
+			action_id: "none",
+		});
+		expect(e.continuation?.next_action_id).toBeUndefined();
+		expect(e.continuation?.requires_operator).toBe(true);
+		expect((e.continuation?.constraints ?? []).map((c) => c.id)).toContain(
+			"continuation_unavailable",
+		);
+		expect(e.runtime_actions).toBeUndefined();
+	}
+
 	test("un-admitted runtime refuses begin, surfaces the dashboard blocker, and keeps janitor zero-commit", async () => {
 		const fixture = await createFixture({ admitActivation: false });
 		const dashboard = await fixture.run(["--json"]);
 		expect(dashboard.exitCode).toBe(0);
-		expect(parseCliProcessJson(dashboard)).toMatchObject({
-			status: "ok",
-			data: {
-				outcome: "read_only",
-				blockers: ["activation_blocked"],
-				next_action: { id: "review_prepared" },
-				activation_restriction: {
-					cause: { id: "admission_missing" },
-					next_action: { id: "review_prepared" },
-				},
-			},
-		});
+		assertReviewPreparedRestriction(parseCliProcessJson(dashboard), "read_only");
 		const begun = await fixture.begin("notes/a.md");
 		expect(begun.exitCode).toBe(1);
-		expect(parseCliProcessJson(begun)).toMatchObject({
-			status: "error",
-			error: { code: "activation_blocked" },
-			data: {
-				outcome: "refused",
-				changed_state: "none",
-				blockers: ["activation_blocked"],
-				next_action: { id: "review_prepared" },
-				activation_restriction: {
-					cause: { id: "admission_missing" },
-					next_action: { id: "review_prepared" },
-				},
-			},
-		});
+		const begunEnvelope = parseCliProcessJson(begun) as { error?: { code?: string } };
+		expect(begunEnvelope.error?.code).toBe("activation_blocked");
+		assertReviewPreparedRestriction(begunEnvelope, "refused");
 		const before = Number(
 			fixture.gitBare(["rev-list", "--count", "refs/heads/main"]),
 		);
 		const janitor = await fixture.run(["janitor", "--json"]);
 		expect(janitor.exitCode).toBe(1);
-		expect(parseCliProcessJson(janitor)).toMatchObject({
-			status: "error",
-			error: { code: "activation_blocked" },
-			data: {
-				blockers: ["activation_blocked"],
-				next_action: { id: "review_prepared" },
-				activation_restriction: {
-					cause: { id: "admission_missing" },
-				},
-			},
-		});
+		const janitorEnvelope = parseCliProcessJson(janitor) as {
+			error?: { code?: string };
+		};
+		expect(janitorEnvelope.error?.code).toBe("activation_blocked");
+		assertReviewPreparedRestriction(janitorEnvelope, "refused");
 		expect(
 			Number(fixture.gitBare(["rev-list", "--count", "refs/heads/main"])),
 		).toBe(before);
@@ -810,15 +857,74 @@ function scenario(
 			// stations too; this is a no-op when the fixture holds no receipt.
 			await fixture.assertCapabilityAbsent(result);
 			if (station.expectedActionId) {
-				expect(
-					(envelope as {
-						continuation?: { next_action_id?: string };
-					}).continuation?.next_action_id,
-				).toBe(station.expectedActionId);
+				assertStationNextAction(station, envelope);
 			}
 			return buildStationEvidence(station, result, envelope);
 		},
 	};
+}
+
+/**
+ * Assert a station's next-action surface against its declared expectations, proving
+ * the three-way continuation contract. The compat id is always expectedActionId.
+ *  - Runnable (expectedContinuationId present): the union is runnable and the facade
+ *    continuation references expectedContinuationId.
+ *  - Legitimate terminal (expectedContinuationId absent, union kind none with
+ *    action_id === id === expectedActionId, e.g. continue_outer_transaction): no
+ *    runtime action, no continuation, and no fail-closed blocker.
+ *  - Unavailable (expectedContinuationId absent, union kind none with action_id
+ *    "none" while id is the real compat id): no runtime action, an operator-review
+ *    continuation with a continuation_unavailable constraint, and the same blocker on
+ *    lifecycle-result envelopes (activation-result envelopes carry no blockers array).
+ */
+function assertStationNextAction(
+	station: BranchStation,
+	envelope: StationRuntimeEnvelope,
+): void {
+	const carrier = envelope as StationRuntimeEnvelope & {
+		readonly continuation?: {
+			readonly next_action_id?: string;
+			readonly requires_operator?: boolean;
+			readonly constraints?: readonly { readonly id?: string }[];
+		};
+		readonly runtime_actions?: readonly unknown[];
+		readonly data?: {
+			readonly next_action?: { readonly id?: string; readonly kind?: string; readonly action_id?: string };
+			readonly blockers?: readonly string[];
+		};
+	};
+	const payloadAction = carrier.data?.next_action;
+	// The compatibility id is always the declared action id.
+	expect(payloadAction?.id).toBe(station.expectedActionId);
+	if (station.expectedContinuationId !== undefined) {
+		expect(payloadAction?.kind).not.toBe("none");
+		expect(carrier.continuation?.next_action_id).toBe(
+			station.expectedContinuationId,
+		);
+		return;
+	}
+	// No expectedContinuationId: the union is terminal none — distinguish a legitimate
+	// terminal from a fail-closed unavailable by its action_id.
+	expect(payloadAction?.kind).toBe("none");
+	expect(carrier.runtime_actions).toBeUndefined();
+	if (payloadAction?.action_id === station.expectedActionId) {
+		// (A) Legitimate terminal: nothing to run, nothing to escalate.
+		expect(carrier.continuation).toBeUndefined();
+		if (carrier.data?.blockers !== undefined) {
+			expect(carrier.data.blockers).not.toContain("continuation_unavailable");
+		}
+	} else {
+		// (B) Fail-closed unavailable: the semantic id could not resolve.
+		expect(payloadAction?.action_id).toBe("none");
+		expect(carrier.continuation?.next_action_id).toBeUndefined();
+		expect(carrier.continuation?.requires_operator).toBe(true);
+		expect(
+			(carrier.continuation?.constraints ?? []).map((c) => c.id),
+		).toContain("continuation_unavailable");
+		if (carrier.data?.blockers !== undefined) {
+			expect(carrier.data.blockers).toContain("continuation_unavailable");
+		}
+	}
 }
 
 function assertProcessChannels(

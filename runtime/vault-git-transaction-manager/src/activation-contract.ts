@@ -1,5 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import { EVIDENCE_ID, type VaultGitNextAction } from "./model.ts";
+import { projectVaultGitNextAction } from "./next-safe-action.ts";
+
 /** Private prepared-evidence contract identifier. */
 export const VAULT_GIT_PREPARED_EVIDENCE_CONTRACT_ID =
 	"vault-git.prepared-evidence" as const;
@@ -9,7 +12,7 @@ export const VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID =
 	"vault-git.activation-result" as const;
 
 /** Public activation-result schema version. */
-export const VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION = "2" as const;
+export const VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION = "3" as const;
 
 /** Display-only freshness window for prepared evidence. */
 export const VAULT_GIT_PREPARED_DISPLAY_FRESHNESS_MS = 10 * 60 * 1_000;
@@ -22,8 +25,12 @@ const OPAQUE_IDENTITY = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*:v[1-9]\d*:[0-9a-
 /** Exact git object-id shape: 40-hex sha1 or 64-hex sha256, nothing between. */
 export const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-/** Prepared-evidence identifier shape shared by the store validators. */
-export const EVIDENCE_ID = /^vault-git:prepared:v2:[0-9a-f]{64}$/;
+/**
+ * Prepared-evidence identifier shape shared by the store validators. Owned by the
+ * model leaf so the Next Safe Action projector can reference it without a cycle;
+ * re-exported here to keep this module's public surface stable.
+ */
+export { EVIDENCE_ID } from "./model.ts";
 
 /** Exact pinned checker closure captured by one preparation. */
 export interface VaultGitPreparedCheckerClosure {
@@ -79,7 +86,7 @@ export interface VaultGitPreparedEvidenceV2
 }
 
 /** Sanitized prepared or stale projection for activation consumers. */
-export interface VaultGitPreparedActivationResultV2 {
+export interface VaultGitPreparedActivationResultV3 {
 	/** Stable public result contract. */
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	/** Public result schema. */
@@ -98,15 +105,12 @@ export interface VaultGitPreparedActivationResultV2 {
 	readonly captured_at: string;
 	/** Exact instant when display freshness expires. */
 	readonly display_fresh_until: string;
-	/** One safe continuation. */
-	readonly next_action: {
-		readonly id: "review_prepared" | "prepare_fresh";
-		readonly summary: string;
-	};
+	/** One safe continuation as the authoritative Next Safe Action union. */
+	readonly next_action: VaultGitNextAction;
 }
 
 /** Sanitized fail-closed projection for legacy, unknown, or tampered evidence. */
-export interface VaultGitInvalidPreparedActivationResultV2 {
+export interface VaultGitInvalidPreparedActivationResultV3 {
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	readonly schema_version: typeof VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION;
 	readonly status: "invalidated";
@@ -116,16 +120,14 @@ export interface VaultGitInvalidPreparedActivationResultV2 {
 	readonly evidence_reference: null;
 	readonly captured_at: null;
 	readonly display_fresh_until: null;
-	readonly next_action: {
-		readonly id: "prepare_fresh";
-		readonly summary: string;
-	};
+	/** One safe continuation as the authoritative Next Safe Action union. */
+	readonly next_action: VaultGitNextAction;
 }
 
 /** Public prepared-evidence activation-result variants. */
-export type VaultGitPreparedEvidenceActivationResultV2 =
-	| VaultGitPreparedActivationResultV2
-	| VaultGitInvalidPreparedActivationResultV2;
+export type VaultGitPreparedEvidenceActivationResultV3 =
+	| VaultGitPreparedActivationResultV3
+	| VaultGitInvalidPreparedActivationResultV3;
 
 /**
  * Create immutable V2 prepared evidence from exact captured bindings.
@@ -177,7 +179,7 @@ export function parseVaultGitPreparedEvidence(
 export function evaluateVaultGitPreparedEvidence(
 	value: unknown,
 	now: string,
-): VaultGitPreparedEvidenceActivationResultV2 {
+): VaultGitPreparedEvidenceActivationResultV3 {
 	isoTime(now);
 	try {
 		return projectVaultGitPreparedActivationResult(
@@ -209,7 +211,7 @@ export function evaluateVaultGitPreparedEvidence(
 export function projectVaultGitPreparedActivationResult(
 	evidence: VaultGitPreparedEvidenceV2,
 	now: string,
-): VaultGitPreparedActivationResultV2 {
+): VaultGitPreparedActivationResultV3 {
 	const parsed = parseVaultGitPreparedEvidence(evidence);
 	const observedAt = isoTime(now);
 	const capturedAt = isoTime(parsed.capturedAt);
@@ -230,15 +232,16 @@ export function projectVaultGitPreparedActivationResult(
 		display_fresh_until: new Date(freshUntil).toISOString(),
 		next_action: Object.freeze(
 			fresh
-				? {
-						id: "review_prepared" as const,
+				? projectVaultGitNextAction({
+						id: "review_prepared",
 						summary:
 							"Review the prepared evidence without granting write permission.",
-					}
-				: {
-						id: "prepare_fresh" as const,
+						selectors: { evidence_reference: parsed.evidenceId },
+					})
+				: projectVaultGitNextAction({
+						id: "prepare_fresh",
 						summary: "Prepare fresh evidence before human review.",
-					},
+					}),
 		),
 	});
 }
@@ -269,7 +272,7 @@ function derivePreparedEvidenceId(input: VaultGitPreparedEvidenceInput): string 
 	return `vault-git:prepared:v2:${digest}`;
 }
 
-function invalidPreparedEvidenceResult(): VaultGitInvalidPreparedActivationResultV2 {
+function invalidPreparedEvidenceResult(): VaultGitInvalidPreparedActivationResultV3 {
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 		schema_version: VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
@@ -280,10 +283,12 @@ function invalidPreparedEvidenceResult(): VaultGitInvalidPreparedActivationResul
 		evidence_reference: null,
 		captured_at: null,
 		display_fresh_until: null,
-		next_action: Object.freeze({
-			id: "prepare_fresh",
-			summary: "Prepare fresh V2 evidence before human review.",
-		}),
+		next_action: Object.freeze(
+			projectVaultGitNextAction({
+				id: "prepare_fresh",
+				summary: "Prepare fresh V2 evidence before human review.",
+			}),
+		),
 	});
 }
 

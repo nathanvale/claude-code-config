@@ -123,11 +123,61 @@ describe("Host policy, activation, and hostile inputs", () => {
 		];
 		for (const args of writes) {
 			const refused = await fixture.run(args);
-			expect(parseCliProcessJson(refused)).toMatchObject({
+			const envelope = parseCliProcessJson(refused) as {
+				status: string;
+				error: { code: string };
+				data: {
+					changed_state?: string;
+					blockers?: string[];
+					next_action?: { id?: string; kind?: string; action_id?: string };
+					activation_restriction?: {
+						cause?: { id?: string };
+						next_action?: { id?: string; kind?: string; action_id?: string };
+					};
+				};
+				continuation?: {
+					requires_operator?: boolean;
+					constraints?: { id?: string }[];
+					next_action_id?: string;
+				};
+				runtime_actions?: unknown[];
+			};
+			expect(envelope, args.join(" ")).toMatchObject({
 				status: "error",
 				error: { code: "activation_blocked" },
-				data: { changed_state: "none", blockers: ["activation_blocked"] },
+				data: { changed_state: "none" },
 			});
+			expect(envelope.data.blockers, args.join(" ")).toContain(
+				"activation_blocked",
+			);
+			// The refusal's guidance routes through the review_prepared restriction. That
+			// command handoff needs an evidence reference the restriction cannot carry,
+			// so the authoritative U1 continuation fails closed: compat id review_prepared
+			// preserved, union kind none / action_id none, continuation requires operator
+			// review with a continuation_unavailable constraint (and blocker), and no
+			// runtime action. The restriction cause (admission_missing) explains the stop.
+			expect(envelope.data.next_action, args.join(" ")).toMatchObject({
+				id: "review_prepared",
+				kind: "none",
+				action_id: "none",
+			});
+			expect(envelope.data.activation_restriction?.cause?.id, args.join(" ")).toBe(
+				"admission_missing",
+			);
+			expect(
+				envelope.data.activation_restriction?.next_action,
+				args.join(" "),
+			).toMatchObject({ id: "review_prepared", kind: "none", action_id: "none" });
+			expect(envelope.data.blockers, args.join(" ")).toContain(
+				"continuation_unavailable",
+			);
+			expect(envelope.continuation?.next_action_id, args.join(" ")).toBeUndefined();
+			expect(envelope.continuation?.requires_operator, args.join(" ")).toBe(true);
+			expect(
+				(envelope.continuation?.constraints ?? []).map((c) => c.id),
+				args.join(" "),
+			).toContain("continuation_unavailable");
+			expect(envelope.runtime_actions, args.join(" ")).toBeUndefined();
 		}
 		expect(fixture.remoteRefs()).toEqual(refsBefore);
 		expect(fixture.git("status", "--porcelain=v2", "-z")).toBe(localBefore);

@@ -35,7 +35,7 @@ describe("Vault Git activation front door", () => {
 					evidence,
 					result: {
 						contract_id: "vault-git.activation-result",
-						schema_version: "2",
+						schema_version: "3",
 						status: "prepared",
 						authority: "evidence_only",
 						write_permission: "denied",
@@ -43,9 +43,17 @@ describe("Vault Git activation front door", () => {
 						evidence_reference: evidence.evidenceId,
 						captured_at: evidence.capturedAt,
 						display_fresh_until: "2026-08-12T00:10:00.000Z",
+						// The production preparer emits the authoritative Next Safe Action
+						// union; mirror it so this fixture matches the public contract.
 						next_action: {
+							kind: "needs_human",
 							id: "review_prepared",
-							summary: "Review the prepared evidence without granting write permission.",
+							action_id: "review_prepared",
+							summary:
+								"Review the prepared evidence without granting write permission.",
+							handoff_kind: "command",
+							executable: "vault-git",
+							argv: ["activation", "review", evidence.evidenceId, "--json"],
 						},
 					},
 				};
@@ -126,7 +134,7 @@ describe("Vault Git activation front door", () => {
 
 		expect(result).toMatchObject({
 			contract_id: "vault-git.activation-result",
-			schema_version: "2",
+			schema_version: "3",
 			status: "activated",
 			authority: "human_admission",
 			write_permission: "denied",

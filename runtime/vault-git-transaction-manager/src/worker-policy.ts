@@ -2,7 +2,7 @@ import {
 	VAULT_GIT_HYGIENE_WORKER_TRIGGERS,
 	type VaultGitHygieneVaultPosture,
 	type VaultGitHygieneWorkerTrigger,
-	type VaultGitNextAction,
+	type VaultGitNextActionCompat,
 } from "./model.ts";
 
 export { VAULT_GIT_HYGIENE_WORKER_TRIGGERS } from "./model.ts";
@@ -28,7 +28,7 @@ export interface VaultGitWorkerPolicyDecision {
 	/** Foreground work outside the vault stays available. */
 	readonly foregroundNonVaultWorkAllowed: true;
 	/** One bounded continuation; this module never spawns runtime work. */
-	readonly nextAction: VaultGitNextAction;
+	readonly nextAction: VaultGitNextActionCompat;
 }
 
 /**

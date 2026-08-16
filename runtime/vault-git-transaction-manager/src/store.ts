@@ -27,6 +27,7 @@ import {
 	VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	VAULT_GIT_RECEIPT_TRANSITIONS,
 	VAULT_GIT_TRANSACTION_PHASES,
+	isVaultGitOwnedPathLeaf,
 	type VaultGitActivationRecord,
 	type VaultGitActivationInvalidationRecord,
 	type VaultGitActivationRevocationRecord,
@@ -1741,11 +1742,7 @@ function isHex(value: unknown): value is string {
 	return typeof value === "string" && value.length % 2 === 0 && /^[0-9a-f]*$/.test(value);
 }
 
-function isOwnedPath(value: unknown): value is string {
-	if (typeof value !== "string" || value.length === 0 || value.startsWith("/")) return false;
-	const segments = value.split("/");
-	return segments.every((part) => part.length > 0 && part !== "." && part !== ".." && part.toLowerCase() !== ".git");
-}
+const isOwnedPath = isVaultGitOwnedPathLeaf;
 
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
 function isReceiptId(value: unknown): value is string { return typeof value === "string" && /^receipt_[0-9a-f]{32}$/.test(value); }

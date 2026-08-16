@@ -1,34 +1,34 @@
 import {
 	createVaultGitPreparedEvidence,
 	projectVaultGitPreparedActivationResult,
-	type VaultGitPreparedActivationResultV2,
+	type VaultGitPreparedActivationResultV3,
 } from "./activation-contract.ts";
 import {
 	createVaultGitActivationRestriction,
 	projectVaultGitActivationRestrictionJson,
-	type VaultGitActivationRestrictionJsonV2,
+	type VaultGitActivationRestrictionJsonV3,
 } from "./activation-restriction.ts";
 
 /** Published sanitized fixture consumed by First-Use Experience. */
 export interface VaultGitFirstUseExperienceContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV2;
-	readonly restricted: VaultGitActivationRestrictionJsonV2;
+	readonly prepared: VaultGitPreparedActivationResultV3;
+	readonly restricted: VaultGitActivationRestrictionJsonV3;
 }
 
 /** Published sanitized fixture consumed by Background Preflight. */
 export interface VaultGitBackgroundPreflightContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV2;
+	readonly prepared: VaultGitPreparedActivationResultV3;
 }
 
 /** Published sanitized fixture reserved for planned Safe Manual Handoff work. */
 export interface VaultGitSafeManualHandoffContractFixture {
-	readonly restricted: VaultGitActivationRestrictionJsonV2;
+	readonly restricted: VaultGitActivationRestrictionJsonV3;
 }
 
 /** Published sanitized fixture reserved for planned model-advice work. */
 export interface VaultGitAttentionAndModelAdviceContractFixture {
-	readonly prepared: VaultGitPreparedActivationResultV2;
-	readonly restricted: VaultGitActivationRestrictionJsonV2;
+	readonly prepared: VaultGitPreparedActivationResultV3;
+	readonly restricted: VaultGitActivationRestrictionJsonV3;
 }
 
 const prepared = preparedFixture();
@@ -69,7 +69,7 @@ export const vaultGitActivationConsumerContractFixtures = Object.freeze({
 	attentionAndModelAdvice: VaultGitAttentionAndModelAdviceContractFixture;
 }>;
 
-function preparedFixture(): VaultGitPreparedActivationResultV2 {
+function preparedFixture(): VaultGitPreparedActivationResultV3 {
 	const opaqueIdentity = (owner: string, digit: string): string =>
 		`${owner}:v1:${digit.repeat(64)}`;
 	return projectVaultGitPreparedActivationResult(

@@ -186,7 +186,12 @@ describe("Remote movement and atomic-close recovery", () => {
 				data: { outcome: "completed", phase: "closed" },
 			});
 		},
-		30_000,
+		// Harness kill ceiling for this multi-process recovery journey (killed
+		// checking phase -> doctor -> repair -> complete spawns several real
+		// CLI/git/checker subprocesses, ~20s idle). NOT a product latency budget —
+		// product timing is asserted by the performance tests. The prior 30s ceiling
+		// left too little headroom, so CPU/IO contention timed it out; 60s absorbs it.
+		60_000,
 	);
 
 

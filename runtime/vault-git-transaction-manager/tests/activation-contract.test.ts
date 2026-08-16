@@ -7,7 +7,7 @@ import {
 	parseVaultGitPreparedEvidence,
 	projectVaultGitActivationRestrictionJson,
 	projectVaultGitPreparedActivationResult,
-	type VaultGitActivationResultV2,
+	type VaultGitActivationResultV3,
 	VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 	VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
 	VAULT_GIT_PREPARED_EVIDENCE_CONTRACT_ID,
@@ -99,8 +99,8 @@ describe("V2 prepared activation evidence", () => {
 });
 
 describe("activation result contract", () => {
-	test("publishes the closed activation result vocabulary as schema v2", () => {
-		expect(VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION).toBe("2");
+	test("publishes the closed activation result vocabulary as schema v3", () => {
+		expect(VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION).toBe("3");
 	});
 
 	test("returns one fresh-preparation action for legacy or tampered evidence", () => {
@@ -130,9 +130,15 @@ describe("activation result contract", () => {
 				evidence_reference: null,
 				captured_at: null,
 				display_fresh_until: null,
+				// The public next_action is the authoritative Next Safe Action union:
+				// prepare_fresh is an invoke to `activation prepare --json`.
 				next_action: {
+					kind: "invoke",
 					id: "prepare_fresh",
+					action_id: "prepare_fresh",
 					summary: "Prepare fresh V2 evidence before human review.",
+					executable: "vault-git",
+					argv: ["activation", "prepare", "--json"],
 				},
 			});
 		}
@@ -172,9 +178,16 @@ describe("activation result contract", () => {
 			evidence_reference: evidence.evidenceId,
 			captured_at: evidence.capturedAt,
 			display_fresh_until: "2026-08-11T00:10:00.000Z",
+			// review_prepared is a needs_human command handoff to the interactive
+			// review surface, binding this evidence reference.
 			next_action: {
+				kind: "needs_human",
 				id: "review_prepared",
+				action_id: "review_prepared",
 				summary: "Review the prepared evidence without granting write permission.",
+				handoff_kind: "command",
+				executable: "vault-git",
+				argv: ["activation", "review", evidence.evidenceId, "--json"],
 			},
 		});
 		expect(JSON.stringify(result)).not.toMatch(
@@ -199,7 +212,7 @@ describe("activation result contract", () => {
 
 	test("one public result union accepts prepared, invalidated, and restricted variants", () => {
 		const evidence = createVaultGitPreparedEvidence(preparedInput());
-		const results: readonly VaultGitActivationResultV2[] = [
+		const results: readonly VaultGitActivationResultV3[] = [
 			projectVaultGitPreparedActivationResult(
 				evidence,
 				"2026-08-11T00:00:01.000Z",

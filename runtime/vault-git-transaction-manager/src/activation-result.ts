@@ -2,16 +2,18 @@ import {
 	parseVaultGitPreparedEvidence,
 	VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
 	VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION,
-	type VaultGitPreparedEvidenceActivationResultV2,
+	type VaultGitPreparedEvidenceActivationResultV3,
 	type VaultGitPreparedEvidenceV2,
 } from "./activation-contract.ts";
 import {
 	renderVaultGitActivationRestriction,
-	type VaultGitActivationRestrictionJsonV2,
+	type VaultGitActivationRestrictionJsonV3,
 } from "./activation-restriction.ts";
+import type { VaultGitNextAction } from "./model.ts";
+import { projectVaultGitNextAction } from "./next-safe-action.ts";
 
 /** Sanitized result after human review admits one exact prepared snapshot. */
-export interface VaultGitActivatedActivationResultV2 {
+export interface VaultGitActivatedActivationResultV3 {
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	readonly schema_version: typeof VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION;
 	readonly status: "activated";
@@ -20,14 +22,11 @@ export interface VaultGitActivatedActivationResultV2 {
 	readonly write_permission: "denied";
 	readonly changed_state: "none" | "local";
 	readonly evidence_reference: string;
-	readonly next_action: {
-		readonly id: "begin_transaction";
-		readonly summary: string;
-	};
+	readonly next_action: VaultGitNextAction;
 }
 
 /** Sanitized result when human review deliberately leaves activation deferred. */
-export interface VaultGitDeferredActivationResultV2 {
+export interface VaultGitDeferredActivationResultV3 {
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	readonly schema_version: typeof VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION;
 	readonly status: "deferred";
@@ -35,14 +34,11 @@ export interface VaultGitDeferredActivationResultV2 {
 	readonly write_permission: "denied";
 	readonly changed_state: "none";
 	readonly evidence_reference: string;
-	readonly next_action: {
-		readonly id: "review_prepared";
-		readonly summary: string;
-	};
+	readonly next_action: VaultGitNextAction;
 }
 
 /** Sanitized result after human review revokes one exact activation. */
-export interface VaultGitRevokedActivationResultV2 {
+export interface VaultGitRevokedActivationResultV3 {
 	readonly contract_id: typeof VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID;
 	readonly schema_version: typeof VAULT_GIT_ACTIVATION_RESULT_SCHEMA_VERSION;
 	readonly status: "revoked";
@@ -50,19 +46,16 @@ export interface VaultGitRevokedActivationResultV2 {
 	readonly write_permission: "denied";
 	readonly changed_state: "local";
 	readonly evidence_reference: string;
-	readonly next_action: {
-		readonly id: "prepare_fresh";
-		readonly summary: string;
-	};
+	readonly next_action: VaultGitNextAction;
 }
 
 /** Complete versioned public activation-result contract. */
-export type VaultGitActivationResultV2 =
-	| VaultGitPreparedEvidenceActivationResultV2
-	| VaultGitActivatedActivationResultV2
-	| VaultGitDeferredActivationResultV2
-	| VaultGitRevokedActivationResultV2
-	| VaultGitActivationRestrictionJsonV2;
+export type VaultGitActivationResultV3 =
+	| VaultGitPreparedEvidenceActivationResultV3
+	| VaultGitActivatedActivationResultV3
+	| VaultGitDeferredActivationResultV3
+	| VaultGitRevokedActivationResultV3
+	| VaultGitActivationRestrictionJsonV3;
 
 /**
  * Project one admitted snapshot without exposing its private bindings.
@@ -79,7 +72,7 @@ export type VaultGitActivationResultV2 =
 export function projectVaultGitActivatedResult(
 	evidence: VaultGitPreparedEvidenceV2,
 	changedState: "none" | "local",
-): VaultGitActivatedActivationResultV2 {
+): VaultGitActivatedActivationResultV3 {
 	const parsed = parseVaultGitPreparedEvidence(evidence);
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
@@ -89,10 +82,13 @@ export function projectVaultGitActivatedResult(
 		write_permission: "denied",
 		changed_state: changedState,
 		evidence_reference: parsed.evidenceId,
-		next_action: Object.freeze({
-			id: "begin_transaction",
-			summary: "Begin one fenced transaction when a meaningful vault write is ready.",
-		}),
+		next_action: Object.freeze(
+			projectVaultGitNextAction({
+				id: "begin_transaction",
+				summary:
+					"Begin one fenced transaction when a meaningful vault write is ready.",
+			}),
+		),
 	});
 }
 
@@ -109,7 +105,7 @@ export function projectVaultGitActivatedResult(
  */
 export function projectVaultGitDeferredResult(
 	evidence: VaultGitPreparedEvidenceV2,
-): VaultGitDeferredActivationResultV2 {
+): VaultGitDeferredActivationResultV3 {
 	const parsed = parseVaultGitPreparedEvidence(evidence);
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
@@ -119,10 +115,14 @@ export function projectVaultGitDeferredResult(
 		write_permission: "denied",
 		changed_state: "none",
 		evidence_reference: parsed.evidenceId,
-		next_action: Object.freeze({
-			id: "review_prepared",
-			summary: "Return to human review while this prepared evidence remains fresh.",
-		}),
+		next_action: Object.freeze(
+			projectVaultGitNextAction({
+				id: "review_prepared",
+				summary:
+					"Return to human review while this prepared evidence remains fresh.",
+				selectors: { evidence_reference: parsed.evidenceId },
+			}),
+		),
 	});
 }
 
@@ -139,7 +139,7 @@ export function projectVaultGitDeferredResult(
  */
 export function projectVaultGitRevokedResult(
 	evidence: VaultGitPreparedEvidenceV2,
-): VaultGitRevokedActivationResultV2 {
+): VaultGitRevokedActivationResultV3 {
 	const parsed = parseVaultGitPreparedEvidence(evidence);
 	return Object.freeze({
 		contract_id: VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID,
@@ -149,10 +149,12 @@ export function projectVaultGitRevokedResult(
 		write_permission: "denied",
 		changed_state: "local",
 		evidence_reference: parsed.evidenceId,
-		next_action: Object.freeze({
-			id: "prepare_fresh",
-			summary: "Prepare fresh evidence before any later activation review.",
-		}),
+		next_action: Object.freeze(
+			projectVaultGitNextAction({
+				id: "prepare_fresh",
+				summary: "Prepare fresh evidence before any later activation review.",
+			}),
+		),
 	});
 }
 
@@ -168,7 +170,7 @@ export function projectVaultGitRevokedResult(
  * ```
  */
 export function renderVaultGitActivationResult(
-	result: VaultGitActivationResultV2,
+	result: VaultGitActivationResultV3,
 ): string {
 	if (result.status === "restricted") {
 		return `${renderVaultGitActivationRestriction(result)}\n`;

@@ -7,7 +7,7 @@ import type {
 	VaultGitDoctorFinding,
 	VaultGitHygieneVaultPosture,
 	VaultGitHygieneWorkerTrigger,
-	VaultGitNextAction,
+	VaultGitNextActionCompat,
 	VaultGitPrivateHygieneResult,
 } from "./model.ts";
 import type {
@@ -140,7 +140,7 @@ export interface VaultGitJanitorReport {
 	/** Foreground work outside the vault remains eligible. */
 	readonly foregroundNonVaultWorkAllowed: true;
 	/** Exactly one safe continuation. */
-	readonly nextAction: VaultGitNextAction;
+	readonly nextAction: VaultGitNextActionCompat;
 }
 
 /** Bounded Janitor runner; never spawns an agent task. */
@@ -670,14 +670,14 @@ function baseReport(
 	};
 }
 
-function operatorAction(summary: string): VaultGitNextAction {
+function operatorAction(summary: string): VaultGitNextActionCompat {
 	return { id: "request_operator_review", summary };
 }
 
 function actionForBlocker(
 	blocker: VaultGitBlockerId,
 	activationRestriction?: VaultGitActivationRestriction,
-): VaultGitNextAction {
+): VaultGitNextActionCompat {
 	if (blocker === "activation_blocked" && activationRestriction) {
 		return activationRestriction.nextAction;
 	}

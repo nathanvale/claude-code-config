@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -21,6 +21,11 @@ import type {
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
 import { createVaultGitDoctorTaskStore } from "../src/doctor-task-store.ts";
+import {
+	createVaultGitTaskStore,
+	type VaultGitTaskStore,
+} from "../src/task-store.ts";
+import { projectVaultGitNextAction } from "../src/next-safe-action.ts";
 import type {
 	VaultGitReceipt,
 	VaultGitRepairAction,
@@ -521,7 +526,7 @@ describe("vault-git CLI composition", () => {
 				status: "ok",
 				data: {
 					contract_id: "vault-git.activation-result",
-					schema_version: "2",
+					schema_version: "3",
 					status: "prepared",
 					authority: "evidence_only",
 					write_permission: "denied",
@@ -664,10 +669,10 @@ describe("vault-git CLI composition", () => {
 					status: "revoked",
 					authority: "none",
 					changed_state: "local",
-					next_action: {
+					next_action: projectVaultGitNextAction({
 						id: "prepare_fresh",
 						summary: "Prepare fresh evidence before later review.",
-					},
+					}),
 				};
 			},
 		});
@@ -1038,6 +1043,38 @@ describe("vault-git CLI composition", () => {
 		expect(run.stderr).toBe("");
 	});
 
+	test("reports an unknown Doctor Task with its bindable Doctor Task id contract", async () => {
+		const stateRoot = await temp("vault-git-missing-doctor-task-");
+		const composition: VaultGitCliComposition = {
+			...fakeComposition(fakeEngine()),
+			doctorTaskStore: createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId: "e".repeat(64),
+			}),
+		};
+		const taskId = `doctor_task_${"1".repeat(32)}`;
+		const run = await runVaultGitForTest(
+			["doctor", "--task-id", taskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+		const envelope = JSON.parse(run.stdout);
+
+		expect(run.exitCode).toBe(1);
+		expect(envelope.data).toMatchObject({
+			command: "doctor",
+			blockers: ["task_not_found"],
+			task_id: taskId,
+			next_action: {
+				kind: "needs_input",
+				id: "change_input",
+				action_id: "correct_doctor_task_id",
+				input_contract_id: "vault-git.doctor-task-id",
+				fields: [{ id: "doctor_task_id", input_channel: "public" }],
+			},
+		});
+		expect(envelope.data.blockers).not.toContain("continuation_unavailable");
+	});
+
 	test("fails closed when selected task state is corrupt", async () => {
 		const base = fakeComposition(fakeEngine());
 		const composition: VaultGitCliComposition = {
@@ -1131,6 +1168,86 @@ describe("vault-git CLI composition", () => {
 			});
 		}
 		expect(triggers).toEqual(["nightly", "tidy_now"]);
+	});
+
+	test("known engine and Janitor recovery states keep executable continuations", async () => {
+		const transactionId = `txn_${"2".repeat(32)}`;
+		const repairableEngine = fakeEngine({
+			async inspect() {
+				return engineResult({
+					state: "repairable",
+					phase: "writing",
+					retrySafety: "same_input_unsafe",
+					transactionId,
+					nextAction: {
+						id: "run_repair",
+						summary: "Run the classified repair.",
+					},
+				});
+			},
+		});
+		const status = await runVaultGitForTest(["status", "--json"], {
+			composition: fakeComposition(repairableEngine),
+			launchPrivate: false,
+		});
+		const statusData = JSON.parse(status.stdout).data;
+		expect(statusData).toMatchObject({
+			retry_safety: "same_input_unsafe",
+			next_action: {
+				kind: "invoke",
+				id: "run_doctor",
+				action_id: "run_doctor",
+				argv: ["doctor", "--transaction-id", transactionId, "--json"],
+			},
+		});
+		expect(statusData.blockers).not.toContain("continuation_unavailable");
+
+		const base = fakeComposition(fakeEngine());
+		const janitorComposition: VaultGitCliComposition = {
+			...base,
+			janitor: {
+				async run() {
+					return {
+						status: "refused",
+						trigger: "nightly",
+						staleReceipts: [],
+						leaseAnomalies: [],
+						pushPending: false,
+						proposedTransactionGroups: [],
+						skippedRepairs: [],
+						privateHygiene: {
+							capabilityFiles: 0,
+							doctorTokenRecords: 0,
+							janitorReports: 0,
+						},
+						blocker: "remote_unavailable",
+						changedState: "none",
+						vaultPosture: "normal",
+						foregroundNonVaultWorkAllowed: true,
+						nextAction: {
+							id: "retry_remote",
+							summary: "Restore remote access, then retry Janitor.",
+						},
+					};
+				},
+			},
+		};
+		const janitor = await runVaultGitForTest(["janitor", "--json"], {
+			composition: janitorComposition,
+			launchPrivate: false,
+		});
+		const janitorData = JSON.parse(janitor.stdout).data;
+		expect(janitorData).toMatchObject({
+			retry_safety: "same_input_safe",
+			blockers: ["remote_unavailable"],
+			next_action: {
+				kind: "invoke",
+				id: "run_janitor",
+				action_id: "run_janitor",
+				argv: ["janitor", "--json"],
+			},
+		});
+		expect(janitorData.blockers).not.toContain("continuation_unavailable");
 	});
 
 	test("dispatches the exact stale takeover path with FD token proof", async () => {
@@ -1306,7 +1423,8 @@ describe("vault-git CLI composition", () => {
 
 			const json = await runVaultGitForTest([...args, "--json"], options);
 			expect(json.exitCode).toBe(0);
-			expect(JSON.parse(json.stdout)).toMatchObject({
+			const envelope = JSON.parse(json.stdout);
+			expect(envelope).toMatchObject({
 				status: "ok",
 				data: {
 					outcome: "repaired",
@@ -1315,10 +1433,17 @@ describe("vault-git CLI composition", () => {
 					write_permission: repairCase.writePermission,
 					next_action: { id: repairCase.result.nextAction.id },
 				},
-				continuation: {
-					next_action_id: repairCase.result.nextAction.id,
-				},
 			});
+			// A terminal none repair result omits the continuation (nothing to run and
+			// nothing to escalate); a runnable result references its runtime action.
+			if (repairCase.result.nextAction.id === "none") {
+				expect(envelope.continuation).toBeUndefined();
+				expect(envelope.runtime_actions).toBeUndefined();
+			} else {
+				expect(envelope.continuation).toEqual({
+					next_action_id: repairCase.result.nextAction.id,
+				});
+			}
 
 			const plain = await runVaultGitForTest(args, options);
 			expect(plain.exitCode).toBe(0);
@@ -1332,6 +1457,452 @@ describe("vault-git CLI composition", () => {
 					.filter((line) => line.startsWith("next:")),
 			).toEqual([`next: ${repairCase.result.nextAction.id}`]);
 		}
+	});
+});
+
+// U1 (ADR-0002 point 4, 7): data.next_action is the authoritative Next Safe Action
+// union at the public CLI, and facade runtime_actions, continuation.next_action_id,
+// and the human `next:` line all derive from that one union. A terminal none result
+// emits no facade runtime action. The Completion Task semantic-ID reader stays
+// regression-covered by reading REAL persisted task state. Real owners:
+// createVaultGitTaskStore (persisted reader, not faked) injected into a fakeEngine
+// composition, driven through status --task-id.
+describe("vault-git U1 next_action union at the public CLI", () => {
+	const RECEIPT_ID = "receipt_10101010101010101010101010101010";
+	const TXN_ID = "txn_20202020202020202020202020202020";
+	const LEASE = "a".repeat(40);
+	const LAUNCH = "launch_30303030303030303030303030303030";
+	const REPO_IDENTITY = "vault@u1-cli";
+	const REPO_ID = createHash("sha256").update(REPO_IDENTITY).digest("hex");
+
+	function completionTaskComposition(
+		taskStore: VaultGitTaskStore,
+	): VaultGitCliComposition {
+		// Fake engine only; the persisted task reader is the REAL store.
+		return { ...fakeComposition(fakeEngine()), taskStore } as VaultGitCliComposition;
+	}
+
+	function historyDir(stateRoot: string, taskId: string): string {
+		return join(
+			stateRoot,
+			"vault-git-transaction-manager",
+			REPO_ID,
+			"tasks",
+			taskId,
+			"history",
+		);
+	}
+
+	async function rawHistory(
+		stateRoot: string,
+		taskId: string,
+	): Promise<{ names: string[]; bytes: Record<string, string> }> {
+		const dir = historyDir(stateRoot, taskId);
+		const names = (await readdir(dir)).filter((n) => /^\d{12}\.json$/.test(n)).sort();
+		const bytes: Record<string, string> = {};
+		for (const name of names) bytes[name] = await readFile(join(dir, name), "utf8");
+		return { names, bytes };
+	}
+
+	// Build genuine persisted Completion Task state through the store's public
+	// methods, then advance to the requested terminal/live state.
+	async function seedTask(
+		stateRoot: string,
+		advance: Parameters<VaultGitTaskStore["transition"]>[2],
+	): Promise<{ store: VaultGitTaskStore; taskId: string }> {
+		const store = createVaultGitTaskStore({
+			stateRoot,
+			repositoryIdentity: REPO_IDENTITY,
+		});
+		const admitted = await store.claimOrJoin({
+			claimReceiptId: RECEIPT_ID,
+			receiptId: RECEIPT_ID,
+			transactionId: TXN_ID,
+			remote: "origin",
+			generation: LEASE,
+			capabilityDigest: "0".repeat(64),
+			normalizedInput: '{"command":"complete"}',
+			recordedAt: "2026-08-13T09:00:00.000Z",
+		});
+		if (admitted.status === "refused") throw new Error("seed claim refused");
+		const moved = await store.transition(
+			admitted.state.taskId,
+			admitted.state.revision,
+			advance,
+		);
+		if (moved.status !== "transitioned") throw new Error("seed transition failed");
+		return { store, taskId: admitted.state.taskId };
+	}
+
+	// Point 4 + contextual split: a live Completion Task read through the REAL store
+	// projects the authoritative union with semantic action_id inspect_completion_task
+	// and exact argv, while the compat id preserves the legacy inspect_status. The
+	// facade surfaces derive from the same union; the persisted history is unchanged
+	// by the read.
+	test("live Completion Task reads to the inspect_completion_task union with unchanged history", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-live-");
+		const { store, taskId } = await seedTask(stateRoot, {
+			state: "in_progress",
+			phase: "running",
+			updatedAt: "2026-08-13T09:00:01.000Z",
+			heartbeatAt: "2026-08-13T09:00:01.000Z",
+			checkpoint: "checking",
+			launchGeneration: LAUNCH,
+			launchAttempt: 1,
+			terminalResult: null,
+		});
+		const before = await rawHistory(stateRoot, taskId);
+
+		const run = await runVaultGitForTest(
+			["status", "--task-id", taskId, "--json"],
+			{ composition: completionTaskComposition(store), launchPrivate: false },
+		);
+		expect(run.stderr).toBe("");
+		const envelope = JSON.parse(run.stdout);
+		const next = envelope.data.next_action;
+		// Authoritative semantic id + exact argv.
+		expect(next).toMatchObject({
+			kind: "invoke",
+			action_id: "inspect_completion_task",
+			executable: "vault-git",
+			argv: ["status", "--task-id", taskId, "--json"],
+		});
+		// Legacy compatibility id preserved on the union.
+		expect(next.id).toBe("inspect_status");
+		// One projection drives both facade surfaces (compat id).
+		expect(envelope.continuation.next_action_id).toBe(next.id);
+		expect(envelope.runtime_actions[0].id).toBe(next.id);
+		expect(envelope.data.schema_version).toBe("2");
+
+		// The read did not rewrite persisted history bytes or revision.
+		const after = await rawHistory(stateRoot, taskId);
+		expect(after.names).toEqual(before.names);
+		expect(after.bytes).toEqual(before.bytes);
+	});
+
+	// Point 4: plain lane derives the human `next:` line from the same union compat id.
+	test("plain lane derives the human next: line from the same union id", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-plain-");
+		const { store, taskId } = await seedTask(stateRoot, {
+			state: "in_progress",
+			phase: "running",
+			updatedAt: "2026-08-13T09:00:01.000Z",
+			heartbeatAt: "2026-08-13T09:00:01.000Z",
+			checkpoint: "checking",
+			launchGeneration: LAUNCH,
+			launchAttempt: 1,
+			terminalResult: null,
+		});
+		const composition = completionTaskComposition(store);
+		const json = await runVaultGitForTest(
+			["status", "--task-id", taskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+		const plain = await runVaultGitForTest(["status", "--task-id", taskId], {
+			composition,
+			launchPrivate: false,
+		});
+		const unionId = JSON.parse(json.stdout).data.next_action.id;
+		expect(plain.stdout).toContain(`next: ${unionId}`);
+		expect(plain.stdout).not.toContain('"contract_id"');
+	});
+
+	// Point 4: a closed Completion Task deterministically emits a terminal none
+	// continuation (cli.ts action("none")); a none union emits NO facade runtime
+	// action. Asserted unconditionally against real persisted terminal state.
+	test("a closed Completion Task emits a terminal none union with no runtime action", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-none-");
+		const { store, taskId } = await seedTask(stateRoot, {
+			state: "closed",
+			phase: "terminal",
+			updatedAt: "2026-08-13T09:00:01.000Z",
+			heartbeatAt: null,
+			checkpoint: "closed",
+			launchGeneration: LAUNCH,
+			launchAttempt: 1,
+			terminalResult: {
+				outcome: "completed",
+				phase: "closed",
+				changedState: "none",
+				blocker: null,
+				retrySafety: "same_input_safe",
+			},
+		});
+		const run = await runVaultGitForTest(
+			["status", "--task-id", taskId, "--json"],
+			{ composition: completionTaskComposition(store), launchPrivate: false },
+		);
+		const envelope = JSON.parse(run.stdout);
+		expect(envelope.data.next_action.kind).toBe("none");
+		expect(envelope.data.next_action.id).toBe("none");
+		// The facade omits runtime_actions entirely (never an empty array) for a
+		// terminal none, and a legitimate terminal stop carries no continuation.
+		expect(envelope.runtime_actions).toBeUndefined();
+		expect(envelope.continuation).toBeUndefined();
+	});
+
+	// Point 5 through the public CLI: a terminal Doctor Task whose legacy persisted
+	// continuation is inspect_status must project to inspect_doctor_task (a Doctor
+	// Task inspection), NEVER inspect_transaction. Real owner: createVaultGitDoctorTaskStore
+	// injected into the CLI; the legacy terminal history is pre-existing on-disk data.
+	test("a legacy Doctor Task terminal inspect_status projects to inspect_doctor_task via the CLI", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-doctor-legacy-");
+		const doctorRepoId = "a".repeat(64);
+		const doctorTaskId = `doctor_task_${"7".repeat(32)}`;
+		const historyDir = join(
+			stateRoot,
+			"vault-git-transaction-manager",
+			doctorRepoId,
+			"doctor-tasks",
+			doctorTaskId,
+			"history",
+		);
+		await mkdir(historyDir, { recursive: true, mode: 0o700 });
+		const legacyState = {
+			schemaVersion: 1,
+			taskId: doctorTaskId,
+			bindingDigest: "d".repeat(64),
+			receiptId: `receipt_${"b".repeat(32)}`,
+			receiptRevision: 7,
+			transactionId: `txn_${"c".repeat(32)}`,
+			revision: 3,
+			state: "closed",
+			phase: "terminal",
+			recordedAt: "2026-08-14T01:00:00.000Z",
+			updatedAt: "2026-08-14T01:00:03.000Z",
+			heartbeatAt: null,
+			checkpoint: "terminal",
+			launchGeneration: `doctor_launch_${"9".repeat(32)}`,
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				kind: "doctor_result",
+				status: "diagnosed",
+				state: "repairable",
+				phase: "writing",
+				finding: "writes_in_progress",
+				changedState: "none",
+				retrySafety: "same_input_safe",
+				nextAction: { id: "inspect_status", summary: "legacy text" },
+				repairAction: "resume",
+				transactionId: `txn_${"c".repeat(32)}`,
+			},
+		};
+		const file = join(historyDir, "000000000003.json");
+		await writeFile(file, `${JSON.stringify(legacyState, null, 2)}\n`, { mode: 0o600 });
+		await chmod(file, 0o600);
+
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			doctorTaskStore: createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId: doctorRepoId,
+			}),
+		} as VaultGitCliComposition;
+		const run = await runVaultGitForTest(
+			["doctor", "--task-id", doctorTaskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+		const next = JSON.parse(run.stdout).data.next_action;
+		// Authoritative Doctor Task inspection, not a transaction inspection.
+		expect(next).toMatchObject({
+			kind: "invoke",
+			action_id: "inspect_doctor_task",
+			executable: "vault-git",
+			argv: ["doctor", "--task-id", doctorTaskId, "--json"],
+		});
+		expect(next.id).toBe("inspect_status");
+		expect(next.summary).toBe("Inspect the Doctor Task.");
+		expect(run.stdout).not.toContain("legacy text");
+		// The read did not rewrite the legacy on-disk history bytes.
+		expect(await readFile(file, "utf8")).toBe(
+			`${JSON.stringify(legacyState, null, 2)}\n`,
+		);
+	});
+
+	test("Doctor Task terminal context survives legacy run_repair and semantic retry_remote reads", async () => {
+		const transactionId = `txn_${"c".repeat(32)}`;
+		const cases = [
+			{
+				label: "legacy-run-repair",
+				repositoryId: "c".repeat(64),
+				taskId: `doctor_task_${"5".repeat(32)}`,
+				terminalAction: {
+					nextAction: { id: "run_repair", summary: "legacy repair" },
+					repairAction: "resume",
+				},
+				expected: {
+					action_id: "run_repair",
+					argv: [
+						"repair",
+						"resume",
+						"--transaction-id",
+						transactionId,
+						"--json",
+					],
+				},
+			},
+			{
+				label: "semantic-retry-remote",
+				repositoryId: "d".repeat(64),
+				taskId: `doctor_task_${"6".repeat(32)}`,
+				terminalAction: { nextActionId: "retry_remote" },
+				expected: {
+					action_id: "inspect_remote_lease",
+					argv: [
+						"doctor",
+						"--transaction-id",
+						transactionId,
+						"--json",
+					],
+				},
+			},
+		] as const;
+
+		for (const fixture of cases) {
+			const stateRoot = await temp(`vault-git-u1-cli-${fixture.label}-`);
+			const historyDir = join(
+				stateRoot,
+				"vault-git-transaction-manager",
+				fixture.repositoryId,
+				"doctor-tasks",
+				fixture.taskId,
+				"history",
+			);
+			await mkdir(historyDir, { recursive: true, mode: 0o700 });
+			const state = {
+				schemaVersion: 1,
+				taskId: fixture.taskId,
+				bindingDigest: "d".repeat(64),
+				receiptId: `receipt_${"b".repeat(32)}`,
+				receiptRevision: 7,
+				transactionId,
+				revision: 3,
+				state: "closed",
+				phase: "terminal",
+				recordedAt: "2026-08-14T01:00:00.000Z",
+				updatedAt: "2026-08-14T01:00:03.000Z",
+				heartbeatAt: null,
+				checkpoint: "terminal",
+				launchGeneration: `doctor_launch_${"9".repeat(32)}`,
+				launchExpiresAt: null,
+				workerPid: null,
+				workerProcessIdentity: null,
+				launchAttempt: 1,
+				terminalResult: {
+					kind: "doctor_result",
+					status: "diagnosed",
+					state: "repairable",
+					phase: "writing",
+					finding: "writes_in_progress",
+					changedState: "none",
+					retrySafety: "same_input_safe",
+					...fixture.terminalAction,
+					transactionId,
+				},
+			};
+			const historyPath = join(historyDir, "000000000003.json");
+			await writeFile(historyPath, `${JSON.stringify(state, null, 2)}\n`, {
+				mode: 0o600,
+			});
+			await chmod(historyPath, 0o600);
+
+			const composition = {
+				...fakeComposition(fakeEngine()),
+				doctorTaskStore: createVaultGitDoctorTaskStore({
+					stateRoot,
+					repositoryId: fixture.repositoryId,
+				}),
+			} as VaultGitCliComposition;
+			const run = await runVaultGitForTest(
+				["doctor", "--task-id", fixture.taskId, "--json"],
+				{ composition, launchPrivate: false },
+			);
+
+			expect(run.exitCode).toBe(0);
+			expect(JSON.parse(run.stdout).data.next_action).toMatchObject({
+				kind: "invoke",
+				executable: "vault-git",
+				...fixture.expected,
+			});
+		}
+	});
+
+	// New-write carrier: a terminal Doctor Task persisted with the semantic id only
+	// (nextActionId: inspect_doctor_task, no summary/object) projects the same
+	// authoritative union via the CLI — semantic inspect_doctor_task, compat
+	// inspect_status, exact doctor argv.
+	test("a new persisted inspect_doctor_task terminal projects the same union via the CLI", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-doctor-new-");
+		const doctorRepoId = "b".repeat(64);
+		const doctorTaskId = `doctor_task_${"8".repeat(32)}`;
+		const historyDir = join(
+			stateRoot,
+			"vault-git-transaction-manager",
+			doctorRepoId,
+			"doctor-tasks",
+			doctorTaskId,
+			"history",
+		);
+		await mkdir(historyDir, { recursive: true, mode: 0o700 });
+		const newState = {
+			schemaVersion: 1,
+			taskId: doctorTaskId,
+			bindingDigest: "d".repeat(64),
+			receiptId: `receipt_${"b".repeat(32)}`,
+			receiptRevision: 7,
+			transactionId: `txn_${"c".repeat(32)}`,
+			revision: 3,
+			state: "closed",
+			phase: "terminal",
+			recordedAt: "2026-08-14T01:00:00.000Z",
+			updatedAt: "2026-08-14T01:00:03.000Z",
+			heartbeatAt: null,
+			checkpoint: "terminal",
+			launchGeneration: `doctor_launch_${"9".repeat(32)}`,
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				kind: "doctor_result",
+				status: "diagnosed",
+				state: "repairable",
+				phase: "writing",
+				finding: "writes_in_progress",
+				changedState: "none",
+				retrySafety: "same_input_safe",
+				// Semantic id only: no summary, no { id, summary } object.
+				nextActionId: "inspect_doctor_task",
+				repairAction: "resume",
+				transactionId: `txn_${"c".repeat(32)}`,
+			},
+		};
+		const file = join(historyDir, "000000000003.json");
+		await writeFile(file, `${JSON.stringify(newState, null, 2)}\n`, { mode: 0o600 });
+		await chmod(file, 0o600);
+
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			doctorTaskStore: createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId: doctorRepoId,
+			}),
+		} as VaultGitCliComposition;
+		const run = await runVaultGitForTest(
+			["doctor", "--task-id", doctorTaskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+		const next = JSON.parse(run.stdout).data.next_action;
+		expect(next).toMatchObject({
+			kind: "invoke",
+			action_id: "inspect_doctor_task",
+			executable: "vault-git",
+			argv: ["doctor", "--task-id", doctorTaskId, "--json"],
+		});
+		expect(next.id).toBe("inspect_status");
 	});
 });
 
@@ -1406,10 +1977,10 @@ function fakeActivationFrontDoor(
 				status: "revoked",
 				authority: "none",
 				changed_state: "local",
-				next_action: {
+				next_action: projectVaultGitNextAction({
 					id: "prepare_fresh",
 					summary: "Prepare fresh evidence before later review.",
-				},
+				}),
 			};
 		},
 		async validate() {
@@ -1425,7 +1996,7 @@ function fakeActivationFrontDoor(
 function preparedActivationResult() {
 	return {
 		contract_id: "vault-git.activation-result" as const,
-		schema_version: "2" as const,
+		schema_version: "3" as const,
 		status: "prepared" as const,
 		authority: "evidence_only" as const,
 		write_permission: "denied" as const,
@@ -1433,26 +2004,29 @@ function preparedActivationResult() {
 		evidence_reference: ACTIVATION_EVIDENCE_REFERENCE,
 		captured_at: "2026-08-12T00:00:00.000Z",
 		display_fresh_until: "2026-08-12T00:10:00.000Z",
-		next_action: {
-			id: "review_prepared" as const,
+		// The production preparer emits the authoritative Next Safe Action union;
+		// mirror it (review_prepared is a command handoff bound to the evidence).
+		next_action: projectVaultGitNextAction({
+			id: "review_prepared",
 			summary: "Review the prepared evidence without granting write permission.",
-		},
+			selectors: { evidence_reference: ACTIVATION_EVIDENCE_REFERENCE },
+		}),
 	};
 }
 
 function activatedResult() {
 	return {
 		contract_id: "vault-git.activation-result" as const,
-		schema_version: "2" as const,
+		schema_version: "3" as const,
 		status: "activated" as const,
 		authority: "human_admission" as const,
 		write_permission: "denied" as const,
 		changed_state: "local" as const,
 		evidence_reference: ACTIVATION_EVIDENCE_REFERENCE,
-		next_action: {
-			id: "begin_transaction" as const,
+		next_action: projectVaultGitNextAction({
+			id: "begin_transaction",
 			summary: "Begin one fenced transaction.",
-		},
+		}),
 	};
 }
 

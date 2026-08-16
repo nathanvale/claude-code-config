@@ -18,6 +18,7 @@ import {
 	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_RESULT_CONTRACT_ID,
 	VAULT_GIT_SCHEMA_VERSION,
+	isVaultGitCliSafeValue,
 	type VaultGitEventType,
 	type VaultGitNextActionId,
 	type VaultGitRepairAction,
@@ -674,10 +675,11 @@ export function parseVaultGitInvocation(
 			case "--path": {
 				const parsed = inlineValue ?? requireValue(argv, index, flag);
 				if (inlineValue === undefined) index += 1;
-				// An option-shaped value is always a caller mistake, never a real
-				// owned path; refusing here keeps flag-lookalike bytes out of the
-				// admission pipeline entirely.
-				if (parsed.startsWith("-")) {
+				// Share the CLI-safe token rule (model.ts) so an option-shaped or
+				// control-character value is a usage error, while a structurally
+				// invalid path still refuses at its owned admission phase (preserving
+				// invalid_usage vs owned_path_not_admitted).
+				if (!isVaultGitCliSafeValue(parsed)) {
 					throw usageError(
 						"--path requires a repository-relative path, not an option-shaped value",
 					);

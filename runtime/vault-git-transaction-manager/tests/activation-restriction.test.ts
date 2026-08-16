@@ -49,7 +49,17 @@ describe("shared activation restriction semantics", () => {
 			write_permission: restriction.writePermission,
 			changed_state: restriction.changedState,
 			manual_handoff: restriction.manualHandoff,
-			next_action: restriction.nextAction,
+			// The public JSON next_action is the authoritative Next Safe Action union
+			// (binding_changed guides to prepare_fresh, an invoke), with the compat id
+			// preserved from the restriction's guidance.
+			next_action: {
+				kind: "invoke",
+				id: "prepare_fresh",
+				action_id: "prepare_fresh",
+				summary: restriction.nextAction.summary,
+				executable: "vault-git",
+				argv: ["activation", "prepare", "--json"],
+			},
 		});
 		for (const value of [
 			restriction.stoppedAction,
@@ -101,7 +111,7 @@ describe("shared activation restriction semantics", () => {
 		});
 
 		expect(projectVaultGitActivationRestrictionJson(restriction)).toMatchObject({
-			schema_version: "2",
+			schema_version: "3",
 			cause: { id: "configuration_missing" },
 			missing_configuration: ["ssh_identity_file", "ssh_known_hosts"],
 			next_action: { id: "configure_activation_identity" },

@@ -105,7 +105,13 @@ describe("bounded PR repair re-entry", () => {
 		}
 
 		const closed = await waitForTerminalTask(fixture, originalTaskId);
-		expect(parseCliProcessJson(closed)).toMatchObject({
+		const closedEnvelope = parseCliProcessJson(closed) as {
+			status: string;
+			data: { next_action?: { id?: string; kind?: string; action_id?: string } };
+			continuation?: unknown;
+			runtime_actions?: unknown;
+		};
+		expect(closedEnvelope).toMatchObject({
 			status: "ok",
 			data: {
 				outcome: "completed",
@@ -114,8 +120,17 @@ describe("bounded PR repair re-entry", () => {
 				task_attempt_number: 2,
 				task_state: "closed",
 			},
-			continuation: { next_action_id: "none" },
 		});
+		// A closed Completion Task is a legitimate terminal none: the union carries
+		// id/action_id "none", and a legitimate terminal stop omits the legacy
+		// continuation and any runtime action entirely.
+		expect(closedEnvelope.data.next_action).toMatchObject({
+			id: "none",
+			kind: "none",
+			action_id: "none",
+		});
+		expect(closedEnvelope.continuation).toBeUndefined();
+		expect(closedEnvelope.runtime_actions).toBeUndefined();
 		const after = fixture.snapshot();
 		expect(after.localMain).not.toBe(beforeReentry.localMain);
 		expect(after.remoteMain).toBe(after.localMain);

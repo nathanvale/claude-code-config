@@ -39,6 +39,11 @@ import {
 } from "../src/cli.ts";
 import type { VaultGitCheckerPort } from "../src/ports.ts";
 import type { VaultGitProcessRequest } from "../src/ports.ts";
+import type { VaultGitNextAction } from "../src/model.ts";
+import type {
+	RuntimeActionGuidance,
+	RuntimeContinuationGuidance,
+} from "@side-quest/cli-command-facade";
 import { createReceiptStore } from "../src/store.ts";
 import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
 
@@ -1075,11 +1080,52 @@ async function expectProductionContinuationParity(
 			env,
 			timeoutMs: 30_000,
 		});
-		const envelope = parseCliProcessJson(result);
-		expect(envelope, args[0]).toMatchObject({
-			data: { next_action: { id: nextAction } },
-			continuation: { next_action_id: nextAction },
-		});
+		const envelope = parseCliProcessJson<{
+			readonly data: { readonly next_action: VaultGitNextAction };
+			readonly continuation?: RuntimeContinuationGuidance;
+			readonly runtime_actions?: readonly RuntimeActionGuidance[];
+		}>(result);
+		// The compatibility next-action id is stable across every surface.
+		expect(envelope.data.next_action.id, args[0]).toBe(nextAction);
+		const union = envelope.data.next_action;
+		// The fail-closed union is REQUIRED (not merely permitted) for review_prepared
+		// on the selector-less restriction surfaces (status, doctor): a restriction
+		// cannot carry the evidence reference the review_prepared command handoff needs,
+		// so the honest result must be a terminal none. Every other scenario/command —
+		// and activation's review_prepared, which does carry the evidence — must be
+		// runnable. This structure fails if a selector-less surface silently becomes
+		// runnable, or a runnable surface silently fails closed.
+		const failClosedRequired =
+			nextAction === "review_prepared" &&
+			(args[0] === "status" || args[0] === "doctor");
+		if (failClosedRequired) {
+			expect(union.kind, args[0]).toBe("none");
+			expect(union.action_id, args[0]).toBe("none");
+			expect(envelope.runtime_actions).toBeUndefined();
+			expect(envelope.continuation).toEqual({
+				requires_operator: true,
+				constraints: [
+					{
+						id: "continuation_unavailable",
+						summary:
+							"No safe continuation is available; operator review is required.",
+					},
+				],
+			});
+		} else {
+			// Runnable surface: exact kind is a real continuation (never none), the
+			// facade continuation references the derived action, and a runtime action
+			// is present.
+			expect(union.kind, args[0]).not.toBe("none");
+			expect(union.action_id, args[0]).toBe(nextAction);
+			expect(envelope.continuation, args[0]).toEqual({
+				next_action_id: nextAction,
+			});
+			expect(
+				(envelope.runtime_actions ?? []).map((a) => a.id),
+				args[0],
+			).toContain(nextAction);
+		}
 	}
 }
 

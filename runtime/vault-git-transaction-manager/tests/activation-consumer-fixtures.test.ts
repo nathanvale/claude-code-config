@@ -14,7 +14,7 @@ describe("activation consumer contract fixtures", () => {
 		expect(
 			vaultGitActivationConsumerContractFixtures.firstUseExperience.restricted,
 		).toMatchObject({
-			schema_version: "2",
+			schema_version: "3",
 			cause: { id: "configuration_missing" },
 			missing_configuration: [
 				"ssh_identity_file",

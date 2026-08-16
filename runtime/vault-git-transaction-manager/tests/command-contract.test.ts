@@ -36,6 +36,7 @@ import {
 	VAULT_GIT_WRITE_PERMISSIONS,
 	createVaultGitLifecycleResult,
 } from "../src/model.ts";
+import { projectVaultGitNextAction } from "../src/next-safe-action.ts";
 import { VaultRepositoryIdentityUnavailableError } from "../src/ports.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -432,10 +433,10 @@ describe("vault-git U1 bounded runtime", () => {
 				changed_state: "none",
 				retry_safety: "same_input_safe",
 				blockers: ["runtime_unavailable"],
-				next_action: {
+				next_action: projectVaultGitNextAction({
 					id: "wait_for_runtime",
 					summary: "Wait for the runtime implementation.",
-				},
+				}),
 			}),
 		).toThrow("phase");
 		expect(VAULT_GIT_TRANSACTION_PHASES).toContain("closed");
@@ -504,23 +505,41 @@ describe("vault-git Branch Station runtime coverage", () => {
 			const envelope = JSON.parse(json.stdout);
 			expect(envelope.status).toBe(station.expectedEnvelopeStatus);
 			expect(envelope.error.code).toBe(station.expectedErrorCode);
+			// The compat id stays change_input, but a generic usage failure names no
+			// selector/context, so the authoritative union is a fail-closed terminal
+			// none: no runnable continuation, no runtime action, and the continuation
+			// requires operator review with a continuation_unavailable constraint.
+			expect(envelope.data.next_action).toMatchObject({
+				kind: "none",
+				id: "change_input",
+				action_id: "none",
+			});
 			expect(envelope.data).toMatchObject({
 				command: station.command,
 				outcome: "invalid_usage",
 				write_permission: "denied",
 				changed_state: "none",
-				next_action: { id: "change_input" },
 			});
-			expect(envelope.continuation.next_action_id).toBe(
-				station.expectedContinuationId,
-			);
+			expect(station.expectedContinuationId).toBeUndefined();
+			expect(envelope.runtime_actions).toBeUndefined();
+			expect(envelope.continuation).toEqual({
+				requires_operator: true,
+				constraints: [
+					{
+						id: "continuation_unavailable",
+						summary:
+							"No safe continuation is available; operator review is required.",
+					},
+				],
+			});
 
 			const plain = await runVaultGitForTest(argv, {
 				runId: `run-${stationId}-plain`,
 			});
 			expect(plain.exitCode).toBe(station.expectedExitCode);
 			expect(plain.stdout).toBe("");
-			expect(plain.stderr).toContain("next: change_input");
+			expect(plain.stderr).toContain("next: none");
+			expect(plain.stderr).not.toContain("next: change_input");
 		}
 	});
 

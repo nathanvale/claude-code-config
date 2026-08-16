@@ -18,6 +18,26 @@ import {
 
 setDefaultTimeout(180_000);
 
+/**
+ * Assert a legitimate terminal-none result: the authoritative union carries
+ * id/action_id "none", and a legitimate terminal stop omits the continuation and any
+ * runtime action entirely (nothing to run, nothing to escalate).
+ */
+function assertTerminalNone(envelope: unknown): void {
+	const e = envelope as {
+		data?: { next_action?: { id?: string; kind?: string; action_id?: string } };
+		continuation?: unknown;
+		runtime_actions?: unknown;
+	};
+	expect(e.data?.next_action).toMatchObject({
+		id: "none",
+		kind: "none",
+		action_id: "none",
+	});
+	expect(e.continuation).toBeUndefined();
+	expect(e.runtime_actions).toBeUndefined();
+}
+
 afterEach(cleanupSmokeFixtures);
 
 async function waitForTerminalTask(
@@ -332,11 +352,12 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			transactionId,
 			"--json",
 		]);
-		expect(parseCliProcessJson(retried)).toMatchObject({
+		const retriedEnvelope = parseCliProcessJson(retried);
+		expect(retriedEnvelope).toMatchObject({
 			status: "ok",
 			data: { outcome: "repaired", phase: "closed" },
-			continuation: { next_action_id: "none" },
 		});
+		assertTerminalNone(retriedEnvelope);
 		const closed = fixture.snapshot();
 		expect(closed.remoteMain).toBe(closed.localMain);
 		expect(closed.worktree).toBe(before.worktree);
@@ -475,7 +496,8 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		}
 
 		const closedTask = await waitForTerminalTask(fixture, repairedCallers[0]);
-		expect(parseCliProcessJson(closedTask)).toMatchObject({
+		const closedTaskEnvelope = parseCliProcessJson(closedTask);
+		expect(closedTaskEnvelope).toMatchObject({
 			status: "ok",
 			data: {
 				outcome: "completed",
@@ -486,8 +508,8 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 				task_previous_failure: { blocker: "vault_check_failed" },
 				task_state: "closed",
 			},
-			continuation: { next_action_id: "none" },
 		});
+		assertTerminalNone(closedTaskEnvelope);
 		const closed = fixture.snapshot();
 		expect(closed.localMain).not.toBe(beforeReentry.localMain);
 		expect(closed.remoteMain).toBe(closed.localMain);
@@ -627,11 +649,12 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			continuation: { next_action_id: "inspect_status" },
 		});
 		const terminal = await waitForTerminalTask(fixture, completed);
-		expect(parseCliProcessJson(terminal)).toMatchObject({
+		const terminalEnvelope = parseCliProcessJson(terminal);
+		expect(terminalEnvelope).toMatchObject({
 			status: "ok",
 			data: { outcome: "completed", phase: "closed", task_state: "closed" },
-			continuation: { next_action_id: "none" },
 		});
+		assertTerminalNone(terminalEnvelope);
 		const after = fixture.snapshot();
 		expect(after.localMain).not.toBe(before.localMain);
 		expect(after.remoteMain).toBe(after.localMain);
@@ -665,8 +688,8 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 				finding: "transaction_closed",
 				retry_safety: "same_input_safe",
 			},
-			continuation: { next_action_id: "none" },
 		});
+		assertTerminalNone(diagnosis);
 		expect(JSON.stringify(diagnosis)).not.toContain('"repair_action"');
 	});
 

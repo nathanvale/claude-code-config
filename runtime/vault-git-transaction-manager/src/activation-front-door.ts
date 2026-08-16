@@ -7,7 +7,7 @@ import {
 	projectVaultGitActivatedResult,
 	projectVaultGitDeferredResult,
 	projectVaultGitRevokedResult,
-	type VaultGitActivationResultV2,
+	type VaultGitActivationResultV3,
 } from "./activation-result.ts";
 import type {
 	VaultGitActivationAuthority,
@@ -23,7 +23,7 @@ import {
 	projectVaultGitActivationRestrictionJson,
 } from "./activation-restriction.ts";
 import type {
-	VaultGitActivationRestrictionJsonV2,
+	VaultGitActivationRestrictionJsonV3,
 	VaultGitActivationStoppedAction,
 } from "./model.ts";
 import type { VaultGitReceiptStore } from "./store.ts";
@@ -35,7 +35,7 @@ export type VaultGitActivationAuthorityFactory = (
 
 /** Public activation result emitted by the guarded production front door. */
 export type VaultGitActivationFrontDoorResult =
-	VaultGitActivationResultV2;
+	VaultGitActivationResultV3;
 
 /** Exact human decision bound to one prepared evidence reference. */
 export interface VaultGitActivationReviewRequest {
@@ -212,7 +212,7 @@ function restriction(
 		"reason"
 	],
 	stoppedAction: VaultGitActivationStoppedAction,
-): VaultGitActivationRestrictionJsonV2 {
+): VaultGitActivationRestrictionJsonV3 {
 	return projectVaultGitActivationRestrictionJson(
 		createVaultGitActivationRestriction({
 			stoppedAction,

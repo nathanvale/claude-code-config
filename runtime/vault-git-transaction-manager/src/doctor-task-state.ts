@@ -20,6 +20,7 @@ import {
 	type VaultGitTransactionPhase,
 	type VaultGitTransactionState,
 } from "./model.ts";
+import { VAULT_GIT_NEXT_SAFE_ACTION_IDS } from "./next-safe-action.ts";
 
 export type {
 	VaultGitDoctorTaskCheckpoint,
@@ -114,11 +115,14 @@ const DOCTOR_TERMINAL_REQUIRED_KEYS = [
 	"finding",
 	"changedState",
 	"retrySafety",
-	"nextAction",
 ] as const;
 
 const DOCTOR_TERMINAL_KEYS = [
 	...DOCTOR_TERMINAL_REQUIRED_KEYS,
+	// Exactly one next-action carrier: the new durable semantic id, or the legacy
+	// { id, summary } object read without rewrite.
+	"nextActionId",
+	"nextAction",
 	"blocker",
 	"repairAction",
 	"transactionId",
@@ -330,8 +334,36 @@ function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
 			value as unknown as VaultGitDoctorTaskWorkerFailure,
 		);
 	}
+	// Guard record-ness before any Object.hasOwn / property read, so a malformed
+	// null or scalar fails closed with the domain error, not a raw TypeError.
+	if (!isRecord(value)) {
+		throw new Error("doctor task terminal result invalid");
+	}
+	// Exactly one next-action carrier: the new durable semantic id, or the legacy
+	// { id, summary } object. Neither or both is a corrupt record.
+	const hasNextActionId = Object.hasOwn(value, "nextActionId");
+	const hasLegacyNextAction = Object.hasOwn(value, "nextAction");
+	const legacyValid =
+		hasLegacyNextAction &&
+		isRecord(value.nextAction) &&
+		hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) &&
+		VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+			value.nextAction.id as VaultGitEngineNextActionId,
+		) &&
+		typeof value.nextAction.summary === "string" &&
+		value.nextAction.summary.trim().length > 0;
+	// New writes name a normalized semantic id only (no summary, no object). The
+	// normalized identity is either a Next Safe Action catalog id (e.g.
+	// inspect_doctor_task) or an already-validated engine next-action id retained
+	// verbatim (e.g. run_repair), so accept both sets.
+	const semanticValid =
+		hasNextActionId &&
+		typeof value.nextActionId === "string" &&
+		(VAULT_GIT_NEXT_SAFE_ACTION_IDS.includes(value.nextActionId as string) ||
+			VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+				value.nextActionId as VaultGitEngineNextActionId,
+			));
 	if (
-		!isRecord(value) ||
 		!hasOnlyKeys(value, DOCTOR_TERMINAL_KEYS) ||
 		!DOCTOR_TERMINAL_REQUIRED_KEYS.every((key) => Object.hasOwn(value, key)) ||
 		value.kind !== "doctor_result" ||
@@ -341,13 +373,9 @@ function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
 		!VAULT_GIT_DOCTOR_FINDINGS.includes(value.finding as VaultGitDoctorFinding) ||
 		(value.changedState !== "none" && value.changedState !== "local") ||
 		!VAULT_GIT_RETRY_SAFETIES.includes(value.retrySafety as VaultGitRetrySafety) ||
-		!isRecord(value.nextAction) ||
-		!hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) ||
-		!VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
-			value.nextAction.id as VaultGitEngineNextActionId,
-		) ||
-		typeof value.nextAction.summary !== "string" ||
-		value.nextAction.summary.trim().length === 0 ||
+		// Reject neither and both; accept exactly one valid carrier.
+		hasNextActionId === hasLegacyNextAction ||
+		(hasNextActionId ? !semanticValid : !legacyValid) ||
 		(value.blocker !== undefined &&
 			!VAULT_GIT_BLOCKER_IDS.includes(value.blocker as VaultGitBlockerId)) ||
 		(value.repairAction !== undefined &&

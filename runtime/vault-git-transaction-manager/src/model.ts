@@ -77,9 +77,9 @@ export interface VaultGitActivationRestriction {
 }
 
 /** Public JSON restriction result with no private diagnostics. */
-export interface VaultGitActivationRestrictionJsonV2 {
+export interface VaultGitActivationRestrictionJsonV3 {
 	readonly contract_id: "vault-git.activation-result";
-	readonly schema_version: "2";
+	readonly schema_version: "3";
 	readonly status: "restricted";
 	readonly privacy: "public";
 	readonly stopped_action: VaultGitActivationStoppedAction;
@@ -90,7 +90,8 @@ export interface VaultGitActivationRestrictionJsonV2 {
 	readonly changed_state: VaultGitChangedState;
 	readonly missing_configuration?: readonly VaultGitActivationConfigurationField[];
 	readonly manual_handoff: VaultGitActivationRestriction["manualHandoff"];
-	readonly next_action: VaultGitActivationRestriction["nextAction"];
+	/** One safe continuation as the authoritative Next Safe Action union. */
+	readonly next_action: VaultGitNextAction;
 }
 
 const ACTIVATION_CAUSE_SUMMARY: Record<
@@ -310,6 +311,84 @@ export interface VaultGitOwnedPathReceipt {
 	readonly admittedNewFile: boolean;
 }
 
+/**
+ * Pure CLI-safe value predicate: the single owner of the token-safety rule that
+ * every argv-bound value must satisfy. A value is CLI-safe when it is a non-empty
+ * string with no NUL or newline control characters and is not option-shaped (a
+ * leading `-` would be misread as a flag). This is the token concern only; it
+ * makes no claim about repository-relative structure.
+ *
+ * Command parsing uses this alone so a structurally invalid path still refuses at
+ * its owned admission phase rather than at parse time.
+ *
+ * @param value - Candidate argv value.
+ * @returns `true` when the value is a safe CLI token.
+ *
+ * @example
+ * ```typescript
+ * isVaultGitCliSafeValue("notes/one.md") // true
+ * isVaultGitCliSafeValue("--json")       // false (option-shaped)
+ * ```
+ */
+export function isVaultGitCliSafeValue(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		!value.startsWith("-") &&
+		!/[\0\r\n]/.test(value)
+	);
+}
+
+/**
+ * Pure repository-relative Owned Path leaf predicate: the single owner of the
+ * leaf-path rule that receipt custody, the remote ledger, the Git adapter, and
+ * the Next Safe Action input binder share. It composes CLI-safe token safety with
+ * the relative/segment rules: not absolute, no trailing separator, and no empty,
+ * `.`, `..`, or case-insensitive `.git` segment. This is the containment-free
+ * rule; the Git adapter composes its own realpath escape check on top for on-disk
+ * admission.
+ *
+ * @param value - Candidate repository-relative path.
+ * @returns `true` when the value is a safe Owned Path leaf.
+ *
+ * @example
+ * ```typescript
+ * isVaultGitOwnedPathLeaf("notes/one.md") // true
+ * isVaultGitOwnedPathLeaf("../secret")    // false
+ * isVaultGitOwnedPathLeaf("/etc/passwd")  // false
+ * ```
+ */
+export function isVaultGitOwnedPathLeaf(value: unknown): value is string {
+	// A repository-relative Owned Path is a literal filesystem path, NOT a CLI token:
+	// it may legitimately begin with `-` (a literal leading dash), carry pathspec
+	// magic characters, or contain an embedded newline (git handles these via `--` /
+	// literal pathspecs and NUL-delimited plumbing). So this predicate does NOT
+	// compose the CLI-token rule (isVaultGitCliSafeValue), which exists only for
+	// argv-bound values. It applies its own containment-free checks — matching the
+	// prior adapter/store/ledger contract exactly: non-empty string, no NUL or CR
+	// control byte (the record and plumbing delimiters), not absolute, no trailing
+	// separator, and no empty, `.`, `..`, or case-insensitive `.git` segment. The Git
+	// adapter composes its own realpath escape check on top for on-disk admission.
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		/[\0\r]/.test(value) ||
+		value.startsWith("/") ||
+		value.endsWith("/")
+	) {
+		return false;
+	}
+	return value
+		.split("/")
+		.every(
+			(segment) =>
+				segment.length > 0 &&
+				segment !== "." &&
+				segment !== ".." &&
+				segment.toLowerCase() !== ".git",
+		);
+}
+
 /** Full unrelated status and index intent captured at admission. */
 export interface VaultGitUnrelatedStateSnapshot {
 	/** NUL-safe hexadecimal encoding of porcelain-v2 status output. */
@@ -452,8 +531,8 @@ export type VaultGitDoctorTaskCheckpoint =
 	| "checking_remote"
 	| "terminal";
 
-/** Sanitized authoritative Doctor result retained by a terminal Doctor Task. */
-export interface VaultGitDoctorTaskTerminalResult {
+/** Shared fields of a terminal Doctor Task diagnosis, independent of the next-action carrier. */
+export interface VaultGitDoctorTaskTerminalResultBase {
 	readonly kind: "doctor_result";
 	readonly status: "diagnosed";
 	readonly state: VaultGitTransactionState;
@@ -461,13 +540,59 @@ export interface VaultGitDoctorTaskTerminalResult {
 	readonly finding: VaultGitDoctorFinding;
 	readonly changedState: "none" | "local";
 	readonly retrySafety: VaultGitRetrySafety;
-	readonly nextAction: {
-		readonly id: VaultGitEngineNextActionId;
-		readonly summary: string;
-	};
 	readonly blocker?: VaultGitBlockerId;
 	readonly repairAction?: VaultGitRepairAction;
 	readonly transactionId?: string;
+}
+
+/** Legacy on-disk continuation object, read without rewrite. */
+export interface VaultGitDoctorTaskTerminalLegacyNextAction {
+	readonly id: VaultGitEngineNextActionId;
+	readonly summary: string;
+}
+
+/**
+ * Sanitized authoritative Doctor result retained by a terminal Doctor Task.
+ *
+ * Exactly one next-action carrier is present: new terminal writes persist the
+ * semantic action id only (`nextActionId`, with `nextAction` absent) and the full
+ * public continuation is reconstructed on read from that id plus the Next Safe
+ * Action catalog; legacy on-disk terminals persist the `nextAction: { id, summary }`
+ * object (with `nextActionId` absent) and remain readable without rewrite. The
+ * `?: never` arms make the two branches mutually exclusive at the type level.
+ */
+export type VaultGitDoctorTaskTerminalResult =
+	| (VaultGitDoctorTaskTerminalResultBase & {
+			readonly nextActionId: string;
+			readonly nextAction?: never;
+	  })
+	| (VaultGitDoctorTaskTerminalResultBase & {
+			readonly nextAction: VaultGitDoctorTaskTerminalLegacyNextAction;
+			readonly nextActionId?: never;
+	  });
+
+/**
+ * The durable terminal's next-action carrier, discriminated by which shape was
+ * persisted. A `semantic` carrier is a new-write persisted Next Safe Action id (to
+ * be rehydrated directly). A `legacy` carrier is the old `{ id, summary }` object
+ * whose id is a compatibility id, not a semantic id — it must be reprojected through
+ * the normal projector with context, never fed into semantic rehydration.
+ */
+export type VaultGitDoctorTerminalNextActionCarrier =
+	| { readonly kind: "semantic"; readonly actionId: string }
+	| { readonly kind: "legacy"; readonly actionId: VaultGitEngineNextActionId; readonly summary: string };
+
+/**
+ * Resolve the durable terminal's next-action carrier to its discriminated shape, so
+ * one owner reconstructs the union: the semantic branch via persisted-semantic
+ * rehydration, the legacy branch via normal projection with Doctor Task context.
+ */
+export function resolveVaultGitDoctorTerminalNextAction(
+	terminal: VaultGitDoctorTaskTerminalResult,
+): VaultGitDoctorTerminalNextActionCarrier {
+	return terminal.nextActionId !== undefined
+		? { kind: "semantic", actionId: terminal.nextActionId }
+		: { kind: "legacy", actionId: terminal.nextAction.id, summary: terminal.nextAction.summary };
 }
 
 /** Sanitized process failure retained by a terminal Doctor Task. */
@@ -668,6 +793,10 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"checker_changed",
 	"checker_output_invalid",
 	"checker_repair_refused",
+	// A requested next safe action could not be projected to an executable
+	// continuation (unknown id, missing selector, or missing disambiguating
+	// context); the result fails closed to operator review rather than degrading.
+	"continuation_unavailable",
 ] as const;
 
 /** Stable transaction blocker id. */
@@ -857,12 +986,31 @@ export interface VaultGitPrivateHygieneResult {
 /** One safe continuation selected for the current result. */
 export type VaultGitNextActionId = (typeof VAULT_GIT_NEXT_ACTION_IDS)[number];
 
+/**
+ * Runtime type guard: whether a value is a public master next-action (compatibility)
+ * id. Distinct from the larger Next Safe Action semantic catalog, which includes
+ * semantic-only ids (e.g. inspect_doctor_task) that are NOT public compatibility ids.
+ */
+export function isVaultGitNextActionId(
+	value: string,
+): value is VaultGitNextActionId {
+	return (VAULT_GIT_NEXT_ACTION_IDS as readonly string[]).includes(value);
+}
+
 /** Exact remote branch used as the append-only lease sequencer. */
 export const VAULT_GIT_LEDGER_REF =
 	"refs/heads/vault-system/transaction-ledger" as const;
 
 /** Schema version for package-owned JSON results. */
-export const VAULT_GIT_SCHEMA_VERSION = "1" as const;
+export const VAULT_GIT_SCHEMA_VERSION = "2" as const;
+
+/**
+ * Public prepared-evidence identifier shape shared by the activation store
+ * validators and the Next Safe Action evidence_reference selector. Owned by this
+ * leaf so both the activation contract and the Next Safe Action projector reference
+ * it without a module cycle.
+ */
+export const EVIDENCE_ID = /^vault-git:prepared:v2:[0-9a-f]{64}$/;
 
 /** Lifecycle result contract id. */
 export const VAULT_GIT_RESULT_CONTRACT_ID =
@@ -872,13 +1020,81 @@ export const VAULT_GIT_RESULT_CONTRACT_ID =
 export const VAULT_GIT_COMMANDS_CONTRACT_ID =
 	"vault-git.command-discovery" as const;
 
-/** Exactly one safe continuation for a command result. */
-export interface VaultGitNextAction {
-	/** Stable action id. */
+/** Logical executable owner permitted to run a projected continuation. */
+export type VaultGitNextActionExecutable = "vault-git" | "setup";
+
+/** Delivery channel for one ordered next-action input descriptor. */
+export type VaultGitNextActionInputChannel = "public" | "private_stdin";
+
+/** One ordered next-action input descriptor (public projection only). */
+export interface VaultGitNextActionInputField {
+	readonly id: string;
+	readonly input_channel: VaultGitNextActionInputChannel;
+}
+
+/**
+ * The flat compatibility next-action pair: a stable public action id plus its human
+ * summary, with no projected continuation. Engine-adjacent producers (the janitor
+ * report, worker policy) carry this; the CLI re-projects it into the authoritative
+ * `VaultGitNextAction` union at the public boundary. It is the master-id compat pair
+ * (wider than `VaultGitEngineNextActionId` — it also covers ids such as `run_janitor`
+ * and `none`).
+ */
+export interface VaultGitNextActionCompat {
 	readonly id: VaultGitNextActionId;
-	/** Concise, safe action meaning. */
 	readonly summary: string;
 }
+
+/**
+ * Exactly one safe continuation for a command result, as the authoritative Next
+ * Safe Action discriminated union. The compat `id` and `summary` are top-level
+ * fields on the union itself (never a nested legacy object): `id` is the stable
+ * public action id existing consumers read, `action_id` is the semantic
+ * continuation id (they differ only for a legacy id reprojected to its semantic
+ * split). The union is constructed and validated by the Next Safe Action owner
+ * (`composeVaultGitLifecycleResult`); this leaf type carries no catalog knowledge.
+ */
+export type VaultGitNextAction =
+	| {
+			readonly kind: "invoke";
+			readonly id: VaultGitNextActionId;
+			readonly action_id: string;
+			readonly summary: string;
+			readonly executable: VaultGitNextActionExecutable;
+			readonly argv: readonly string[];
+	  }
+	| {
+			readonly kind: "needs_input";
+			readonly id: VaultGitNextActionId;
+			readonly action_id: string;
+			readonly summary: string;
+			readonly input_contract_id: string;
+			readonly fields: readonly VaultGitNextActionInputField[];
+	  }
+	| {
+			readonly kind: "needs_human";
+			readonly id: VaultGitNextActionId;
+			readonly action_id: string;
+			readonly summary: string;
+			readonly handoff_kind: "command";
+			readonly executable: VaultGitNextActionExecutable;
+			readonly argv: readonly string[];
+	  }
+	| {
+			readonly kind: "needs_human";
+			readonly id: VaultGitNextActionId;
+			readonly action_id: string;
+			readonly summary: string;
+			readonly handoff_kind: "external_prerequisite";
+			readonly owner: string;
+			readonly condition: string;
+	  }
+	| {
+			readonly kind: "none";
+			readonly id: VaultGitNextActionId;
+			readonly action_id: string;
+			readonly summary: string;
+	  };
 
 /** Package-owned lifecycle payload before facade result metadata is attached. */
 export interface VaultGitLifecycleResultPayload {
@@ -931,7 +1147,7 @@ export interface VaultGitLifecycleResultPayload {
 	/** Exactly one next safe action. */
 	readonly next_action: VaultGitNextAction;
 	/** Cause-specific public activation refusal, when activation stopped a write. */
-	readonly activation_restriction?: VaultGitActivationRestrictionJsonV2;
+	readonly activation_restriction?: VaultGitActivationRestrictionJsonV3;
 }
 
 /** Domain snapshot returned by read-side ports. */
@@ -943,6 +1159,18 @@ export interface VaultGitStateSnapshot {
 	/** Current blockers. */
 	readonly blockers: readonly VaultGitBlockerId[];
 }
+
+/** Discriminant kinds admitted by the Next Safe Action union. */
+export const VAULT_GIT_NEXT_ACTION_KINDS = [
+	"invoke",
+	"needs_input",
+	"needs_human",
+	"none",
+] as const;
+
+/** One Next Safe Action union discriminant. */
+export type VaultGitNextActionKind =
+	(typeof VAULT_GIT_NEXT_ACTION_KINDS)[number];
 
 /**
  * Construct a lifecycle result while enforcing package-owned literal vocabulary.
@@ -987,6 +1215,14 @@ export function createVaultGitLifecycleResult(
 	);
 	if (input.next_action.summary.trim().length === 0) {
 		throw new Error("next_action.summary must not be empty");
+	}
+	if (!VAULT_GIT_NEXT_ACTION_KINDS.includes(input.next_action.kind)) {
+		throw new Error(
+			`next_action.kind must be one of: ${VAULT_GIT_NEXT_ACTION_KINDS.join(", ")}`,
+		);
+	}
+	if (input.next_action.action_id.trim().length === 0) {
+		throw new Error("next_action.action_id must not be empty");
 	}
 	return {
 		...input,
