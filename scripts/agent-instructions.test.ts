@@ -21,8 +21,13 @@ import {
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
-const vaultGitStartupRule =
-	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill, which must honor its owner-controlled pause marker before invoking the transaction manager; never create vault worktrees; allow only one canonical writer at a time.";
+const vaultGitStartupRule = [
+	"- Before code-repo file edits, verify isolation with the `worktree` skill (new/attach); never edit the main checkout.",
+	"- Treat the configured Super-vault in `~/.config/context/vault.md` as the sole worktree-isolation exception.",
+	"- Route vault writes through the `vault-git` skill; it must honor the owner-controlled pause marker before invoking the transaction manager.",
+	"- Never create vault worktrees; allow only one canonical writer.",
+	"- Keep read-only vault work in the main checkout.",
+].join("\n");
 const testDesignStartupRule =
 	"Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.";
 
