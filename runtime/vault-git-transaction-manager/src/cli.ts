@@ -29,6 +29,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	VAULT_GIT_COMMANDS,
+	createVaultGitActionRef as action,
 	parseVaultGitInvocation,
 	projectVaultGitCommandDiscoveryTree,
 	type ParsedVaultGitInvocation,
@@ -60,13 +61,9 @@ import {
 	admitVaultGitCheckCommand,
 	createVaultGitActivationRestriction,
 	findVaultGitDependencySurface,
-	isVaultGitNextActionId,
 	parseVaultGitManifest,
-	resolveVaultGitDoctorTerminalNextAction,
 	type VaultGitLifecycleResultPayload,
 	type VaultGitActivationConfigurationField,
-	type VaultGitDoctorTaskTerminal,
-	type VaultGitNextAction,
 	type VaultGitNextActionId,
 	type VaultGitRepairAction,
 	type VaultGitTransactionPhase,
@@ -76,9 +73,6 @@ import {
 	// projects the authoritative Next Safe Action union from the payload's action
 	// ref, derives compat id/summary + facade affordances, and rejects divergence.
 	composeVaultGitLifecycleResult as createVaultGitLifecycleResult,
-	projectVaultGitNextAction,
-	rehydrateVaultGitPersistedNextAction,
-	type VaultGitContinuationSelectors,
 	type VaultGitNextActionRef,
 } from "./next-safe-action.ts";
 import { resolveVaultRepositoryIdentity } from "./repository-identity.ts";
@@ -111,20 +105,17 @@ import {
 	type VaultGitProcessPort,
 	type VaultGitRuntimePort,
 } from "./ports.ts";
+import type { VaultGitDoctorResult } from "./doctor.ts";
 import {
-	classifyVaultGitDoctorLocalReceipt,
-	type VaultGitDoctorResult,
-} from "./doctor.ts";
-import type { VaultGitReceiptLoadResult } from "./store.ts";
+	createVaultGitDoctorEvidenceSource,
+	createVaultGitDoctorFrontDoor,
+	type VaultGitDoctorFrontDoor,
+	type VaultGitDoctorFrontDoorProjection,
+} from "./doctor-front-door.ts";
 import {
 	createVaultGitDoctorTaskStore,
 	type VaultGitDoctorTaskStore,
 } from "./doctor-task-store.ts";
-import {
-	createVaultGitDoctorTaskLifecycle,
-	type VaultGitBackgroundDoctorRuntime,
-} from "./doctor-task-lifecycle.ts";
-import type { VaultGitDoctorTaskState } from "./doctor-task-state.ts";
 import type { VaultGitRepairResult } from "./repair.ts";
 import {
 	createVaultGitTaskStore,
@@ -174,6 +165,7 @@ const PRODUCTION_EXECUTABLE_SOURCE_NAMES = [
 	"command-contract.ts",
 	"commit-policy.ts",
 	"doctor.ts",
+	"doctor-front-door.ts",
 	"doctor-task-lifecycle.ts",
 	"doctor-task-state.ts",
 	"doctor-task-store.ts",
@@ -983,25 +975,25 @@ export async function main(
 			invocation.taskId === undefined &&
 			environment[VAULT_GIT_DOCTOR_TASK_ID_ENV] === undefined
 		) {
-			const doctorReceipt = await composition.store.load();
-			if (
-				doctorReceipt.status === "loaded" &&
-				(invocation.transactionId === undefined ||
-					doctorReceipt.receipt.transactionId === invocation.transactionId)
-			) {
-				return launchBackgroundDoctor({
-					composition,
-					invocation: invocation as VaultGitRuntimeInvocation & {
-						readonly command: "doctor";
-					},
-					args,
+			const admitted = await composeVaultGitDoctorFrontDoor(
+				composition,
+				now,
+				environment,
+			).admitForeground({
+				transactionId: invocation.transactionId,
+				args,
+			});
+			if (admitted.kind === "projected") {
+				return emitPayload({
+					invocation,
 					stdout,
 					stderr,
 					runId: diagnostics.options.runId,
 					startedAt: diagnostics.options.startedAtMs,
 					now,
-					environment,
-					receipt: doctorReceipt,
+					payload: admitted.projection.payload,
+					success: admitted.projection.success,
+					errorCode: admitted.projection.errorCode,
 				});
 			}
 		}
@@ -1083,6 +1075,7 @@ export async function main(
 			humanActivationReview,
 			taskLifecycleDispatch,
 			environment,
+			now,
 		);
 		return emitRuntimeResult({
 			invocation,
@@ -1909,148 +1902,47 @@ function isSingleJsonEnvelope(output: string): boolean {
 	}
 }
 
-async function launchBackgroundDoctor(input: EmitContext & {
-	readonly composition: VaultGitCliComposition;
-	readonly invocation: VaultGitRuntimeInvocation & { readonly command: "doctor" };
-	readonly args: readonly string[];
-	readonly stderr: CliWriter;
-	readonly environment: NodeJS.ProcessEnv;
-	readonly receipt: VaultGitReceiptLoadResult;
-}): Promise<number> {
-	const acknowledgementStartedAt = performance.now();
-	const taskStore = requireDoctorTaskStore(input.composition);
-	const receipt = input.receipt;
-	const selectedReceipt =
-		receipt.status === "loaded" &&
-		(input.invocation.transactionId === undefined ||
-			receipt.receipt.transactionId === input.invocation.transactionId)
-			? receipt.receipt
-			: null;
-	const local = classifyVaultGitDoctorLocalReceipt(
-		receipt,
-		input.invocation.transactionId,
-	);
-	const activation = await input.composition.store.readActivation();
-	const lifecycle = composeBackgroundDoctorTaskLifecycle(
-		input.composition,
-		() => new Date(input.now()),
-		input.environment,
-	);
-	const outcome = await lifecycle.launch({
-		binding: {
-			repositoryId: taskStore.repositoryId,
-			activationEvidenceId: activation?.evidenceId ?? null,
-			receiptId: selectedReceipt?.receiptId ?? null,
-			receiptRevision: selectedReceipt?.revision ?? null,
-			transactionId:
-				input.invocation.transactionId ??
-				selectedReceipt?.transactionId ??
-				null,
-			normalizedInput: JSON.stringify({
-				command: "doctor",
-				transactionId: input.invocation.transactionId ?? null,
-			}),
-		},
-		acknowledgementStartedAt,
-		createLaunchGeneration: () =>
-			`doctor_launch_${randomUUID().replaceAll("-", "")}`,
-		args: input.args,
-	});
-	const state = outcome.state;
-	if (outcome.kind === "refused") {
-		const inputMismatch = outcome.reason === "task_input_mismatch";
-		const payload = createVaultGitLifecycleResult({
-			command: "doctor",
-			outcome: "refused",
-			phase: local.phase,
-			write_permission: "denied",
-			changed_state: inputMismatch ? "none" : "local",
-			retry_safety: "operator_required",
-			blockers: [outcome.reason],
-			transaction_id: local.transactionId,
-			transaction_state: local.state,
-				task_id: state.taskId,
-				task_generation: state.launchGeneration ?? undefined,
-				task_state: state.state,
-			task_phase: state.phase,
-			task_elapsed_ms: Math.max(0, input.now() - Date.parse(state.recordedAt)),
-			foreground_non_vault_work_allowed: true,
-			next_action: action(
-				"inspect_status",
-				inputMismatch
-					? "Inspect the existing Background Doctor task before retrying."
-					: "Inspect the Background Doctor task before any repair.",
-				// A Doctor Task refusal: inspect_status splits by Task kind to
-				// inspect_doctor_task, binding the doctor_task_id from the payload.
-				{ result_kind: "doctor_task" },
-			),
-		});
-		return emitPayload({
-			...input,
-			payload,
-			success: false,
-			errorCode: outcome.reason,
-		});
-	}
-	if (state.phase === "terminal") {
-		return emitPayload({
-			...input,
-			payload: payloadForDoctorTask(state, input.now()),
-			success: state.state === "closed",
-			errorCode: state.terminalResult?.blocker ?? "worker_lost",
-		});
-	}
-	const payload = createVaultGitLifecycleResult({
-		command: "doctor",
-		outcome: "advanced",
-		phase: local.phase,
-		write_permission: "denied",
-		changed_state: "local",
-		retry_safety: "same_input_safe",
-		blockers: [],
-		transaction_id: local.transactionId,
-		transaction_state: local.state,
-		task_id: state.taskId,
-		task_generation: state.launchGeneration ?? undefined,
-		task_state: state.state,
-		task_phase: state.phase,
-		task_heartbeat_at: state.heartbeatAt,
-		task_elapsed_ms: Math.max(0, input.now() - Date.parse(state.recordedAt)),
-		foreground_non_vault_work_allowed: true,
-		next_action: action(
-			"inspect_status",
-			"Inspect the Background Doctor task for authoritative diagnosis.",
-		),
-	});
-	return emitPayload({ ...input, payload, success: true, errorCode: "" });
-}
-
-function composeBackgroundDoctorTaskLifecycle(
+/**
+ * Compose the deep Doctor owner from the live composition. The CLI supplies
+ * only IO adapters (spawn, process identity, clocks); admission, inspection,
+ * terminal projection, and Doctor Continuation mapping live in the owner.
+ */
+function composeVaultGitDoctorFrontDoor(
 	composition: VaultGitCliComposition,
-	recordedAt: () => Date = () => composition.runtime.now(),
-	environment: NodeJS.ProcessEnv = process.env,
-) {
-	const runtime: VaultGitBackgroundDoctorRuntime<VaultGitCliComposition> = {
-		now: () => performance.now(),
-		recordedAt,
-		sleep: (milliseconds) => Bun.sleep(milliseconds),
-		spawnWorker: (context, taskId, launchGeneration, args) =>
-			spawnBackgroundDoctorWorker(
-				context,
-				taskId,
-				launchGeneration,
-				args,
-				environment,
-			),
-		readProcessIdentity: readVaultGitProcessIdentity,
-		stopUnacknowledgedWorker,
-		stopExpiredWorker: stopExpiredUnacknowledgedWorker,
-		processIdentityMatches,
-	};
-	return createVaultGitDoctorTaskLifecycle({
-		store: requireDoctorTaskStore(composition),
-		runtime,
+	now: () => number,
+	environment: NodeJS.ProcessEnv,
+): VaultGitDoctorFrontDoor {
+	return createVaultGitDoctorFrontDoor({
+		store: composition.store,
+		taskStore: requireDoctorTaskStore(composition),
+		runtime: {
+			now: () => performance.now(),
+			recordedAt: () => composition.runtime.now(),
+			sleep: (milliseconds) => Bun.sleep(milliseconds),
+			spawnWorker: (context, taskId, launchGeneration, args) =>
+				spawnBackgroundDoctorWorker(
+					context,
+					taskId,
+					launchGeneration,
+					args,
+					environment,
+				),
+			readProcessIdentity: readVaultGitProcessIdentity,
+			stopUnacknowledgedWorker,
+			stopExpiredWorker: stopExpiredUnacknowledgedWorker,
+			processIdentityMatches,
+		},
 		spawnContext: composition,
+		now,
+		...(composition.taskStore
+			? {
+					evidence: createVaultGitDoctorEvidenceSource({
+						completionTasks: composition.taskStore,
+						privateStateRoot: composition.store.paths.repositoryRoot,
+						now: () => composition.runtime.now(),
+					}),
+				}
+			: {}),
 	});
 }
 
@@ -2526,9 +2418,10 @@ type RuntimeResult =
 	| { readonly kind: "task"; readonly value: import("./model.ts").VaultGitTaskState }
 	| { readonly kind: "task_missing"; readonly taskId: string }
 	| { readonly kind: "task_corrupt"; readonly taskId: string }
-	| { readonly kind: "doctor_task"; readonly value: VaultGitDoctorTaskState }
-	| { readonly kind: "doctor_task_missing"; readonly taskId: string }
-	| { readonly kind: "doctor_task_corrupt"; readonly taskId: string }
+	| {
+			readonly kind: "doctor_projection";
+			readonly value: VaultGitDoctorFrontDoorProjection;
+	  }
 	| { readonly kind: "doctor"; readonly value: VaultGitDoctorResult }
 	| { readonly kind: "repair"; readonly value: VaultGitRepairResult }
 	| { readonly kind: "janitor"; readonly value: VaultGitJanitorReport }
@@ -2546,6 +2439,7 @@ async function executeInvocation(
 	humanActivationReview: VaultGitHumanActivationReviewPort,
 	taskLifecycleDispatch: VaultGitTaskLifecycleDispatch,
 	environment: NodeJS.ProcessEnv,
+	now: () => number,
 ): Promise<RuntimeResult> {
 	switch (invocation.command) {
 		case "begin":
@@ -2634,27 +2528,13 @@ async function executeInvocation(
 		case "doctor":
 			{
 				if (invocation.taskId) {
-					const loaded = await requireDoctorTaskStore(
-						composition,
-					).loadByTaskId(invocation.taskId);
-					if (loaded.status === "absent") {
-						return {
-							kind: "doctor_task_missing",
-							taskId: invocation.taskId,
-						};
-					}
-					if (loaded.status === "corrupt") {
-						return {
-							kind: "doctor_task_corrupt",
-							taskId: invocation.taskId,
-						};
-					}
-					const reconciled = await composeBackgroundDoctorTaskLifecycle(
-						composition,
-					).reconcileStaleWorker({ taskId: invocation.taskId });
 					return {
-						kind: "doctor_task",
-						value: reconciled.state,
+						kind: "doctor_projection",
+						value: await composeVaultGitDoctorFrontDoor(
+							composition,
+							now,
+							environment,
+						).inspectDoctorTask({ taskId: invocation.taskId }),
 					};
 				}
 				const taskId = environment[VAULT_GIT_DOCTOR_TASK_ID_ENV];
@@ -2665,12 +2545,17 @@ async function executeInvocation(
 				};
 				const value =
 					taskId && launchGeneration
-						? await executeBackgroundDoctorWorker(
-								doctorInvocation,
+						? await composeVaultGitDoctorFrontDoor(
 								composition,
+								now,
+								environment,
+							).runWorker({
 								taskId,
 								launchGeneration,
-							)
+								workerPid: process.pid,
+								diagnose: () =>
+									executeAuthoritativeDoctor(doctorInvocation, composition),
+							})
 						: await executeAuthoritativeDoctor(
 								doctorInvocation,
 								composition,
@@ -2702,6 +2587,17 @@ async function executeInvocation(
 					);
 					expectedLedgerGeneration = proof.ledgerGeneration;
 				}
+			}
+			if (action === "resume") {
+				const incompatible = await incompatibleRepairTaskRefusal(
+					composition,
+					invocation.transactionId,
+				);
+				// Refuse BEFORE engine.repair. Repair moves the Transaction Receipt to
+				// writing, but a legacy task cannot accept revision-bound authorization,
+				// so authorizing after the mutation would strand the transaction with a
+				// writing receipt and no Repair Authorization.
+				if (incompatible) return { kind: "repair", value: incompatible };
 			}
 			const value = await composition.engine.repair({
 				action,
@@ -2744,20 +2640,67 @@ async function executeInvocation(
 	}
 }
 
+/**
+ * Fail-closed compatibility gate run BEFORE `engine.repair` for `repair resume`.
+ *
+ * A Completion Task persisted by schema 1, or by schema 2 before the
+ * receiptRevision field existed, normalizes receiptRevision to null. Such a task
+ * stays inspectable but can never accept revision-bound Repair Authorization.
+ * Repairing first would advance the Transaction Receipt to writing and only then
+ * discover the task cannot be authorized, stranding the transaction. Returning a
+ * named refusal here leaves the receipt byte-identical and publishes nothing.
+ *
+ * @returns One `receipt_conflict` refusal, or null when repair may proceed
+ */
+async function incompatibleRepairTaskRefusal(
+	composition: VaultGitCliComposition,
+	transactionId: string | undefined,
+): Promise<VaultGitRepairResult | null> {
+	const taskStore = composition.taskStore;
+	if (!taskStore) return null;
+	const receipt = await composition.store.load();
+	if (receipt.status !== "loaded") return null;
+	if (
+		transactionId !== undefined &&
+		receipt.receipt.transactionId !== transactionId
+	) return null;
+	const loaded = await taskStore.load(receipt.receipt.receiptId);
+	// An absent task keeps the existing non-task repair path; only a present but
+	// revision-incompatible task blocks the mutation.
+	if (loaded.status !== "loaded" || loaded.state.receiptRevision !== null) {
+		return null;
+	}
+	return {
+		status: "refused",
+		action: "resume",
+		// The gate refuses before any classification, so it claims no reconciled
+		// transaction state; the durable receipt phase is reported unchanged.
+		state: "unknown",
+		phase: receipt.receipt.phase,
+		changedState: "none",
+		retrySafety: "operator_required",
+		blocker: "receipt_conflict",
+		nextAction: {
+			id: "request_operator_review",
+			summary:
+				"Ask an operator to review the legacy completion task before repair.",
+		},
+		...(receipt.receipt.transactionId
+			? { transactionId: receipt.receipt.transactionId }
+			: {}),
+		diagnosticsReference: receipt.receipt.diagnosticsReference,
+	};
+}
+
 async function authorizeTaskRepairForWritingReceipt(
 	composition: VaultGitCliComposition,
 	transactionId: string | undefined,
-	result: VaultGitDoctorResult | VaultGitRepairResult,
+	result: VaultGitRepairResult,
 ): Promise<void> {
-	const repairResultEligible =
-		result.status === "repaired" && result.state === "active";
-	const doctorResultEligible =
-		result.status === "diagnosed" &&
-		result.state === "repairable" &&
-		result.repairAction === "resume";
 	if (
 		!composition.taskStore ||
-		(!repairResultEligible && !doctorResultEligible) ||
+		result.status !== "repaired" ||
+		result.state !== "active" ||
 		result.phase !== "writing" ||
 		!transactionId
 	) return;
@@ -2792,90 +2735,7 @@ async function executeAuthoritativeDoctor(
 	});
 	await reconcileTaskClosure(composition, value).catch(() => undefined);
 	await reconcileStaleTaskAfterDoctor(composition, value).catch(() => undefined);
-	await authorizeTaskRepairForWritingReceipt(
-		composition,
-		invocation.transactionId,
-		value,
-	).catch(() => undefined);
 	return value;
-}
-
-async function executeBackgroundDoctorWorker(
-	invocation: VaultGitRuntimeInvocation & { readonly command: "doctor" },
-	composition: VaultGitCliComposition,
-	taskId: string,
-	launchGeneration: string,
-): Promise<VaultGitDoctorResult> {
-	const lifecycle = composeBackgroundDoctorTaskLifecycle(composition);
-	const acknowledged = await lifecycle.acknowledgeWorker({
-		taskId,
-		launchGeneration,
-		workerPid: process.pid,
-	});
-	if (acknowledged.kind === "refused") {
-		throw new Error("Background Doctor acknowledgement refused");
-	}
-	const heartbeat = setInterval(() => {
-		void lifecycle.heartbeatWorker({
-			taskId,
-			launchGeneration,
-			workerPid: process.pid,
-		}).catch(() => undefined);
-	}, 5_000);
-	heartbeat.unref();
-	try {
-		try {
-			const result = await executeAuthoritativeDoctor(invocation, composition);
-			const terminalized = await lifecycle.terminalizeWorker({
-				taskId,
-				launchGeneration,
-				workerPid: process.pid,
-				terminalResult: {
-					kind: "doctor_result",
-					status: result.status,
-					state: result.state,
-					phase: result.phase,
-					finding: result.finding,
-					changedState: result.changedState,
-					retrySafety: result.retrySafety,
-					// New writes persist the normalized semantic id only (no summary, no
-					// legacy { id, summary } object). Identity is normalized, not
-					// executability: the read reconstructs the full continuation (and
-					// fails closed if a selector is missing) from this id, durable state,
-					// and catalog.
-					nextActionId: doctorTerminalSemanticId(result.nextAction.id),
-					...(result.blocker ? { blocker: result.blocker } : {}),
-					...(result.repairAction ? { repairAction: result.repairAction } : {}),
-					...(result.transactionId ? { transactionId: result.transactionId } : {}),
-				},
-			});
-			if (terminalized.kind === "refused") {
-				throw new Error("Background Doctor terminalization refused");
-			}
-			return result;
-		} catch (error) {
-			await lifecycle
-				.terminalizeWorker({
-					taskId,
-					launchGeneration,
-					workerPid: process.pid,
-					terminalResult: {
-						kind: "worker_failure",
-						blocker: "worker_lost",
-						retrySafety: "operator_required",
-						nextAction: {
-							id: "inspect_private_receipt",
-							summary:
-								"Inspect the preserved Background Doctor failure before repair.",
-						},
-					},
-				})
-				.catch(() => undefined);
-			throw error;
-		}
-	} finally {
-		clearInterval(heartbeat);
-	}
 }
 
 async function executeBackgroundWorkerCompletion(
@@ -3350,6 +3210,11 @@ function emitRuntimeResult(input: EmitContext & {
 	if (input.invocation.command === "activation") {
 		throw new Error("activation invocation returned a lifecycle result");
 	}
+	if (input.result.kind === "doctor_projection") {
+		// The deep Doctor owner already projected payload, success, and error
+		// code; the adapter only renders.
+		return emitPayload({ ...input, ...input.result.value });
+	}
 	const payload = payloadForRuntime(
 		input.invocation.command,
 		input.result,
@@ -3361,12 +3226,8 @@ function emitRuntimeResult(input: EmitContext & {
 			? input.result.value.status !== "refused"
 			: input.result.kind === "task"
 				? true
-				: input.result.kind === "doctor_task"
-					? input.result.value.state !== "unknown"
 				: input.result.kind === "task_missing" ||
-						input.result.kind === "task_corrupt" ||
-						input.result.kind === "doctor_task_missing" ||
-						input.result.kind === "doctor_task_corrupt"
+						input.result.kind === "task_corrupt"
 					? false
 			: input.result.kind === "doctor"
 				? true
@@ -3441,223 +3302,15 @@ type RuntimePayload = VaultGitLifecycleResultPayload & {
 	readonly worker_eligibility?: ReturnType<typeof projectWorkerEligibility>;
 };
 
-function payloadForDoctorTask(
-	state: VaultGitDoctorTaskState,
-	now: number,
-): VaultGitLifecycleResultPayload {
-	const terminal = state.terminalResult;
-	const diagnosis = terminal?.kind === "doctor_result" ? terminal : null;
-	const workerFailure = terminal?.kind === "worker_failure" ? terminal : null;
-	// Compute the terminal continuation union once for the payload's next action.
-	const terminalUnion = terminal
-		? doctorTerminalNextAction(terminal, state.taskId)
-		: null;
-	// The nested terminal result resolves the durable carrier separately: when the
-	// union fails closed to action_id "none" (missing selector), stamping that id
-	// would erase the persisted semantic action from public history.
-	const publicTerminal =
-		terminal && terminalUnion
-			? projectDoctorTaskTerminal(
-					terminal,
-					terminalUnion.action_id === "none"
-						? doctorTerminalDurableSemanticId(terminal)
-						: terminalUnion.action_id,
-				)
-			: null;
-	return createVaultGitLifecycleResult({
-		command: "doctor",
-		outcome: workerFailure ? "refused" : "read_only",
-		phase: diagnosis?.phase ?? (workerFailure ? "human_required" : "checking"),
-		write_permission: "denied",
-		changed_state: diagnosis?.changedState ?? "none",
-		retry_safety: terminal?.retrySafety ?? "same_input_safe",
-		blockers: terminal?.blocker ? [terminal.blocker] : [],
-		// Revalidate a reconstructed terminal under the exact context that built it.
-		// Contextual compatibility ids such as retry_remote and run_repair do not share
-		// one generic Doctor Task context; losing their persisted repair/inspection
-		// context would make the composer reject the already-built union as divergent.
-		nextActionContext: terminalUnion
-			? {
-					...doctorTaskNextActionContext(terminalUnion.id),
-					...(diagnosis?.repairAction
-						? { repair_action: diagnosis.repairAction }
-						: {}),
-				}
-			: { result_kind: "doctor_task" },
-		transaction_id:
-			diagnosis?.transactionId ?? state.transactionId ?? undefined,
-		transaction_state: diagnosis?.state ?? (workerFailure ? "unknown" : undefined),
-		finding: diagnosis?.finding,
-		repair_action: diagnosis?.repairAction,
-		task_id: state.taskId,
-		task_generation: state.launchGeneration ?? undefined,
-		task_state: state.state,
-		task_phase: state.phase,
-		task_heartbeat_at: state.heartbeatAt,
-		task_checkpoint: state.checkpoint,
-		task_elapsed_ms: Math.max(0, now - Date.parse(state.recordedAt)),
-		task_terminal_result: publicTerminal,
-		foreground_non_vault_work_allowed: true,
-		// The terminal continuation union computed once above; the composer
-		// revalidates it against the Doctor Task context set below.
-		next_action:
-			terminalUnion ??
-			action(
-				"inspect_status",
-				"Inspect the Background Doctor task for authoritative diagnosis.",
-				// A non-terminal Doctor Task: inspect_status splits by Task kind to
-				// inspect_doctor_task.
-				{ result_kind: "doctor_task" },
-			),
-	});
-}
-
-/**
- * The public next-action union for a terminal Doctor Task, reconstructed from the
- * durable next-action carrier through the Next Safe Action rehydration owner. A
- * worker failure points at the preserved private receipt. A doctor result rehydrates
- * its persisted semantic id (e.g. inspect_doctor_task) into a real union with the
- * canonical compat id and the exact doctor_task_id-bound argv — no cast through the
- * legacy action() path.
- */
-function doctorTerminalNextAction(
-	terminal: VaultGitDoctorTaskTerminal,
-	taskId: string,
-): VaultGitNextAction {
-	if (terminal.kind === "worker_failure") {
-		return rehydrateVaultGitPersistedNextAction(terminal.nextAction.id);
-	}
-	const carrier = resolveVaultGitDoctorTerminalNextAction(terminal);
-	const diagnosis = terminal.kind === "doctor_result" ? terminal : undefined;
-	const selectors: VaultGitContinuationSelectors = {
-		doctor_task_id: taskId,
-		...(diagnosis?.transactionId
-			? { transaction_id: diagnosis.transactionId }
-			: {}),
-	};
-	if (carrier.kind === "semantic") {
-		// A new-write persisted semantic id. A catalog id (e.g. inspect_doctor_task)
-		// rehydrates directly. A retained engine id (e.g. run_repair) is contextual —
-		// reproject it through the normal projector with Doctor Task context, its
-		// durable repair action, and the transaction selector, so its argv is rebuilt
-		// (or fails closed when a selector is genuinely absent).
-		if (isVaultGitNextActionId(carrier.actionId)) {
-			return projectVaultGitNextAction({
-				id: carrier.actionId,
-				context: {
-					...doctorTaskNextActionContext(carrier.actionId),
-					...(diagnosis?.repairAction
-						? { repair_action: diagnosis.repairAction }
-						: {}),
-				},
-				selectors,
-			});
-		}
-		return rehydrateVaultGitPersistedNextAction(carrier.actionId, selectors);
-	}
-	// A legacy compatibility id (e.g. inspect_status): reproject through the normal
-	// projector with Doctor Task context and the doctor_task_id selector so it splits
-	// to the same authoritative inspect_doctor_task union. The carrier's legacy
-	// actionId is a VaultGitEngineNextActionId — a subtype of VaultGitNextActionId by
-	// construction (the engine ids are spread into VAULT_GIT_NEXT_ACTION_IDS) — so it
-	// assigns without a cast.
-	const legacyId: VaultGitNextActionId = carrier.actionId;
-	return projectVaultGitNextAction({
-		id: legacyId,
-		context: {
-			...doctorTaskNextActionContext(legacyId),
-			...(diagnosis?.repairAction
-				? { repair_action: diagnosis.repairAction }
-				: {}),
-		},
-		selectors,
-	});
-}
-
-/**
- * The durable semantic identity of a terminal's persisted next-action carrier,
- * independent of current executability: a semantic carrier's id verbatim, a legacy
- * carrier's id through the Doctor Task identity split. Stamped into the nested
- * task_terminal_result when the outer continuation fails closed, so fail-closed
- * posture never erases the persisted semantic action.
- */
-function doctorTerminalDurableSemanticId(
-	terminal: VaultGitDoctorTaskTerminal,
-): string {
-	if (terminal.kind === "worker_failure") {
-		return terminal.nextAction.id;
-	}
-	const carrier = resolveVaultGitDoctorTerminalNextAction(terminal);
-	return carrier.kind === "semantic"
-		? carrier.actionId
-		: doctorTerminalSemanticId(carrier.actionId);
-}
-
-/**
- * Project the durable terminal into its public `task_terminal_result`, stamping the
- * semantic id already resolved by the caller: the projected union's action_id, or
- * the durable carrier's semantic id when the union failed closed (never
- * reprojecting, so there is no duplicate logic and no selector-less projection).
- * The durable record is untouched, so legacy history bytes remain unchanged.
- */
-function projectDoctorTaskTerminal(
-	terminal: VaultGitDoctorTaskTerminal,
-	semanticId: string,
-): VaultGitDoctorTaskTerminal {
-	if (terminal.kind === "worker_failure") {
-		return {
-			...terminal,
-			nextAction: {
-				id: "inspect_private_receipt",
-				summary: action("inspect_private_receipt").summary ?? "",
-			},
-		};
-	}
-	const { nextAction: _legacy, nextActionId: _semantic, ...base } = terminal;
-	return { ...base, nextActionId: semanticId };
-}
-
 function payloadForRuntime(
 	command: Exclude<VaultGitCommand, "activation">,
-	result: Exclude<RuntimeResult, { readonly kind: "activation" }>,
+	result: Exclude<
+		RuntimeResult,
+		{ readonly kind: "activation" } | { readonly kind: "doctor_projection" }
+	>,
 	now: number,
 	invocationTransactionId?: string,
 ): RuntimePayload {
-	if (result.kind === "doctor_task") {
-		return payloadForDoctorTask(result.value, now);
-	}
-	if (result.kind === "doctor_task_missing") {
-		return createVaultGitLifecycleResult({
-			command,
-			outcome: "refused",
-			phase: "checking",
-			write_permission: "denied",
-			changed_state: "none",
-			retry_safety: "same_input_safe",
-			blockers: ["task_not_found"],
-			task_id: result.taskId,
-			foreground_non_vault_work_allowed: true,
-			next_action: action(
-				"change_input",
-				"Use the opaque task ID returned by doctor.",
-				{ result_kind: "doctor_task" },
-			),
-		});
-	}
-	if (result.kind === "doctor_task_corrupt") {
-		return createVaultGitLifecycleResult({
-			command,
-			outcome: "refused",
-			phase: "human_required",
-			write_permission: "denied",
-			changed_state: "none",
-			retry_safety: "operator_required",
-			blockers: ["receipt_corrupt"],
-			task_id: result.taskId,
-			foreground_non_vault_work_allowed: true,
-			next_action: action("inspect_private_receipt"),
-		});
-	}
 	if (result.kind === "task_missing") {
 		return createVaultGitLifecycleResult({
 			command,
@@ -3865,6 +3518,9 @@ function payloadForRuntime(
 		)
 		.find((candidate) => candidate !== undefined);
 	const blocker = value.blocker ?? skippedBlocker;
+	// Acyclic recovery invariant (ADR-0002 U4): a Janitor refusal never points
+	// back to Janitor. The transient remote outage becomes an operator-owned
+	// prerequisite instead of a run_janitor self-loop.
 	const janitorRemoteRetry = value.nextAction.id === "retry_remote";
 	return {
 		...createVaultGitLifecycleResult({
@@ -3884,16 +3540,17 @@ function payloadForRuntime(
 						? "local"
 						: "none",
 			retry_safety:
-				janitorRemoteRetry
-					? "same_input_safe"
-					: value.status === "refused"
+				value.status === "refused"
 					? "operator_required"
 					: value.skippedRepairs.length > 0
 						? "same_input_unsafe"
 						: "same_input_safe",
 			blockers: blocker ? [blocker] : [],
 			next_action: janitorRemoteRetry
-				? action("run_janitor")
+				? action(
+						"request_operator_review",
+						"Restore remote access, then rerun the scheduled Janitor.",
+					)
 				: action(value.nextAction.id, value.nextAction.summary),
 			...(value.activationRestriction
 				? {
@@ -4025,29 +3682,6 @@ function runtimeError(
 	return createCliRepairStateRuntimeError(common);
 }
 
-function action(
-	id: VaultGitNextActionId,
-	summary?: string,
-	context?: VaultGitNextActionRef["context"],
-): VaultGitNextActionRef {
-	const declared = vaultGitActions.find((candidate) => candidate.id === id);
-	if (!declared) {
-		// Every next-action id exists in the declared affordances by
-		// construction; a miss means the model-to-cli coupling broke.
-		throw new Error(
-			`vault-git next action ${id} is missing from the declared affordances`,
-		);
-	}
-	// A legacy action reference: the composer projects its authoritative union and
-	// derives compat id/summary. Selectors are derived from the payload; explicit
-	// context disambiguates a legacy contextual id (e.g. inspect_status by Task kind).
-	return {
-		id,
-		summary: summary ?? declared.summary,
-		...(context ? { context } : {}),
-	};
-}
-
 /**
  * Deterministic continuation context for an engine/doctor/repair-emitted action id
  * from the emitting command. The engine emits a small set of legacy contextual ids
@@ -4074,41 +3708,6 @@ function engineNextActionContext(
 		default:
 			return undefined;
 	}
-}
-
-/**
- * Continuation context for an action id emitted from durable Doctor Task state.
- * Unlike engine transaction results, a Doctor Task's legacy inspect_status and
- * change_input split by Task kind to the Doctor Task continuations; retry_remote is
- * an inspect-time remote retry; run_repair carries its repair action through the
- * payload. This owner keeps Doctor Task projection distinct from transaction-state
- * projection.
- */
-function doctorTaskNextActionContext(
-	id: VaultGitNextActionId,
-): VaultGitNextActionRef["context"] {
-	switch (id) {
-		case "inspect_status":
-		case "change_input":
-			return { result_kind: "doctor_task" };
-		case "retry_remote":
-			return { result_kind: "inspect" };
-		default:
-			return undefined;
-	}
-}
-
-/**
- * Normalize an engine-emitted Doctor Task next-action id to the semantic identity a
- * NEW terminal write persists. This normalizes IDENTITY, not current executability:
- * it never proves the argv is buildable now (rehydration re-proves that, failing
- * closed when a selector is missing). The only normalization is the Doctor Task split
- * of the legacy contextual inspect_status to inspect_doctor_task; every other id
- * (e.g. run_repair) is an already-validated VaultGitNextActionId and is retained
- * verbatim. No generic fallback and no inferred argv.
- */
-function doctorTerminalSemanticId(id: VaultGitNextActionId): string {
-	return id === "inspect_status" ? "inspect_doctor_task" : id;
 }
 
 function runtimeAction(input: {
@@ -4190,7 +3789,15 @@ function envelopeRuntime(input: EmitContext) {
 	};
 }
 
+function lifecycleLine(
+	label: string,
+	value: string | number | boolean | null | undefined,
+): readonly string[] {
+	return value === undefined || value === null ? [] : [`${label}: ${value}`];
+}
+
 function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
+	const previousFailure = result.task_previous_failure;
 	return [
 		`command: ${result.command}`,
 		`outcome: ${result.outcome}`,
@@ -4198,43 +3805,38 @@ function renderLifecycleResult(result: VaultGitLifecycleResultPayload): string {
 		`write_permission: ${result.write_permission}`,
 		`changed_state: ${result.changed_state}`,
 		`retry_safety: ${result.retry_safety}`,
-		...(result.transaction_id ? [`transaction_id: ${result.transaction_id}`] : []),
-		...(result.task_id ? [`task_id: ${result.task_id}`] : []),
-		...(result.task_generation
-			? [`task_generation: ${result.task_generation}`]
-			: []),
-		...(result.task_attempt_number
-			? [`task_attempt_number: ${result.task_attempt_number}`]
-			: []),
-		...(result.task_previous_failure
-			? [
-					`task_previous_failure: ${result.task_previous_failure.blocker ?? result.task_previous_failure.outcome}`,
-				]
-			: []),
-		...(result.task_state ? [`task_state: ${result.task_state}`] : []),
-		...(result.task_phase ? [`task_phase: ${result.task_phase}`] : []),
-		...(result.task_heartbeat_at
-			? [`task_heartbeat_at: ${result.task_heartbeat_at}`]
-			: []),
-		...(result.task_checkpoint
-			? [`task_checkpoint: ${result.task_checkpoint}`]
-			: []),
-		...(result.task_elapsed_ms !== undefined
-			? [`task_elapsed_ms: ${result.task_elapsed_ms}`]
-			: []),
-		...(result.task_terminal_result
-			? [`task_terminal_result: ${JSON.stringify(result.task_terminal_result)}`]
-			: []),
-		...(result.transaction_state
-			? [`transaction_state: ${result.transaction_state}`]
-			: []),
-		...(result.finding ? [`finding: ${result.finding}`] : []),
-		...(result.repair_action ? [`repair_action: ${result.repair_action}`] : []),
-		...(result.foreground_non_vault_work_allowed !== undefined
-			? [
-					`foreground_non_vault_work_allowed: ${result.foreground_non_vault_work_allowed}`,
-				]
-			: []),
+		...lifecycleLine("transaction_id", result.transaction_id),
+		...lifecycleLine("task_id", result.task_id),
+		...lifecycleLine("task_generation", result.task_generation),
+		...lifecycleLine("task_revision", result.task_revision),
+		...lifecycleLine("task_poll_after", result.task_poll_after),
+		...lifecycleLine(
+			"task_observation_expires_at",
+			result.task_observation_expires_at,
+		),
+		...lifecycleLine("task_attempt_number", result.task_attempt_number),
+		...lifecycleLine(
+			"task_previous_failure",
+			previousFailure?.blocker ?? previousFailure?.outcome,
+		),
+		...lifecycleLine("task_state", result.task_state),
+		...lifecycleLine("task_phase", result.task_phase),
+		...lifecycleLine("task_heartbeat_at", result.task_heartbeat_at),
+		...lifecycleLine("task_checkpoint", result.task_checkpoint),
+		...lifecycleLine("task_elapsed_ms", result.task_elapsed_ms),
+		...lifecycleLine(
+			"task_terminal_result",
+			result.task_terminal_result
+				? JSON.stringify(result.task_terminal_result)
+				: undefined,
+		),
+		...lifecycleLine("transaction_state", result.transaction_state),
+		...lifecycleLine("finding", result.finding),
+		...lifecycleLine("repair_action", result.repair_action),
+		...lifecycleLine(
+			"foreground_non_vault_work_allowed",
+			result.foreground_non_vault_work_allowed,
+		),
 		...(result.activation_restriction
 			? [renderVaultGitActivationRestriction(result.activation_restriction)]
 			: []),

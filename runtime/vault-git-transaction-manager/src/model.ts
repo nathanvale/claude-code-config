@@ -345,7 +345,7 @@ export function isVaultGitCliSafeValue(value: unknown): value is string {
  * the Next Safe Action input binder share. It owns the repository-relative
  * leaf and control-byte rules only: non-empty string, no NUL or CR control byte,
  * not absolute, no trailing separator, and no empty, `.`, `..`, or
- * case-insensitive `.git` segment. It is NOT CLI argv safety — a caller binding
+ * case-insensitive `.git` segment. It is NOT CLI argv safety; a caller binding
  * the value into argv must separately apply {@link isVaultGitCliSafeValue}. This
  * is the containment-free rule; the Git adapter composes its own realpath escape
  * check on top for on-disk admission.
@@ -509,6 +509,8 @@ export interface VaultGitTaskStateInput {
 	readonly taskId: string;
 	/** Receipt whose exclusive completion claim owns the task. */
 	readonly receiptId: string;
+	/** Exact receipt revision admitted for this completion attempt. */
+	readonly receiptRevision: number;
 	/** Public transaction correlation selected by the task. */
 	readonly transactionId: string;
 	/** Exact lease generation bound by admission. */
@@ -659,7 +661,7 @@ export type VaultGitCheckCommandAdmission =
 // (operators, redirection, pipelines, substitution, quoting, escapes,
 // newlines) refuses, so an admitted line can only parse as one command plus
 // arguments. Widening this class widens what the checker fingerprint must
-// bind — never add a shell-significant character.
+// bind; never add a shell-significant character.
 const CHECK_COMMAND_LINE_PATTERN = /^[A-Za-z0-9_@=:,./ -]+$/;
 const CHECK_COMMAND_ENTRYPOINT_PATTERN =
 	/^[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:ts|mts|cts|js|mjs|cjs)$/;
@@ -670,9 +672,9 @@ const CHECK_COMMAND_ENTRYPOINT_PATTERN =
  * One parse owns both lanes: checker admission fingerprints the returned
  * entrypoint, and every executor spawns the returned command line rebuilt
  * from the same admitted tokens, so the hashed surface and the executed
- * surface cannot diverge. A script broader than one single command — shell
+ * surface cannot diverge. A script broader than one single command (shell
  * operators, redirection, pipelines, command substitution, quoting, or a
- * second command — refuses before any spawn.
+ * second command) refuses before any spawn.
  */
 export function admitVaultGitCheckCommand(
 	manifest: Readonly<Record<string, unknown>>,
@@ -730,6 +732,95 @@ export type VaultGitDoctorTaskCheckpoint =
 	| "checking_remote"
 	| "terminal";
 
+/** Closed candidate_setup sub-evidence for the U4 validation route matrix. */
+export const VAULT_GIT_DOCTOR_SETUP_EVIDENCE = [
+	"proven_enrollment_defect",
+	"missing_private_enrollment_inputs",
+	"absent_external_ssh_prerequisites",
+	"proven_candidate_integrity_defect",
+	"insufficient",
+] as const;
+
+/** One candidate_setup evidence classification. */
+export type VaultGitDoctorSetupEvidence =
+	(typeof VAULT_GIT_DOCTOR_SETUP_EVIDENCE)[number];
+
+/** Closed Candidate Residue evidence for the U4 validation route matrix. */
+export const VAULT_GIT_DOCTOR_RESIDUE_EVIDENCE = [
+	"active_owned",
+	"old_proven_unowned",
+	"young_proven_unowned",
+	"absent_or_removed",
+	"unknown_ownership",
+] as const;
+
+/** One Candidate Residue evidence classification. */
+export type VaultGitDoctorResidueEvidence =
+	(typeof VAULT_GIT_DOCTOR_RESIDUE_EVIDENCE)[number];
+
+/** Residue evidence plus the exact discriminators its routing row binds. */
+export type VaultGitDoctorResidueRouteEvidence =
+	| { readonly residue: "active_owned"; readonly taskId: string }
+	| {
+			readonly residue: "young_proven_unowned";
+			readonly eligibleAfter: string;
+	  }
+	| { readonly residue: "old_proven_unowned" }
+	| { readonly residue: "absent_or_removed" }
+	| { readonly residue: "unknown_ownership" };
+
+/**
+ * Closed evidence for routing one Validation Failure Class through the U4
+ * Doctor route matrix (ADR-0002). Each arm carries exactly the discriminators
+ * its rows need; deterministic vault content must name its admitted Repair ID,
+ * an actively owned residue must name its Completion Task, and a young residue
+ * must carry its age-gate instant. No arm has an inferred default.
+ */
+export type VaultGitDoctorValidationRouteEvidence =
+	| {
+			readonly failureClass: "candidate_setup";
+			readonly setup: VaultGitDoctorSetupEvidence;
+	  }
+	| {
+			readonly failureClass: "vault_content";
+			readonly content: "deterministic_with_admitted_repair";
+			readonly repairId: string;
+	  }
+	| {
+			readonly failureClass: "vault_content";
+			readonly content: "insufficient";
+	  }
+	| {
+			readonly failureClass: "stage_budget_exceeded";
+			readonly stage: "candidate_setup" | "vault_check";
+	  }
+	| ({
+			readonly failureClass: "stage_budget_exceeded";
+			readonly stage: "candidate_cleanup";
+	  } & VaultGitDoctorResidueRouteEvidence)
+	| ({
+			readonly failureClass: "candidate_cleanup";
+	  } & VaultGitDoctorResidueRouteEvidence);
+
+/**
+ * Closed Unknown Publication Outcome evidence for the U4 route table
+ * (ADR-0002). `proven_not_published_origin_intact` is set only when the origin
+ * host matches and every fence is intact; anything weaker is `unavailable` or
+ * `conflicting`, so a same-input publication retry can never be emitted from
+ * unknown or incomplete evidence.
+ */
+export const VAULT_GIT_DOCTOR_PUBLICATION_EVIDENCE = [
+	"remotely_closed",
+	"proven_not_published_origin_intact",
+	"unavailable",
+	"conflicting",
+	"contract_breach",
+] as const;
+
+/** One Unknown Publication Outcome evidence classification. */
+export type VaultGitDoctorPublicationEvidence =
+	(typeof VAULT_GIT_DOCTOR_PUBLICATION_EVIDENCE)[number];
+
 /** Shared fields of a terminal Doctor Task diagnosis, independent of the next-action carrier. */
 export interface VaultGitDoctorTaskTerminalResultBase {
 	readonly kind: "doctor_result";
@@ -742,6 +833,10 @@ export interface VaultGitDoctorTaskTerminalResultBase {
 	readonly blocker?: VaultGitBlockerId;
 	readonly repairAction?: VaultGitRepairAction;
 	readonly transactionId?: string;
+	/** Closed U4 validation-route evidence, present only when proven. */
+	readonly validationEvidence?: VaultGitDoctorValidationRouteEvidence;
+	/** Closed U4 publication-outcome evidence; exclusive with validationEvidence. */
+	readonly publicationEvidence?: VaultGitDoctorPublicationEvidence;
 }
 
 /** Legacy on-disk continuation object, read without rewrite. */
@@ -774,7 +869,7 @@ export type VaultGitDoctorTaskTerminalResult =
  * The durable terminal's next-action carrier, discriminated by which shape was
  * persisted. A `semantic` carrier is a new-write persisted Next Safe Action id (to
  * be rehydrated directly). A `legacy` carrier is the old `{ id, summary }` object
- * whose id is a compatibility id, not a semantic id — it must be reprojected through
+ * whose id is a compatibility id, not a semantic id. It must be reprojected through
  * the normal projector with context, never fed into semantic rehydration.
  */
 export type VaultGitDoctorTerminalNextActionCarrier =
@@ -805,10 +900,24 @@ export interface VaultGitDoctorTaskWorkerFailure {
 	};
 }
 
+/**
+ * Sanitized terminal cause for one Doctor Task whose bounded observation window
+ * elapsed. Deliberately NOT a worker_failure: that kind claims a proven-dead
+ * worker, while an expired observation may still have a live process that has
+ * only lost canonical authority. It persists no nextAction, so projection is
+ * deterministic rather than carrier-dependent.
+ */
+export interface VaultGitDoctorTaskObservationExpired {
+	readonly kind: "observation_expired";
+	readonly blocker: "continuation_unavailable";
+	readonly retrySafety: "operator_required";
+}
+
 /** Bounded terminal evidence owned by the Doctor Task lifecycle. */
 export type VaultGitDoctorTaskTerminal =
 	| VaultGitDoctorTaskTerminalResult
-	| VaultGitDoctorTaskWorkerFailure;
+	| VaultGitDoctorTaskWorkerFailure
+	| VaultGitDoctorTaskObservationExpired;
 
 /** Checkpoint vocabulary admitted by either public task lifecycle. */
 export type VaultGitPublicTaskCheckpoint =
@@ -839,6 +948,11 @@ export interface VaultGitTaskState {
 	readonly taskId: string;
 	/** Receipt whose exclusive completion claim owns the task. */
 	readonly receiptId: string;
+	/**
+	 * Exact receipt revision admitted for this attempt. Null only when an older
+	 * durable record remains readable but cannot authorize revision-bound work.
+	 */
+	readonly receiptRevision: number | null;
 	/** Public transaction correlation selected by the task. */
 	readonly transactionId: string;
 	/** Exact lease generation bound by admission. */
@@ -1090,6 +1204,22 @@ export const VAULT_GIT_NEXT_ACTION_IDS = [
 	"inspect_commands",
 	"change_input",
 	"run_janitor",
+	// ADR-0002 U4 Stale-Lease Takeover row 2: the terminal Doctor continuation
+	// for burned/missing Takeover Token evidence after quarantine reconciliation.
+	"reattest_stale_lease_takeover",
+	// ADR-0002 U4 validation route matrix action ids.
+	"preview_host_enrollment_repair",
+	"provide_host_enrollment_inputs",
+	"provision_repository_ssh",
+	"escalate_validation_evidence",
+	"apply_vault_content_repair",
+	"diagnose_validation_budget",
+	// ADR-0002 U4 Unknown Publication Outcome action ids.
+	"close_verified_publication",
+	"retry_proven_unpublished",
+	"obtain_remote_evidence",
+	"resolve_publication_conflict",
+	"restore_remote_contract",
 ] as const;
 
 /** Closed trigger vocabulary for one bounded hygiene worker. */
@@ -1236,7 +1366,7 @@ export interface VaultGitNextActionInputField {
  * summary, with no projected continuation. Engine-adjacent producers (the janitor
  * report, worker policy) carry this; the CLI re-projects it into the authoritative
  * `VaultGitNextAction` union at the public boundary. It is the master-id compat pair
- * (wider than `VaultGitEngineNextActionId` — it also covers ids such as `run_janitor`
+ * (wider than `VaultGitEngineNextActionId`; it also covers ids such as `run_janitor`
  * and `none`).
  */
 export interface VaultGitNextActionCompat {
@@ -1329,6 +1459,12 @@ export interface VaultGitLifecycleResultPayload {
 	readonly task_phase?: VaultGitTaskPhase;
 	/** Latest observational heartbeat timestamp. */
 	readonly task_heartbeat_at?: string | null;
+	/** Exact durable task revision for bounded observation of nonterminal work. */
+	readonly task_revision?: number;
+	/** Earliest useful re-inspection instant for unchanged nonterminal work. */
+	readonly task_poll_after?: string;
+	/** Package-owned observation expiry; inspection at or past it reconciles. */
+	readonly task_observation_expires_at?: string;
 	/** Last durably observed engine checkpoint. */
 	readonly task_checkpoint?: VaultGitPublicTaskCheckpoint | null;
 	/** Milliseconds elapsed since durable task admission. */

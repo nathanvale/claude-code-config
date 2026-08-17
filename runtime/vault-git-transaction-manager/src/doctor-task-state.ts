@@ -3,19 +3,23 @@ import { createHash } from "node:crypto";
 import {
 	VAULT_GIT_BLOCKER_IDS,
 	VAULT_GIT_DOCTOR_FINDINGS,
+	VAULT_GIT_DOCTOR_PUBLICATION_EVIDENCE,
+	VAULT_GIT_DOCTOR_RESIDUE_EVIDENCE,
+	VAULT_GIT_DOCTOR_SETUP_EVIDENCE,
 	VAULT_GIT_ENGINE_NEXT_ACTION_IDS,
 	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_RETRY_SAFETIES,
 	VAULT_GIT_TRANSACTION_PHASES,
 	VAULT_GIT_TRANSACTION_STATES,
-	type VaultGitBlockerId,
 	type VaultGitDoctorFinding,
+	type VaultGitDoctorResidueEvidence,
+	type VaultGitDoctorSetupEvidence,
 	type VaultGitDoctorTaskCheckpoint,
+	type VaultGitDoctorTaskObservationExpired,
 	type VaultGitDoctorTaskTerminal,
 	type VaultGitDoctorTaskTerminalResult,
 	type VaultGitDoctorTaskWorkerFailure,
 	type VaultGitEngineNextActionId,
-	type VaultGitRepairAction,
 	type VaultGitRetrySafety,
 	type VaultGitTransactionPhase,
 	type VaultGitTransactionState,
@@ -24,11 +28,21 @@ import { VAULT_GIT_NEXT_SAFE_ACTION_IDS } from "./next-safe-action.ts";
 
 export type {
 	VaultGitDoctorTaskCheckpoint,
+	VaultGitDoctorTaskObservationExpired,
 	VaultGitDoctorTaskTerminal,
 	VaultGitDoctorTaskTerminalResult,
 	VaultGitDoctorTaskWorkerFailure,
 } from "./model.ts";
 
+/** Invalid durable routing evidence, distinct from generic task corruption. @internal */
+export class VaultGitDoctorTaskInvalidRouteError extends Error {
+	constructor() {
+		super("doctor task durable route invalid");
+		this.name = "VaultGitDoctorTaskInvalidRouteError";
+	}
+}
+
+/** Closed durable lifecycle vocabulary for one Doctor Task. */
 export const VAULT_GIT_DOCTOR_TASK_STATES = [
 	"claimed",
 	"launching",
@@ -37,11 +51,14 @@ export const VAULT_GIT_DOCTOR_TASK_STATES = [
 	"unknown",
 ] as const;
 
+/** One durable Doctor Task lifecycle state. */
 export type VaultGitDoctorTaskLifecycleState =
 	(typeof VAULT_GIT_DOCTOR_TASK_STATES)[number];
 
+/** One durable Doctor Task phase. */
 export type VaultGitDoctorTaskPhase = "admitted" | "running" | "terminal";
 
+/** Immutable receipt, transaction, activation, and invocation claim inputs. */
 export interface VaultGitDoctorTaskBindingInput {
 	readonly repositoryId: string;
 	readonly activationEvidenceId: string | null;
@@ -51,6 +68,7 @@ export interface VaultGitDoctorTaskBindingInput {
 	readonly normalizedInput: string;
 }
 
+/** Capability-free durable state for one admitted Doctor Task. */
 export interface VaultGitDoctorTaskState {
 	readonly schemaVersion: 1;
 	readonly taskId: string;
@@ -73,6 +91,7 @@ export interface VaultGitDoctorTaskState {
 	readonly terminalResult: VaultGitDoctorTaskTerminal | null;
 }
 
+/** Mutable fields accepted by one monotonic Doctor Task transition. */
 export type VaultGitDoctorTaskAdvanceInput = Omit<
 	VaultGitDoctorTaskState,
 	| "schemaVersion"
@@ -126,6 +145,8 @@ const DOCTOR_TERMINAL_KEYS = [
 	"blocker",
 	"repairAction",
 	"transactionId",
+	"validationEvidence",
+	"publicationEvidence",
 ] as const;
 
 const WORKER_FAILURE_KEYS = [
@@ -134,6 +155,8 @@ const WORKER_FAILURE_KEYS = [
 	"retrySafety",
 	"nextAction",
 ] as const;
+
+const OBSERVATION_EXPIRED_KEYS = ["kind", "blocker", "retrySafety"] as const;
 
 const NEXT_ACTION_KEYS = ["id", "summary"] as const;
 
@@ -317,21 +340,14 @@ export function parseVaultGitDoctorTaskState(
 }
 
 function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
-	if (
-		isRecord(value) &&
-		hasExactKeys(value, WORKER_FAILURE_KEYS) &&
-		value.kind === "worker_failure" &&
-		(value.blocker === "worker_launch_protocol_failed" ||
-			value.blocker === "worker_lost") &&
-		value.retrySafety === "operator_required" &&
-		isRecord(value.nextAction) &&
-		hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) &&
-		value.nextAction.id === "inspect_private_receipt" &&
-		typeof value.nextAction.summary === "string" &&
-		value.nextAction.summary.trim().length > 0
-	) {
+	if (isWorkerFailureTerminal(value)) {
 		return Object.freeze(
 			value as unknown as VaultGitDoctorTaskWorkerFailure,
+		);
+	}
+	if (isObservationExpiredTerminal(value)) {
+		return Object.freeze(
+			value as unknown as VaultGitDoctorTaskObservationExpired,
 		);
 	}
 	// Guard record-ness before any Object.hasOwn / property read, so a malformed
@@ -339,56 +355,276 @@ function parseTerminalResult(value: unknown): VaultGitDoctorTaskTerminal {
 	if (!isRecord(value)) {
 		throw new Error("doctor task terminal result invalid");
 	}
-	// Exactly one next-action carrier: the new durable semantic id, or the legacy
-	// { id, summary } object. Neither or both is a corrupt record.
-	const hasNextActionId = Object.hasOwn(value, "nextActionId");
-	const hasLegacyNextAction = Object.hasOwn(value, "nextAction");
-	const legacyValid =
-		hasLegacyNextAction &&
+	if (hasInvalidDoctorRouteEvidence(value)) {
+		throw new VaultGitDoctorTaskInvalidRouteError();
+	}
+	if (!isDoctorResultTerminal(value)) {
+		throw new Error("doctor task terminal result invalid");
+	}
+	return Object.freeze(
+		value as unknown as VaultGitDoctorTaskTerminalResult,
+	);
+}
+
+function hasInvalidDoctorRouteEvidence(
+	value: Record<string, unknown>,
+): boolean {
+	if (value.kind !== "doctor_result") return false;
+	return (
+		hasInvalidDoctorActionRoute(value) ||
+		hasInvalidDoctorEvidenceRoute(value) ||
+		hasInvalidDoctorSelectorRoute(value)
+	);
+}
+
+function hasInvalidDoctorActionRoute(value: Record<string, unknown>): boolean {
+	const hasSemantic = Object.hasOwn(value, "nextActionId");
+	const hasLegacy = Object.hasOwn(value, "nextAction");
+	if (hasSemantic === hasLegacy) return true;
+	if (hasSemantic) {
+		return (
+			typeof value.nextActionId !== "string" ||
+			(!VAULT_GIT_NEXT_SAFE_ACTION_IDS.includes(value.nextActionId) &&
+				!VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+					value.nextActionId as VaultGitEngineNextActionId,
+				))
+		);
+	}
+	if (!isRecord(value.nextAction) || typeof value.nextAction.id !== "string") {
+		return false;
+	}
+	return !VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+		value.nextAction.id as VaultGitEngineNextActionId,
+	);
+}
+
+function hasInvalidDoctorEvidenceRoute(
+	value: Record<string, unknown>,
+): boolean {
+	if (
+		Object.hasOwn(value, "validationEvidence") &&
+		Object.hasOwn(value, "publicationEvidence")
+	) {
+		return true;
+	}
+	if (
+		Object.hasOwn(value, "validationEvidence") &&
+		!isValidationRouteEvidence(value.validationEvidence)
+	) {
+		return true;
+	}
+	if (
+		Object.hasOwn(value, "publicationEvidence") &&
+		!isOptionalCatalogValue(
+			value.publicationEvidence,
+			VAULT_GIT_DOCTOR_PUBLICATION_EVIDENCE,
+		)
+	) {
+		return true;
+	}
+	return (
+		Object.hasOwn(value, "repairAction") &&
+		!isOptionalCatalogValue(value.repairAction, VAULT_GIT_REPAIR_ACTIONS)
+	);
+}
+
+function hasInvalidDoctorSelectorRoute(
+	value: Record<string, unknown>,
+): boolean {
+	return (
+		Object.hasOwn(value, "transactionId") &&
+		!isOptionalTransactionId(value.transactionId)
+	);
+}
+
+function isObservationExpiredTerminal(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	return [
+		hasExactKeys(value, OBSERVATION_EXPIRED_KEYS),
+		value.kind === "observation_expired",
+		// The blocker and retry safety are fixed, not free vocabulary: the public
+		// projection is derived from the kind alone, never from a persisted carrier.
+		value.blocker === "continuation_unavailable",
+		value.retrySafety === "operator_required",
+	].every(Boolean);
+}
+
+function isWorkerFailureTerminal(value: unknown): boolean {
+	if (!isRecord(value) || !isRecord(value.nextAction)) return false;
+	return [
+		hasExactKeys(value, WORKER_FAILURE_KEYS) &&
+			value.kind === "worker_failure",
+		value.blocker === "worker_launch_protocol_failed" || value.blocker === "worker_lost",
+		value.retrySafety === "operator_required",
+		hasExactKeys(value.nextAction, NEXT_ACTION_KEYS),
+		value.nextAction.id === "inspect_private_receipt",
+		typeof value.nextAction.summary === "string",
+		typeof value.nextAction.summary === "string" &&
+			value.nextAction.summary.trim().length > 0,
+	].every(Boolean);
+}
+
+function hasValidDoctorActionCarrier(value: Record<string, unknown>): boolean {
+	const hasSemantic = Object.hasOwn(value, "nextActionId");
+	const hasLegacy = Object.hasOwn(value, "nextAction");
+	if (hasSemantic === hasLegacy) return false;
+	if (hasSemantic) {
+		return (
+			typeof value.nextActionId === "string" &&
+			(VAULT_GIT_NEXT_SAFE_ACTION_IDS.includes(value.nextActionId) ||
+				VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
+					value.nextActionId as VaultGitEngineNextActionId,
+				))
+		);
+	}
+	return (
 		isRecord(value.nextAction) &&
 		hasExactKeys(value.nextAction, NEXT_ACTION_KEYS) &&
 		VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
 			value.nextAction.id as VaultGitEngineNextActionId,
 		) &&
 		typeof value.nextAction.summary === "string" &&
-		value.nextAction.summary.trim().length > 0;
-	// New writes name a normalized semantic id only (no summary, no object). The
-	// normalized identity is either a Next Safe Action catalog id (e.g.
-	// inspect_doctor_task) or an already-validated engine next-action id retained
-	// verbatim (e.g. run_repair), so accept both sets.
-	const semanticValid =
-		hasNextActionId &&
-		typeof value.nextActionId === "string" &&
-		(VAULT_GIT_NEXT_SAFE_ACTION_IDS.includes(value.nextActionId as string) ||
-			VAULT_GIT_ENGINE_NEXT_ACTION_IDS.includes(
-				value.nextActionId as VaultGitEngineNextActionId,
-			));
-	if (
-		!hasOnlyKeys(value, DOCTOR_TERMINAL_KEYS) ||
-		!DOCTOR_TERMINAL_REQUIRED_KEYS.every((key) => Object.hasOwn(value, key)) ||
-		value.kind !== "doctor_result" ||
-		value.status !== "diagnosed" ||
-		!VAULT_GIT_TRANSACTION_STATES.includes(value.state as VaultGitTransactionState) ||
-		!VAULT_GIT_TRANSACTION_PHASES.includes(value.phase as VaultGitTransactionPhase) ||
-		!VAULT_GIT_DOCTOR_FINDINGS.includes(value.finding as VaultGitDoctorFinding) ||
-		(value.changedState !== "none" && value.changedState !== "local") ||
-		!VAULT_GIT_RETRY_SAFETIES.includes(value.retrySafety as VaultGitRetrySafety) ||
-		// Reject neither and both; accept exactly one valid carrier.
-		hasNextActionId === hasLegacyNextAction ||
-		(hasNextActionId ? !semanticValid : !legacyValid) ||
-		(value.blocker !== undefined &&
-			!VAULT_GIT_BLOCKER_IDS.includes(value.blocker as VaultGitBlockerId)) ||
-		(value.repairAction !== undefined &&
-			!VAULT_GIT_REPAIR_ACTIONS.includes(value.repairAction as VaultGitRepairAction)) ||
-		(value.transactionId !== undefined &&
-			(typeof value.transactionId !== "string" ||
-				!/^txn_[0-9a-f]{32}$/u.test(value.transactionId)))
-	) {
-		throw new Error("doctor task terminal result invalid");
-	}
-	return Object.freeze(
-		value as unknown as VaultGitDoctorTaskTerminalResult,
+		value.nextAction.summary.trim().length > 0
 	);
+}
+
+function hasValidDoctorRequiredFields(value: Record<string, unknown>): boolean {
+	return [
+		DOCTOR_TERMINAL_REQUIRED_KEYS.every((key) => Object.hasOwn(value, key)),
+		value.kind === "doctor_result",
+		value.status === "diagnosed",
+		VAULT_GIT_TRANSACTION_STATES.includes(value.state as VaultGitTransactionState),
+		VAULT_GIT_TRANSACTION_PHASES.includes(value.phase as VaultGitTransactionPhase),
+		VAULT_GIT_DOCTOR_FINDINGS.includes(value.finding as VaultGitDoctorFinding),
+		value.changedState === "none" || value.changedState === "local",
+		VAULT_GIT_RETRY_SAFETIES.includes(value.retrySafety as VaultGitRetrySafety),
+	].every(Boolean);
+}
+
+function hasValidDoctorOptionalFields(value: Record<string, unknown>): boolean {
+	return [
+		isOptionalCatalogValue(value.blocker, VAULT_GIT_BLOCKER_IDS),
+		isOptionalCatalogValue(value.repairAction, VAULT_GIT_REPAIR_ACTIONS),
+		isOptionalTransactionId(value.transactionId),
+		isOptionalValidationEvidence(value.validationEvidence),
+		isOptionalCatalogValue(
+			value.publicationEvidence,
+			VAULT_GIT_DOCTOR_PUBLICATION_EVIDENCE,
+		),
+		value.validationEvidence === undefined || value.publicationEvidence === undefined,
+	].every(Boolean);
+}
+
+function isOptionalCatalogValue(
+	value: unknown,
+	catalog: readonly string[],
+): boolean {
+	return value === undefined || (typeof value === "string" && catalog.includes(value));
+}
+
+function isOptionalTransactionId(value: unknown): boolean {
+	return (
+		value === undefined ||
+		(typeof value === "string" && /^txn_[0-9a-f]{32}$/u.test(value))
+	);
+}
+
+function isOptionalValidationEvidence(value: unknown): boolean {
+	return value === undefined || isValidationRouteEvidence(value);
+}
+
+function isDoctorResultTerminal(value: Record<string, unknown>): boolean {
+	return (
+		hasOnlyKeys(value, DOCTOR_TERMINAL_KEYS) &&
+		hasValidDoctorRequiredFields(value) &&
+		hasValidDoctorActionCarrier(value) &&
+		hasValidDoctorOptionalFields(value)
+	);
+}
+
+/**
+ * Exact-shape validation for the closed U4 validation-route evidence. Every arm
+ * admits only its own keys and vocabulary; an unknown class, stage, sub-evidence,
+ * or missing per-row discriminator fails closed as a corrupt record; no default
+ * is ever invented for durable evidence.
+ */
+function isValidationRouteEvidence(value: unknown): boolean {
+	if (!isRecord(value) || typeof value.failureClass !== "string") return false;
+	switch (value.failureClass) {
+		case "candidate_setup":
+			return isSetupRouteEvidence(value);
+		case "vault_content":
+			return isContentRouteEvidence(value);
+		case "stage_budget_exceeded":
+			return isBudgetRouteEvidence(value);
+		case "candidate_cleanup":
+			return isResidueRouteEvidence(value, ["failureClass"]);
+		default:
+			return false;
+	}
+}
+
+function isSetupRouteEvidence(value: Record<string, unknown>): boolean {
+	return (
+		hasExactKeys(value, ["failureClass", "setup"]) &&
+		typeof value.setup === "string" &&
+		VAULT_GIT_DOCTOR_SETUP_EVIDENCE.includes(
+			value.setup as VaultGitDoctorSetupEvidence,
+		)
+	);
+}
+
+function isContentRouteEvidence(value: Record<string, unknown>): boolean {
+	if (value.content !== "deterministic_with_admitted_repair") {
+		return [
+			hasExactKeys(value, ["failureClass", "content"]) &&
+				value.content === "insufficient",
+		].every(Boolean);
+	}
+	return [
+		hasExactKeys(value, ["failureClass", "content", "repairId"]) &&
+			typeof value.repairId === "string",
+		typeof value.repairId === "string" &&
+			/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(value.repairId),
+	].every(Boolean);
+}
+
+function isBudgetRouteEvidence(value: Record<string, unknown>): boolean {
+	if (value.stage === "candidate_setup" || value.stage === "vault_check") {
+		return hasExactKeys(value, ["failureClass", "stage"]);
+	}
+	return (
+		value.stage === "candidate_cleanup" &&
+		isResidueRouteEvidence(value, ["failureClass", "stage"])
+	);
+}
+
+function isResidueRouteEvidence(
+	value: Record<string, unknown>,
+	extraKeys: readonly string[],
+): boolean {
+	if (
+		typeof value.residue !== "string" ||
+		!VAULT_GIT_DOCTOR_RESIDUE_EVIDENCE.includes(
+			value.residue as VaultGitDoctorResidueEvidence,
+		)
+	) {
+		return false;
+	}
+	if (value.residue === "active_owned") {
+		return (
+			hasExactKeys(value, [...extraKeys, "residue", "taskId"]) &&
+			typeof value.taskId === "string" &&
+			/^task_[0-9a-f]{32}$/u.test(value.taskId)
+		);
+	}
+	if (value.residue === "young_proven_unowned") {
+		return (
+			hasExactKeys(value, [...extraKeys, "residue", "eligibleAfter"]) &&
+			isTimestamp(value.eligibleAfter)
+		);
+	}
+	return hasExactKeys(value, [...extraKeys, "residue"]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

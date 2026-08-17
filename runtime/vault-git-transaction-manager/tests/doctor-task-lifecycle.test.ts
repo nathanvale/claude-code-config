@@ -919,4 +919,92 @@ describe("Background Doctor Task Lifecycle", () => {
 			},
 		});
 	});
+
+	test("durably expires a live Doctor observation and fences a late terminal write", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-doctor-lifecycle-"));
+		roots.push(root);
+		const repositoryId = "a".repeat(64);
+		const store = createVaultGitDoctorTaskStore({ stateRoot: root, repositoryId });
+		const binding = {
+			repositoryId,
+			activationEvidenceId: null,
+			receiptId: `receipt_${"b".repeat(32)}`,
+			receiptRevision: 7,
+			transactionId: `txn_${"c".repeat(32)}`,
+			normalizedInput: '{"command":"doctor"}',
+		} as const;
+		const admitted = await store.claimOrJoin(
+			binding,
+			"2026-08-15T01:00:00.000Z",
+		);
+		const launchGeneration = `doctor_launch_${"d".repeat(32)}`;
+		const running = await store.transition(admitted.state.taskId, admitted.state.revision, {
+			state: "in_progress",
+			phase: "running",
+			updatedAt: "2026-08-15T01:09:59.000Z",
+			heartbeatAt: "2026-08-15T01:09:59.000Z",
+			checkpoint: "checking_remote",
+			launchGeneration,
+			launchExpiresAt: null,
+			workerPid: 42,
+			workerProcessIdentity: "f".repeat(64),
+			launchAttempt: 1,
+			terminalResult: null,
+		});
+		if (running.status !== "transitioned") throw new Error("seed run failed");
+		const lifecycle = createVaultGitDoctorTaskLifecycle({
+			store,
+			spawnContext: undefined,
+			runtime: {
+				now: () => 0,
+				recordedAt: () => new Date("2026-08-15T01:10:00.000Z"),
+				sleep: async () => undefined,
+				spawnWorker: () => 0,
+				readProcessIdentity: () => "f".repeat(64),
+				stopUnacknowledgedWorker() {},
+				stopExpiredWorker: async () => false,
+				processIdentityMatches: () => true,
+			},
+		});
+
+		const expired = await lifecycle.reconcileObservationExpiry({
+			taskId: admitted.state.taskId,
+		});
+		expect(expired).toMatchObject({
+			kind: "settled",
+			state: {
+				state: "unknown",
+				phase: "terminal",
+				workerPid: null,
+				workerProcessIdentity: null,
+				terminalResult: {
+					kind: "observation_expired",
+					blocker: "continuation_unavailable",
+					retrySafety: "operator_required",
+				},
+			},
+		});
+		const late = await lifecycle.terminalizeWorker({
+			taskId: admitted.state.taskId,
+			launchGeneration,
+			workerPid: 42,
+			terminalResult: {
+				kind: "doctor_result",
+				status: "diagnosed",
+				state: "repairable",
+				phase: "writing",
+				finding: "writes_in_progress",
+				changedState: "none",
+				retrySafety: "same_input_safe",
+				nextActionId: "run_repair",
+				repairAction: "resume",
+				transactionId: binding.transactionId,
+			},
+		});
+		expect(late).toMatchObject({
+			kind: "refused",
+			reason: "worker_lost",
+			state: { terminalResult: { kind: "observation_expired" } },
+		});
+	});
 });

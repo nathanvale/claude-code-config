@@ -205,7 +205,7 @@ describe("vault-git U1 schema wiring — versioned union in data.next_action", (
 	// continuation. It rehydrates to a FULL terminal none — never a runnable union
 	// carrying id "none" — protecting corrupted or future durable ids.
 	test("a semantic-only catalog id with no compat contract fails closed to a full terminal none", () => {
-		const semanticOnly = "escalate_validation_evidence";
+		const semanticOnly = "resume_vault_content_promotion";
 		// Guard the premise: it is a real semantic catalog id but not a public id.
 		expect(VAULT_GIT_NEXT_SAFE_ACTION_IDS).toContain(semanticOnly);
 		expect(VAULT_GIT_NEXT_ACTION_IDS).not.toContain(semanticOnly);

@@ -12,6 +12,14 @@ export const VAULT_GIT_DOCTOR_LAUNCH_ACK_WINDOW_MS = 1_500;
 /** Observational heartbeat age after which process identity must be checked. */
 export const VAULT_GIT_DOCTOR_TASK_HEARTBEAT_STALE_MS = 20_000;
 
+/**
+ * The single package-owned bound on observing one nonterminal Doctor Task,
+ * measured from durable admission. Heartbeats never renew it: an acknowledged
+ * worker that keeps beating past this bound still loses canonical authority, so
+ * bounded observation always terminalizes instead of polling forever.
+ */
+export const VAULT_GIT_DOCTOR_TASK_OBSERVATION_EXPIRY_MS = 10 * 60_000;
+
 /** Stable refusal vocabulary returned by the Background Doctor lifecycle. */
 export type VaultGitDoctorTaskLifecycleRefusalReason =
 	| "task_input_mismatch"
@@ -124,6 +132,10 @@ export interface VaultGitDoctorTaskLifecycle {
 	reconcileStaleWorker(
 		input: VaultGitDoctorTaskReconciliationInput,
 	): Promise<VaultGitDoctorTaskLifecycleOutcome>;
+	/** Terminalize one nonterminal task whose bounded observation window elapsed. */
+	reconcileObservationExpiry(
+		input: VaultGitDoctorTaskReconciliationInput,
+	): Promise<VaultGitDoctorTaskLifecycleOutcome>;
 	/** Fence and terminalize one exact acknowledged worker generation. */
 	terminalizeWorker(
 		input: VaultGitDoctorTaskWorkerTerminalInput,
@@ -193,6 +205,60 @@ export function createVaultGitDoctorTaskLifecycle<SpawnContext>(
 			}
 		}
 		throw new Error("Background Doctor task reconciliation contention");
+	}
+
+	async function reconcileObservationExpiry(
+		input: VaultGitDoctorTaskReconciliationInput,
+	): Promise<VaultGitDoctorTaskLifecycleOutcome> {
+		for (let contentionPass = 0; contentionPass < 5; contentionPass += 1) {
+			const loaded = await options.store.loadByTaskId(input.taskId);
+			if (loaded.status !== "loaded") {
+				throw new Error("Background Doctor task unavailable");
+			}
+			const state = loaded.state;
+			const now = options.runtime.recordedAt();
+			if (
+				state.phase === "terminal" ||
+				now.getTime() <
+					Date.parse(state.recordedAt) +
+						VAULT_GIT_DOCTOR_TASK_OBSERVATION_EXPIRY_MS
+			) {
+				return { kind: "settled", state };
+			}
+			const transitioned = await options.store.transition(
+				state.taskId,
+				state.revision,
+				{
+					state: "unknown",
+					phase: "terminal",
+					updatedAt: now.toISOString(),
+					heartbeatAt: state.heartbeatAt,
+					checkpoint: "terminal",
+					launchGeneration: state.launchGeneration,
+					launchExpiresAt: null,
+					// Clearing observational identity is what fences a late worker: the
+					// exact PID/identity it must match to terminalize is gone, so it can
+					// no longer replace this durable terminal result.
+					workerPid: null,
+					workerProcessIdentity: null,
+					launchAttempt: state.launchAttempt,
+					terminalResult: {
+						// Not worker_failure: that kind claims a proven-dead worker, while
+						// an expired observation may still have a live process that only
+						// lost canonical authority. Persisting no nextAction keeps the
+						// public projection deterministic instead of carrier-dependent.
+						kind: "observation_expired",
+						blocker: "continuation_unavailable",
+						retrySafety: "operator_required",
+					},
+				},
+				state.launchGeneration ?? undefined,
+			);
+			if (transitioned.status === "transitioned") {
+				return { kind: "settled", state: transitioned.state };
+			}
+		}
+		throw new Error("Background Doctor task observation expiry contention");
 	}
 
 	async function heartbeatWorker(
@@ -522,6 +588,7 @@ export function createVaultGitDoctorTaskLifecycle<SpawnContext>(
 		acknowledgeWorker,
 		heartbeatWorker,
 		reconcileStaleWorker,
+		reconcileObservationExpiry,
 		terminalizeWorker,
 	};
 }

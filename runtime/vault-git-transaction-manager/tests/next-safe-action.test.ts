@@ -7,6 +7,7 @@ import {
 	type VaultGitRepairAction,
 } from "../src/model.ts";
 import {
+	VAULT_GIT_ACTION_AFFORDANCES,
 	VAULT_GIT_NEXT_SAFE_ACTION_IDS,
 	type VaultGitContinuationContext,
 	bindVaultGitPublicInput,
@@ -22,6 +23,17 @@ const ALL_SELECTORS = {
 } as const;
 
 describe("vault-git Next Safe Action catalog", () => {
+	test("classifies reconcile_quarantine as a network write", () => {
+		expect(
+			VAULT_GIT_ACTION_AFFORDANCES.find(
+				(entry) => entry.id === "reconcile_quarantine",
+			),
+		).toMatchObject({
+			id: "reconcile_quarantine",
+			sideEffects: ["read", "check", "network", "write"],
+		});
+	});
+
 	test("projects the reconcile_quarantine invoke continuation", () => {
 		const projection = projectVaultGitNextSafeAction({
 			action_id: "reconcile_quarantine",
@@ -171,7 +183,7 @@ describe("vault-git Next Safe Action catalog", () => {
 
 	test("apply_vault_content_repair is feature-gated and unavailable now", () => {
 		// The vault-content repair command is not yet shipped, so this action fails
-		// closed even with complete selectors — no caller can run a command that
+		// closed even with complete selectors; no caller can run a command that
 		// does not exist. The exact argv shape is asserted in the semantic matrix.
 		expect(
 			projectVaultGitNextSafeAction({
@@ -202,6 +214,9 @@ describe("vault-git Next Safe Action catalog", () => {
 			change_owned_paths: { emission_command: "begin" },
 		};
 		for (const id of VAULT_GIT_NEXT_ACTION_IDS) {
+			// The one deliberately feature-gated public id (U5 vault_content_repair);
+			// its fail-closed posture has its own dedicated test above.
+			if (id === "apply_vault_content_repair") continue;
 			const context = CONTEXTUAL[id];
 			const projection = projectVaultGitNextSafeAction({
 				action_id: id,
@@ -843,7 +858,7 @@ describe("vault-git Next Safe Action catalog", () => {
 	});
 
 	// run_repair needs its repair_action to resolve which repair to run; without it the
-	// projection fails closed. (A non-takeover repair no longer needs a transaction id —
+	// projection fails closed. (A non-takeover repair no longer needs a transaction id;
 	// that runnable-without-txn case is proved above; takeover-without-txn fail-closed
 	// is proved separately.)
 	test("run_repair without a repair_action fails closed", () => {

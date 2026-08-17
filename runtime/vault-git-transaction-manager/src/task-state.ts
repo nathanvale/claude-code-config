@@ -55,6 +55,7 @@ const VAULT_GIT_TASK_STATE_KEYS = [
 	"schemaVersion",
 	"taskId",
 	"receiptId",
+	"receiptRevision",
 	"transactionId",
 	"leaseGeneration",
 	"revision",
@@ -76,8 +77,13 @@ const VAULT_GIT_TASK_STATE_KEYS = [
 	"repairAuthorization",
 ] as const;
 
+const PRE_RECEIPT_REVISION_TASK_STATE_KEYS = VAULT_GIT_TASK_STATE_KEYS.filter(
+	(key) => key !== "receiptRevision",
+);
+
 const LEGACY_VAULT_GIT_TASK_STATE_KEYS = VAULT_GIT_TASK_STATE_KEYS.filter(
 	(key) =>
+		key !== "receiptRevision" &&
 		key !== "attemptNumber" &&
 		key !== "previousTerminalResult" &&
 		key !== "repairReentryBlocked" &&
@@ -91,6 +97,11 @@ const VAULT_GIT_TASK_CLAIM_KEYS = [
 
 const LEGACY_VAULT_GIT_TASK_CLAIM_KEYS = [
 	...LEGACY_VAULT_GIT_TASK_STATE_KEYS,
+	"bindingDigest",
+] as const;
+
+const PRE_RECEIPT_REVISION_TASK_CLAIM_KEYS = [
+	...PRE_RECEIPT_REVISION_TASK_STATE_KEYS,
 	"bindingDigest",
 ] as const;
 
@@ -138,6 +149,7 @@ export type VaultGitTaskWorkerAcknowledgementResult =
  * const state = createVaultGitTaskState({
  *   taskId: "task_11111111111111111111111111111111",
  *   receiptId: "receipt_22222222222222222222222222222222",
+ *   receiptRevision: 2,
  *   transactionId: "txn_33333333333333333333333333333333",
  *   leaseGeneration: "a".repeat(40),
  *   recordedAt: "2026-08-12T11:30:00.000Z",
@@ -151,6 +163,7 @@ export function createVaultGitTaskState(
 		schemaVersion: 2,
 		taskId: input.taskId,
 		receiptId: input.receiptId,
+		receiptRevision: input.receiptRevision,
 		transactionId: input.transactionId,
 		leaseGeneration: input.leaseGeneration,
 		revision: 1,
@@ -271,8 +284,14 @@ export function parseVaultGitTaskClaim(value: unknown): VaultGitTaskClaim {
 	const exactLegacy =
 		Object.keys(record).length === LEGACY_VAULT_GIT_TASK_CLAIM_KEYS.length &&
 		LEGACY_VAULT_GIT_TASK_CLAIM_KEYS.every((key) => Object.hasOwn(record, key));
+	const exactPreReceiptRevision =
+		Object.keys(record).length ===
+			PRE_RECEIPT_REVISION_TASK_CLAIM_KEYS.length &&
+		PRE_RECEIPT_REVISION_TASK_CLAIM_KEYS.every((key) =>
+			Object.hasOwn(record, key),
+		);
 	if (
-		(!exactCurrent && !exactLegacy) ||
+		(!exactCurrent && !exactLegacy && !exactPreReceiptRevision) ||
 		typeof record.bindingDigest !== "string" ||
 		!/^[0-9a-f]{64}$/.test(record.bindingDigest)
 	) {
@@ -435,16 +454,25 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		Object.keys(source).length === LEGACY_VAULT_GIT_TASK_STATE_KEYS.length &&
 		LEGACY_VAULT_GIT_TASK_STATE_KEYS.every((key) => Object.hasOwn(source, key)) &&
 		source.schemaVersion === 1;
+	const exactPreReceiptRevision =
+		Object.keys(source).length === PRE_RECEIPT_REVISION_TASK_STATE_KEYS.length &&
+		PRE_RECEIPT_REVISION_TASK_STATE_KEYS.every((key) =>
+			Object.hasOwn(source, key),
+		) &&
+		source.schemaVersion === 2;
 	const record: Record<string, unknown> = exactLegacy
 		? {
-			...source,
-			schemaVersion: 2,
-			attemptNumber: 1,
-			previousTerminalResult: null,
-			repairReentryBlocked: source.state === "unknown",
-			repairAuthorization: null,
-		}
-		: source;
+				...source,
+				schemaVersion: 2,
+				receiptRevision: null,
+				attemptNumber: 1,
+				previousTerminalResult: null,
+				repairReentryBlocked: source.state === "unknown",
+				repairAuthorization: null,
+			}
+		: exactPreReceiptRevision
+			? { ...source, receiptRevision: null }
+			: source;
 	if (
 		Object.keys(record).length !== VAULT_GIT_TASK_STATE_KEYS.length ||
 		!VAULT_GIT_TASK_STATE_KEYS.every((key) => Object.hasOwn(record, key)) ||
@@ -453,6 +481,10 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		!/^task_[0-9a-f]{32}$/.test(record.taskId) ||
 		typeof record.receiptId !== "string" ||
 		!/^receipt_[0-9a-f]{32}$/.test(record.receiptId) ||
+		(record.receiptRevision !== null &&
+			(typeof record.receiptRevision !== "number" ||
+				!Number.isSafeInteger(record.receiptRevision) ||
+				record.receiptRevision < 1)) ||
 		typeof record.transactionId !== "string" ||
 		!/^txn_[0-9a-f]{32}$/.test(record.transactionId) ||
 		typeof record.leaseGeneration !== "string" ||
@@ -520,6 +552,7 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		schemaVersion: 2,
 		taskId: record.taskId,
 		receiptId: record.receiptId,
+		receiptRevision: record.receiptRevision as number | null,
 		transactionId: record.transactionId,
 		leaseGeneration: record.leaseGeneration,
 		revision: record.revision,

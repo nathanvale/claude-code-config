@@ -12,6 +12,7 @@ describe("durable task state", () => {
 		const state = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",
@@ -21,6 +22,7 @@ describe("durable task state", () => {
 			schemaVersion: 2,
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			revision: 1,
@@ -68,6 +70,7 @@ describe("durable task state", () => {
 
 		expect(legacy).toMatchObject({
 			schemaVersion: 2,
+			receiptRevision: null,
 			attemptNumber: 1,
 			previousTerminalResult: null,
 			repairReentryBlocked: false,
@@ -75,10 +78,70 @@ describe("durable task state", () => {
 		});
 	});
 
+	test("keeps a pre-revision schema-two record readable but unfenced", () => {
+		const current = createVaultGitTaskState({
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T11:30:00.000Z",
+		});
+		const { receiptRevision: _receiptRevision, ...preRevision } = current;
+
+		const parsed = parseVaultGitTaskState(preRevision);
+
+		expect(parsed.receiptRevision).toBeNull();
+		expect(parsed.taskId).toBe(current.taskId);
+	});
+
+	test("a readable legacy record cannot authorize revision-bound repair", () => {
+		const admitted = createVaultGitTaskState({
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			recordedAt: "2026-08-12T11:30:00.000Z",
+		});
+		const repairNeeded = advanceVaultGitTaskState(admitted, {
+			state: "repair_needed",
+			phase: "terminal",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "repairable",
+			terminalResult: {
+				outcome: "refused",
+				phase: "repairable",
+				changedState: "local",
+				blocker: "vault_check_failed",
+				retrySafety: "same_input_unsafe",
+			},
+		});
+		const { receiptRevision: _receiptRevision, ...preRevision } = repairNeeded;
+		const legacy = parseVaultGitTaskState(preRevision);
+
+		expect(() =>
+			authorizeVaultGitTaskRepair(legacy, {
+				repairedReceiptRevision: 3,
+				bindingDigest: "b".repeat(64),
+				recordedAt: "2026-08-12T11:32:00.000Z",
+			}),
+		).toThrow("task repair authorization invalid");
+		expect(() =>
+			authorizeVaultGitTaskRepair(repairNeeded, {
+				repairedReceiptRevision: 2,
+				bindingDigest: "b".repeat(64),
+				recordedAt: "2026-08-12T11:32:00.000Z",
+			}),
+		).toThrow("task repair authorization invalid");
+	});
+
 	test("never authorizes an unknown publication attempt", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",
@@ -211,6 +274,7 @@ describe("durable task state", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",
@@ -255,6 +319,7 @@ describe("durable task state", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",
@@ -301,6 +366,7 @@ describe("durable task state", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",
 			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 2,
 			transactionId: "txn_33333333333333333333333333333333",
 			leaseGeneration: "a".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",
@@ -392,6 +458,7 @@ describe("durable task state", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			receiptId: "receipt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			receiptRevision: 2,
 			transactionId: "txn_cccccccccccccccccccccccccccccccc",
 			leaseGeneration: "d".repeat(40),
 			recordedAt: "2026-08-12T11:30:00.000Z",

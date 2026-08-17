@@ -36,6 +36,14 @@ _Avoid_: hostname, machine serial
 External state change, inspection, or terminal action selected by Doctor after read-only diagnosis. Doctor itself is never its own immediate continuation.
 _Avoid_: retry Doctor, diagnostic loop
 
+**Doctor Task**:
+Owner-private durable lifecycle for one Background Doctor diagnosis, admitted, observed within a bounded window, and terminalized apart from any Completion Task, Vault Transaction, or Transaction Receipt. It grants no vault, Git, lease, repair, or activation authority; only its own owner-private task evidence may change.
+_Avoid_: doctor job, background process, completion task, worker queue
+
+**Doctor Finding**:
+Closed evidence-backed classification of what one Doctor diagnosis proved, selecting exactly one Doctor Continuation. It is neither a Blocker nor a Validation Failure Class and grants no Deterministic Repair authority.
+_Avoid_: error code, blocker, repair decision, diagnosis log
+
 **Completion Task**:
 Stable receipt-scoped completion intent exposed by one Task ID. Explicit repair preserves the Task while creating a new Attempt.
 _Avoid_: worker process, retry job

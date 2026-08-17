@@ -37,6 +37,7 @@ describe("private task store", () => {
 		};
 		const admitted = await stores[0].claimOrJoin(input);
 		if (admitted.status === "refused") throw new Error("test claim refused");
+		expect(admitted.state.receiptRevision).toBe(2);
 		const failed = await stores[0].transition(
 			admitted.state.taskId,
 			admitted.state.revision,
@@ -118,6 +119,7 @@ describe("private task store", () => {
 			if (result.status === "refused") throw new Error("repaired claim refused");
 			expect(result.state).toMatchObject({
 				taskId: admitted.state.taskId,
+				receiptRevision: 3,
 				attemptNumber: 2,
 				state: "claimed",
 				phase: "admitted",
@@ -352,6 +354,7 @@ describe("private task store", () => {
 			"phase",
 			"previousTerminalResult",
 			"receiptId",
+			"receiptRevision",
 			"recordedAt",
 			"repairAuthorization",
 			"repairReentryBlocked",
@@ -383,6 +386,21 @@ describe("private task store", () => {
 		expect(await stores[0].load(receiptId)).toEqual({
 			status: "loaded",
 			state: admittedStates[0],
+		});
+		expect(
+			await stores[0].claimOrJoin({
+				...taskClaimInput({
+					receiptId,
+					transactionId: "txn_22222222222222222222222222222222",
+					leaseGeneration: "a".repeat(40),
+					recordedAt: "2026-08-12T11:47:00.000Z",
+				}),
+				receiptRevision: 2,
+			}),
+		).toEqual({
+			status: "refused",
+			launch: "refused",
+			reason: "task_input_mismatch",
 		});
 	});
 

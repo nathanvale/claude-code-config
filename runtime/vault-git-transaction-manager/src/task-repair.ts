@@ -21,8 +21,9 @@ export function authorizeVaultGitTaskRepair(
 		previous.phase !== "terminal" ||
 		previous.repairReentryBlocked ||
 		previous.repairAuthorization !== null ||
+		previous.receiptRevision === null ||
 		!Number.isSafeInteger(input.repairedReceiptRevision) ||
-		input.repairedReceiptRevision < 1 ||
+		input.repairedReceiptRevision <= previous.receiptRevision ||
 		!/^[0-9a-f]{64}$/u.test(input.bindingDigest) ||
 		!isExactIsoTimestamp(input.recordedAt) ||
 		Date.parse(input.recordedAt) < Date.parse(previous.updatedAt)
@@ -64,6 +65,7 @@ export function consumeVaultGitTaskRepairAuthorization(
 	return parseVaultGitTaskState({
 		...previous,
 		revision: previous.revision + 1,
+		receiptRevision: input.repairedReceiptRevision,
 		attemptNumber: previous.attemptNumber + 1,
 		state: "claimed",
 		phase: "admitted",

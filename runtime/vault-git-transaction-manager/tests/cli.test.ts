@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,6 +20,10 @@ import type {
 	VaultGitEngineResult,
 	VaultGitTransactionEngine,
 } from "../src/engine.ts";
+import {
+	createVaultGitDoctor,
+	type VaultGitDoctorResult,
+} from "../src/doctor.ts";
 import { createVaultGitDoctorTaskStore } from "../src/doctor-task-store.ts";
 import {
 	createVaultGitTaskStore,
@@ -30,8 +34,13 @@ import type {
 	VaultGitReceipt,
 	VaultGitRepairAction,
 	VaultGitTaskState,
+	VaultGitValidationFailure,
 } from "../src/model.ts";
-import type { VaultGitRuntimePort } from "../src/ports.ts";
+import type {
+	VaultGitRemotePort,
+	VaultGitRepositoryPort,
+	VaultGitRuntimePort,
+} from "../src/ports.ts";
 import type {
 	VaultGitRepairInput,
 	VaultGitRepairResult,
@@ -46,6 +55,8 @@ import { createTempDirectoryFixture } from "./temp-directory-fixture.ts";
 const tempDirectories = createTempDirectoryFixture();
 const ACTIVATION_EVIDENCE_REFERENCE =
 	`vault-git:prepared:v2:${"f".repeat(64)}`;
+const PRODUCTION_DOCTOR_REPOSITORY_IDENTITY =
+	"vault@production-doctor-evidence";
 
 afterEach(tempDirectories.cleanup);
 
@@ -218,6 +229,324 @@ describe("vault-git CLI composition", () => {
 			});
 		}
 	});
+
+	test("production Doctor evidence enriches a persisted Completion Task validation failure", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			validationFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			},
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		const durable = await fixture.readDoctorTask();
+		expect(durable).toMatchObject({
+			status: "loaded",
+			state: {
+				phase: "terminal",
+				terminalResult: {
+					kind: "doctor_result",
+					validationEvidence: {
+						failureClass: "candidate_setup",
+						setup: "insufficient",
+					},
+				},
+			},
+		});
+		if (durable.status !== "loaded") throw new Error("Doctor Task unavailable");
+		if (durable.state.terminalResult?.kind !== "doctor_result") {
+			throw new Error("Doctor terminal result unavailable");
+		}
+		expect(durable.state.terminalResult.repairAction).toBeUndefined();
+		expect(fixture.nextAction()).toMatchObject({
+			kind: "needs_human",
+			action_id: "escalate_validation_evidence",
+			owner: "vault_git_operator",
+			condition: "validation_evidence_required",
+		});
+	});
+
+	test("production Doctor rejects diagnosis-only validation evidence without a bound Completion Task", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			completionEvidence: "missing",
+			diagnose: ({ receipt }) =>
+				Promise.resolve({
+					...defaultProductionDoctorDiagnosis(receipt),
+					validationEvidence: {
+						failureClass: "candidate_setup",
+						setup: "proven_enrollment_defect",
+					},
+				}),
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		expect(await fixture.readDoctorTask()).toMatchObject({
+			status: "loaded",
+			state: {
+				terminalResult: {
+					kind: "doctor_result",
+					nextActionId: "escalate_validation_evidence",
+				},
+			},
+		});
+		const loaded = await fixture.readDoctorTask();
+		if (loaded.status !== "loaded") throw new Error("Doctor Task unavailable");
+		if (loaded.state.terminalResult?.kind !== "doctor_result") {
+			throw new Error("Doctor terminal result unavailable");
+		}
+		expect(loaded.state.terminalResult.repairAction).toBeUndefined();
+		expect(loaded.state.terminalResult.validationEvidence).toBeUndefined();
+		expect(fixture.nextAction()).toMatchObject({
+			kind: "needs_human",
+			action_id: "escalate_validation_evidence",
+			owner: "vault_git_operator",
+			condition: "validation_evidence_required",
+		});
+	});
+
+	test("production Doctor rejects Completion Task evidence from another receipt revision", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			completionReceiptRevision: 2,
+			validationFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			},
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		expect(await fixture.readDoctorTask()).toMatchObject({
+			status: "loaded",
+			state: {
+				terminalResult: {
+					kind: "doctor_result",
+					nextActionId: "escalate_validation_evidence",
+				},
+			},
+		});
+		const loaded = await fixture.readDoctorTask();
+		if (loaded.status !== "loaded") throw new Error("Doctor Task unavailable");
+		if (loaded.state.terminalResult?.kind !== "doctor_result") {
+			throw new Error("Doctor terminal result unavailable");
+		}
+		expect(loaded.state.terminalResult.repairAction).toBeUndefined();
+		expect(loaded.state.terminalResult.validationEvidence).toBeUndefined();
+		expect(fixture.nextAction()).toMatchObject({
+			kind: "needs_human",
+			action_id: "escalate_validation_evidence",
+			owner: "vault_git_operator",
+			condition: "validation_evidence_required",
+		});
+	});
+
+	test.each(["missing", "mismatched", "corrupt"] as const)(
+		"production Doctor evidence fails closed when Completion Task evidence is %s",
+		async (completionEvidence) => {
+			const fixture = await runProductionDoctorEvidence({
+				completionEvidence,
+				validationFailure: {
+					failureClass: "candidate_setup",
+					stage: "candidate_setup",
+				},
+			});
+			expect(fixture.worker.exitCode).toBe(0);
+			const durable = await fixture.readDoctorTask();
+			expect(durable).toMatchObject({
+				status: "loaded",
+				state: {
+					terminalResult: {
+						kind: "doctor_result",
+						nextActionId: "escalate_validation_evidence",
+					},
+				},
+			});
+			expect(fixture.nextAction()).toMatchObject({
+				kind: "needs_human",
+				action_id: "escalate_validation_evidence",
+				owner: "vault_git_operator",
+				condition: "validation_evidence_required",
+			});
+		},
+	);
+
+	test("production Doctor without a Completion Task evidence composition fails closed", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			omitCompletionTaskEvidenceSource: true,
+			validationFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			},
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		expect(await fixture.readDoctorTask()).toMatchObject({
+			status: "loaded",
+			state: {
+				terminalResult: {
+					kind: "doctor_result",
+					nextActionId: "escalate_validation_evidence",
+				},
+			},
+		});
+		expect(fixture.nextAction()).toMatchObject({
+			kind: "needs_human",
+			action_id: "escalate_validation_evidence",
+			owner: "vault_git_operator",
+			condition: "validation_evidence_required",
+		});
+	});
+
+	test("repair-needed Completion Task never gains Repair Authorization from Doctor", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			advanceReceiptAfterCompletion: true,
+			doctorTransactionSelector: true,
+			validationFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			},
+			diagnose: ({ receipt }) =>
+				Promise.resolve({
+					...defaultProductionDoctorDiagnosis(receipt),
+					phase: "writing",
+				}),
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		if (!fixture.production.taskStore) {
+			throw new Error("production Completion Task store missing");
+		}
+		const completion = await fixture.production.taskStore.load(
+			fixture.receipt.receiptId,
+		);
+		expect(completion).toMatchObject({
+			status: "loaded",
+			state: {
+				state: "repair_needed",
+				repairAuthorization: null,
+			},
+		});
+	});
+
+	test.each([
+		["active", "inspect_completion_task"],
+		["old", "run_janitor"],
+		["young", "none"],
+		["removed", "none"],
+		["corrupt", "escalate_validation_evidence"],
+		["unreadable", "escalate_validation_evidence"],
+	] as const)(
+		"production Doctor evidence routes %s Candidate Residue through the real observer",
+		async (residue, actionId) => {
+			const fixture = await runProductionDoctorEvidence({
+				validationFailure: {
+					failureClass: "candidate_cleanup",
+					stage: "candidate_cleanup",
+				},
+				activeCompletionAttempt: residue === "active",
+				advanceReceiptAfterCompletion: residue === "active",
+				preparePrivateState: async ({ production, receipt }) => {
+					await plantProductionCandidateResidue(production, receipt, residue);
+				},
+			});
+			expect(fixture.worker.exitCode).toBe(0);
+			expect(fixture.nextAction().action_id).toBe(actionId);
+			if (residue === "active") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "invoke",
+					argv: [
+						"status",
+						"--task-id",
+						fixture.completionTaskId,
+						"--json",
+					],
+				});
+			}
+			if (residue === "corrupt" || residue === "unreadable") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "needs_human",
+					condition: "validation_evidence_required",
+				});
+			}
+		},
+	);
+
+	test.each([
+		["remotely_closed", "remotely_closed", "close_verified_publication"],
+		[
+			"proven_not_published_origin_intact",
+			"proven_not_published_origin_intact",
+			"retry_proven_unpublished",
+		],
+		["unavailable", "unavailable", "obtain_remote_evidence"],
+		["lease_remote_unavailable", "unavailable", "obtain_remote_evidence"],
+		["lease_host_contract_breach", "contract_breach", "restore_remote_contract"],
+		["lease_ledger_malformed", "contract_breach", "restore_remote_contract"],
+		["origin_host_mismatch", "contract_breach", "restore_remote_contract"],
+		["local_main_moved", "remotely_closed", "close_verified_publication"],
+		[
+			"local_main_moved_unpublished",
+			"conflicting",
+			"resolve_publication_conflict",
+		],
+	] as const)(
+		"production Doctor evidence persists real %s publication diagnosis",
+		async (scenario, publicationEvidence, actionId) => {
+			const fixture = await runProductionDoctorEvidence({
+				receipt: publicationDoctorReceipt(scenario),
+				completionEvidence: "missing",
+				diagnose: ({ production, receipt }) =>
+					createRealPublicationDiagnosis(
+						production,
+						receipt,
+						scenario,
+					),
+			});
+			expect(fixture.worker.exitCode).toBe(0);
+			const durable = await fixture.readDoctorTask();
+			expect(durable).toMatchObject({
+				status: "loaded",
+				state: {
+					terminalResult: {
+						kind: "doctor_result",
+						publicationEvidence,
+					},
+				},
+			});
+			if (durable.status !== "loaded") throw new Error("Doctor Task unavailable");
+			if (durable.state.terminalResult?.kind !== "doctor_result") {
+				throw new Error("Doctor terminal result unavailable");
+			}
+			expect(durable.state.terminalResult.repairAction).toBeUndefined();
+			expect(fixture.nextAction().action_id).toBe(actionId);
+			if (publicationEvidence === "proven_not_published_origin_intact") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "invoke",
+					argv: [
+						"repair",
+						"retry-push",
+						"--transaction-id",
+						publicationDoctorReceipt(publicationEvidence).transactionId,
+						"--json",
+					],
+				});
+			}
+			if (publicationEvidence === "unavailable") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "needs_human",
+					owner: "vault_git_operator",
+					condition: "remote_evidence_available",
+				});
+			}
+			if (publicationEvidence === "contract_breach") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "needs_human",
+					owner: "vault_git_operator",
+					condition: "remote_contract_restored",
+				});
+			}
+			if (publicationEvidence === "conflicting") {
+				expect(fixture.nextAction()).toMatchObject({
+					kind: "needs_human",
+					owner: "vault_git_operator",
+					condition: "publication_conflict_resolved",
+				});
+			}
+		},
+	);
 
 	test("scrubs ambient authority before detached worker launch", () => {
 		expect(
@@ -1245,17 +1574,49 @@ describe("vault-git CLI composition", () => {
 			launchPrivate: false,
 		});
 		const janitorData = JSON.parse(janitor.stdout).data;
+		// Acyclic recovery invariant (ADR-0002 U4): a Janitor refusal never
+		// points back to Janitor. A remote outage is an operator-owned
+		// prerequisite, not a run_janitor self-loop.
 		expect(janitorData).toMatchObject({
-			retry_safety: "same_input_safe",
+			retry_safety: "operator_required",
 			blockers: ["remote_unavailable"],
 			next_action: {
-				kind: "invoke",
-				id: "run_janitor",
-				action_id: "run_janitor",
-				argv: ["janitor", "--json"],
+				kind: "needs_human",
+				id: "request_operator_review",
+				action_id: "request_operator_review",
+				handoff_kind: "external_prerequisite",
+				owner: "vault_git_operator",
 			},
 		});
+		expect(janitorData.next_action.action_id).not.toBe("run_janitor");
 		expect(janitorData.blockers).not.toContain("continuation_unavailable");
+	});
+
+	test("a closed transaction preview stops at terminal none, never run_doctor", async () => {
+		const preview = await runVaultGitForTest(["preview", "--json"], {
+			composition: fakeComposition(
+				fakeEngine({
+					async inspect() {
+						return engineResult({
+							state: "closed",
+							phase: "closed",
+							nextAction: {
+								id: "none",
+								summary: "No transaction action remains.",
+							},
+						});
+					},
+				}),
+			),
+			launchPrivate: false,
+		});
+		const data = JSON.parse(preview.stdout).data;
+		expect(data.next_action).toMatchObject({
+			kind: "none",
+			id: "none",
+			action_id: "none",
+		});
+		expect(data.next_action.action_id).not.toBe("run_doctor");
 	});
 
 	test("dispatches the exact stale takeover path with FD token proof", async () => {
@@ -2056,7 +2417,7 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 
 	// New-write carrier: a terminal Doctor Task persisted with the semantic id only
 	// (nextActionId: inspect_doctor_task, no summary/object) projects the same
-	// authoritative union via the CLI — semantic inspect_doctor_task, compat
+	// authoritative union via the CLI: semantic inspect_doctor_task, compat
 	// inspect_status, exact doctor argv.
 	test("a new persisted inspect_doctor_task terminal projects the same union via the CLI", async () => {
 		const stateRoot = await temp("vault-git-u1-cli-doctor-new-");
@@ -2210,6 +2571,513 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 		);
 	});
 });
+
+interface ProductionDoctorEvidenceOptions {
+	readonly validationFailure?: VaultGitValidationFailure;
+	readonly completionEvidence?: "valid" | "missing" | "mismatched" | "corrupt";
+	readonly completionReceiptRevision?: number;
+	readonly advanceReceiptAfterCompletion?: boolean;
+	readonly doctorTransactionSelector?: boolean;
+	readonly activeCompletionAttempt?: boolean;
+	readonly omitCompletionTaskEvidenceSource?: boolean;
+	readonly receipt?: VaultGitReceipt;
+	readonly preparePrivateState?: (input: {
+		readonly production: VaultGitCliComposition;
+		readonly receipt: VaultGitReceipt;
+		readonly completionTaskId: string | null;
+	}) => Promise<void>;
+	readonly diagnose?: (input: {
+		readonly production: VaultGitCliComposition;
+		readonly receipt: VaultGitReceipt;
+	}) => Promise<VaultGitDoctorResult>;
+}
+
+async function runProductionDoctorEvidence(
+	options: ProductionDoctorEvidenceOptions,
+) {
+	const { production, receipt, stateRoot } =
+		await createProductionDoctorEvidenceFixture(options.receipt);
+	const completionTaskId = await seedProductionCompletionEvidence(
+		production,
+		receipt,
+		options,
+	);
+	await options.preparePrivateState?.({
+		production,
+		receipt,
+		completionTaskId,
+	});
+	const effectiveReceipt = options.advanceReceiptAfterCompletion
+		? {
+				...receipt,
+				revision: receipt.revision + 1,
+				recordedAt: "2026-08-17T01:00:03.000Z",
+			}
+		: receipt;
+	if (effectiveReceipt !== receipt) {
+		await production.store.append(effectiveReceipt);
+	}
+	const doctor = await seedProductionDoctorTask(production, effectiveReceipt);
+	const engine = fakeEngine({
+		doctor: () =>
+			options.diagnose?.({ production, receipt: effectiveReceipt }) ??
+			Promise.resolve(defaultProductionDoctorDiagnosis(effectiveReceipt)),
+	});
+	const composition: VaultGitCliComposition = {
+		...production,
+		engine,
+		...(options.omitCompletionTaskEvidenceSource
+			? { taskStore: undefined }
+			: {}),
+	};
+	const workerArgs = options.doctorTransactionSelector
+		? [
+				"doctor",
+				"--transaction-id",
+				effectiveReceipt.transactionId ?? "missing",
+				"--json",
+			]
+		: ["doctor", "--json"];
+	const worker = await runVaultGitForTest(workerArgs, {
+		composition,
+		launchPrivate: false,
+		env: {
+			VAULT_GIT_DOCTOR_TASK_ID: doctor.taskId,
+			VAULT_GIT_DOCTOR_TASK_LAUNCH_GENERATION: doctor.launchGeneration,
+		},
+	});
+	const inspected = await runVaultGitForTest(
+		["doctor", "--task-id", doctor.taskId, "--json"],
+		{ composition, launchPrivate: false },
+	);
+	return {
+		worker,
+		production,
+		receipt: effectiveReceipt,
+		completionTaskId,
+		readDoctorTask: () =>
+			createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId: production.store.repositoryId,
+			}).loadByTaskId(doctor.taskId),
+		nextAction: () => JSON.parse(inspected.stdout).data.next_action,
+	};
+}
+
+async function createProductionDoctorEvidenceFixture(
+	receiptOverride: VaultGitReceipt | undefined,
+) {
+	const repositoryPath = await temp("vault-git-doctor-evidence-repository-");
+	const stateRoot = await temp("vault-git-doctor-evidence-state-");
+	const receipt = receiptOverride ?? productionDoctorReceipt();
+	const runtime: VaultGitRuntimePort = {
+		now: () => new Date("2026-08-17T02:00:00.000Z"),
+		actor: () => "agent-a",
+		host: () => "host-a",
+		newReceiptId: () => `receipt_${"9".repeat(32)}`,
+		interrupt() {},
+	};
+	const production = await createVaultGitCliComposition({
+		repositoryPath,
+		checkRepositoryPath: repositoryPath,
+		stateRoot,
+		repositoryIdentity: PRODUCTION_DOCTOR_REPOSITORY_IDENTITY,
+		actor: "agent-a",
+		host: "host-a",
+		runtime,
+		activationAuthority: admittedActivationAuthorityForTest,
+	});
+	await production.store.initialize(receipt, {
+		ownerCapability: new Uint8Array([1]),
+		joinCapability: new Uint8Array([2]),
+	});
+	return { production, receipt, stateRoot };
+}
+
+async function seedProductionCompletionEvidence(
+	production: VaultGitCliComposition,
+	receipt: VaultGitReceipt,
+	options: ProductionDoctorEvidenceOptions,
+): Promise<string | null> {
+	const completionStore = production.taskStore;
+	if (!completionStore) throw new Error("production Completion Task store missing");
+	const evidenceKind = options.completionEvidence ?? "valid";
+	if (evidenceKind === "missing") return null;
+	const transactionId = productionEvidenceTransactionId(evidenceKind, receipt);
+	const claimInput = productionCompletionClaimInput(
+		receipt,
+		transactionId,
+		options.completionReceiptRevision,
+	);
+	const completion = await completionStore.claimOrJoin(claimInput);
+	if (completion.status === "refused") throw new Error("completion claim refused");
+	if (evidenceKind === "corrupt") {
+		await writeFile(completionStore.claimPath(receipt.receiptId), "{broken\n");
+	}
+	if (options.validationFailure) {
+		await terminalizeProductionCompletion(
+			completionStore,
+			completion.state,
+			options.validationFailure,
+		);
+		if (options.activeCompletionAttempt) {
+			await resumeProductionCompletion(
+				completionStore,
+				receipt,
+				transactionId,
+				claimInput,
+			);
+		}
+	}
+	return completion.state.taskId;
+}
+
+function productionEvidenceTransactionId(
+	evidenceKind: NonNullable<ProductionDoctorEvidenceOptions["completionEvidence"]>,
+	receipt: VaultGitReceipt,
+): string {
+	if (evidenceKind === "mismatched") return `txn_${"8".repeat(32)}`;
+	return receipt.transactionId ?? "missing";
+}
+
+function productionCompletionClaimInput(
+	receipt: VaultGitReceipt,
+	transactionId: string,
+	receiptRevision = receipt.revision,
+) {
+	return {
+		claimReceiptId: receipt.receiptId,
+		receiptId: receipt.receiptId,
+		receiptRevision,
+		transactionId,
+		remote: receipt.remote,
+		generation: receipt.leaseGeneration ?? "missing",
+		capabilityDigest: "0".repeat(64),
+		normalizedInput: '{"command":"complete"}',
+		recordedAt: "2026-08-17T01:00:00.000Z",
+	} as const;
+}
+
+async function terminalizeProductionCompletion(
+	completionStore: NonNullable<VaultGitCliComposition["taskStore"]>,
+	state: VaultGitTaskState,
+	validationFailure: VaultGitValidationFailure,
+): Promise<void> {
+	const terminal = await completionStore.transition(state.taskId, state.revision, {
+		state: "repair_needed",
+		phase: "terminal",
+		updatedAt: "2026-08-17T01:00:01.000Z",
+		heartbeatAt: "2026-08-17T01:00:01.000Z",
+		checkpoint: "checking",
+		launchGeneration: `launch_${"4".repeat(32)}`,
+		launchExpiresAt: null,
+		workerPid: process.pid,
+		workerProcessIdentity: readVaultGitProcessIdentity(process.pid),
+		launchAttempt: 1,
+		terminalResult: {
+			outcome: "refused",
+			phase: "checking",
+			changedState: "local",
+			blocker: "vault_check_failed",
+			retrySafety: "same_input_unsafe",
+			validationFailure,
+		},
+	});
+	if (terminal.status !== "transitioned") {
+		throw new Error("completion terminalization lost");
+	}
+}
+
+async function resumeProductionCompletion(
+	completionStore: NonNullable<VaultGitCliComposition["taskStore"]>,
+	receipt: VaultGitReceipt,
+	transactionId: string,
+	claimInput: Parameters<NonNullable<VaultGitCliComposition["taskStore"]>["claimOrJoin"]>[0],
+): Promise<void> {
+	const repairedReceiptRevision = receipt.revision + 1;
+	const authorized = await completionStore.authorizeRepair({
+		receiptId: receipt.receiptId,
+		transactionId,
+		leaseGeneration: productionReceiptLeaseGeneration(receipt),
+		repairedReceiptRevision,
+		recordedAt: "2026-08-17T01:00:02.000Z",
+	});
+	if (!productionRepairAuthorizationAccepted(authorized.status)) {
+		throw new Error("completion repair authorization refused");
+	}
+	const resumed = await completionStore.claimOrJoin({
+		...claimInput,
+		receiptRevision: repairedReceiptRevision,
+		recordedAt: "2026-08-17T01:00:03.000Z",
+	});
+	if (resumed.launch !== "winner") {
+		throw new Error("completion repair re-entry did not become active");
+	}
+}
+
+function productionReceiptLeaseGeneration(receipt: VaultGitReceipt): string {
+	return receipt.leaseGeneration ?? "missing";
+}
+
+function productionRepairAuthorizationAccepted(status: string): boolean {
+	return status !== "absent" && status !== "refused";
+}
+
+async function seedProductionDoctorTask(
+	production: VaultGitCliComposition,
+	receipt: VaultGitReceipt,
+) {
+	const doctorStore = production.doctorTaskStore;
+	if (!doctorStore) throw new Error("production Doctor Task store missing");
+	const doctor = await doctorStore.claimOrJoin(
+		{
+			repositoryId: doctorStore.repositoryId,
+			activationEvidenceId: null,
+			receiptId: receipt.receiptId,
+			receiptRevision: receipt.revision,
+			transactionId: receipt.transactionId,
+			normalizedInput: '{"command":"doctor","transactionId":null}',
+		},
+		"2026-08-17T01:00:04.000Z",
+	);
+	if (doctor.launch === "refused") throw new Error("doctor claim refused");
+	const launchGeneration = `doctor_launch_${"5".repeat(32)}`;
+	const launching = await doctorStore.transition(
+		doctor.state.taskId,
+		doctor.state.revision,
+		{
+			state: "launching",
+			phase: "admitted",
+			updatedAt: "2026-08-17T01:00:05.000Z",
+			heartbeatAt: null,
+			checkpoint: "local_classified",
+			launchGeneration,
+			launchExpiresAt: "2026-08-17T01:00:15.000Z",
+			workerPid: process.pid,
+			workerProcessIdentity: readVaultGitProcessIdentity(process.pid),
+			launchAttempt: 1,
+			terminalResult: null,
+		},
+	);
+	if (launching.status !== "transitioned") {
+		throw new Error("doctor launch registration lost");
+	}
+	return { taskId: doctor.state.taskId, launchGeneration };
+}
+
+function defaultProductionDoctorDiagnosis(
+	receipt: VaultGitReceipt,
+): VaultGitDoctorResult {
+	return {
+		status: "diagnosed",
+		state: "repairable",
+		phase: "repairable",
+		finding: "deterministic_failure",
+		changedState: "none",
+		retrySafety: "same_input_unsafe",
+		nextAction: { id: "run_repair", summary: "Run repair." },
+		diagnosticsReference: "doctor:production-evidence",
+		transactionId: receipt.transactionId ?? undefined,
+		repairAction: "resume",
+	};
+}
+
+function productionDoctorReceipt(): VaultGitReceipt {
+	return {
+		...activeReceipt(),
+		revision: 1,
+		transition: "acquisition_intent",
+		expectedLeaseGeneration: null,
+		nextSafeAction: "run_owned_path_checks",
+		diagnosticsReference: `receipt:${activeReceipt().receiptId}`,
+	};
+}
+
+type ProductionPublicationScenario =
+	| "remotely_closed"
+	| "proven_not_published_origin_intact"
+	| "unavailable"
+	| "lease_remote_unavailable"
+	| "lease_host_contract_breach"
+	| "lease_ledger_malformed"
+	| "origin_host_mismatch"
+	| "local_main_moved"
+	| "local_main_moved_unpublished";
+
+function publicationDoctorReceipt(
+	scenario: ProductionPublicationScenario,
+): VaultGitReceipt {
+	const commitId = "c".repeat(40);
+	return {
+		...productionDoctorReceipt(),
+		phase: "push_pending",
+		transition: "push_outcome_unknown",
+		commitId,
+		expectedMainCommit: commitId,
+		ledgerReleaseId:
+			scenario === "proven_not_published_origin_intact" ||
+			scenario === "lease_remote_unavailable" ||
+			scenario === "lease_host_contract_breach" ||
+			scenario === "lease_ledger_malformed"
+				? null
+				: "d".repeat(40),
+		host: scenario === "origin_host_mismatch" ? "host-b" : "host-a",
+		pushOutcome: "unknown",
+		nextSafeAction: "retry_push",
+	};
+}
+
+async function createRealPublicationDiagnosis(
+	production: VaultGitCliComposition,
+	receipt: VaultGitReceipt,
+	scenario: ProductionPublicationScenario,
+): Promise<VaultGitDoctorResult> {
+	const expectedCommit = receipt.expectedMainCommit;
+	if (!expectedCommit || !receipt.transactionId || !receipt.leaseGeneration) {
+		throw new Error("publication receipt incomplete");
+	}
+	const repository: VaultGitRepositoryPort = {
+		resolveCanonicalIdentity: async () => ({
+			identity: PRODUCTION_DOCTOR_REPOSITORY_IDENTITY,
+			localMainHead:
+				scenario === "local_main_moved" ||
+				scenario === "local_main_moved_unpublished"
+					? "e".repeat(40)
+					: expectedCommit,
+		}),
+		inspectOwnedPaths: async () => {
+			throw new Error("owned-path inspection not expected");
+		},
+		inspectLocalCommit: async (commitId) => ({
+			status: "ok",
+			commitId,
+			parents: [receipt.localMainHead],
+			message: `fixture\n\nVault-Transaction: ${receipt.transactionId}\n`,
+		}),
+	};
+	const remote: VaultGitRemotePort = {
+		inspectMain: async () => {
+			throw new Error("main inspection not expected");
+		},
+		readLedger: async () => {
+			if (scenario === "lease_remote_unavailable") {
+				return { status: "failed", reason: "remote_unavailable" };
+			}
+			if (scenario === "lease_host_contract_breach") {
+				return { status: "refused", reason: "unsafe_remote_configuration" };
+			}
+			return {
+				status: "ok",
+				head: {
+					generation: receipt.leaseGeneration as string,
+					parents: [],
+					content:
+						scenario === "lease_ledger_malformed"
+							? "not-json\n"
+							: productionHeldLeaseContent(receipt),
+				},
+			};
+		},
+		appendLedgerCommit: async () => {
+			throw new Error("ledger mutation not expected");
+		},
+		reconcileAtomicClose: async () => {
+			if (
+				scenario === "remotely_closed" ||
+				scenario === "origin_host_mismatch" ||
+				scenario === "local_main_moved"
+			) {
+				return { status: "closed" };
+			}
+			if (scenario === "unavailable") {
+				return { status: "unknown", reason: "remote_unavailable" };
+			}
+			return { status: "unchanged" };
+		},
+	};
+	return createVaultGitDoctor({
+		store: production.store,
+		repository,
+		ledger: { git: remote, clock: production.runtime },
+		runtime: production.runtime,
+		repositoryIdentity: PRODUCTION_DOCTOR_REPOSITORY_IDENTITY,
+	}).diagnose({ transactionId: receipt.transactionId });
+}
+
+function productionHeldLeaseContent(receipt: VaultGitReceipt): string {
+	return `${JSON.stringify({
+		schema_version: 1,
+		operation: "acquire",
+		previous_generation: null,
+		transitioned_at: receipt.leaseAcquiredAt,
+		lease: {
+			transaction_id: receipt.transactionId,
+			actor: receipt.actor,
+			host: receipt.host,
+			event: receipt.event,
+			owned_paths: receipt.ownedPaths.map((entry) => entry.path),
+			local_main_head: receipt.localMainHead,
+			remote_main_head: receipt.remoteMainHead,
+			acquired_at: receipt.leaseAcquiredAt,
+			lease_duration_ms: receipt.leaseDurationMs,
+			state: "held",
+		},
+	})}\n`;
+}
+
+async function plantProductionCandidateResidue(
+	production: VaultGitCliComposition,
+	receipt: VaultGitReceipt,
+	posture: "active" | "old" | "young" | "removed" | "corrupt" | "unreadable",
+): Promise<void> {
+	const root = join(production.store.paths.repositoryRoot, "validation-candidates");
+	if (await plantUnreadableResidueRoot(root, posture)) return;
+	await mkdir(root, { recursive: true, mode: 0o700 });
+	const candidateId = `candidate-${randomUUID()}`;
+	if (posture === "corrupt") {
+		await writeFile(join(root, `${candidateId}.json`), "{broken\n", {
+			mode: 0o600,
+		});
+		return;
+	}
+	const candidatePath = join(root, candidateId);
+	if (posture !== "removed") {
+		await mkdir(candidatePath, { mode: 0o700 });
+	}
+	const updatedAt = productionResidueUpdatedAt(posture);
+	await writeFile(
+		join(root, `${candidateId}.json`),
+		`${JSON.stringify({
+			baselineHead: "a".repeat(40),
+			candidateId,
+			candidatePath,
+			createdAt: updatedAt,
+			failureClass: "candidate_cleanup",
+			schemaVersion: 1,
+			stage: "candidate_cleanup",
+			transactionId: receipt.transactionId,
+			updatedAt,
+		})}\n`,
+		{ mode: 0o600 },
+	);
+}
+
+async function plantUnreadableResidueRoot(
+	root: string,
+	posture: "active" | "old" | "young" | "removed" | "corrupt" | "unreadable",
+): Promise<boolean> {
+	if (posture !== "unreadable") return false;
+	await writeFile(root, "not a directory\n", { mode: 0o600 });
+	return true;
+}
+
+function productionResidueUpdatedAt(
+	posture: "active" | "old" | "young" | "removed" | "corrupt" | "unreadable",
+): string {
+	return posture === "young"
+		? "2026-08-17T01:30:00.000Z"
+		: "2026-08-17T00:00:00.000Z";
+}
 
 async function temp(prefix: string): Promise<string> {
 	return tempDirectories.create(prefix);
@@ -2450,6 +3318,7 @@ function taskState(overrides: Partial<VaultGitTaskState> = {}): VaultGitTaskStat
 		schemaVersion: 2,
 		taskId: "task_11111111111111111111111111111111",
 		receiptId: activeReceipt().receiptId,
+		receiptRevision: activeReceipt().revision,
 		transactionId: activeReceipt().transactionId ?? "missing",
 		leaseGeneration: activeReceipt().leaseGeneration ?? "missing",
 		revision: 1,
@@ -2472,3 +3341,182 @@ function taskState(overrides: Partial<VaultGitTaskState> = {}): VaultGitTaskStat
 		...overrides,
 	};
 }
+
+// U4 (ADR-0002): `repair resume` must prove Completion Task compatibility BEFORE
+// engine.repair mutates the Transaction Receipt. A legacy task (schema 1, or
+// schema 2 written before receiptRevision existed) normalizes receiptRevision to
+// null and can never accept revision-bound Repair Authorization, so repairing
+// first would advance the receipt to writing and strand the transaction. Real
+// owners: production receipt store and Completion Task store on a temp state
+// root; the engine is wrapped only to observe whether repair was reached.
+describe("vault-git U4 legacy Completion Task repair preflight", () => {
+	async function legacyRepairFixture() {
+		const repositoryPath = await temp("vault-git-legacy-repair-repository-");
+		const stateRoot = await temp("vault-git-legacy-repair-state-");
+		const receipt = productionDoctorReceipt();
+		const production = await createVaultGitCliComposition({
+			repositoryPath,
+			checkRepositoryPath: repositoryPath,
+			stateRoot,
+			repositoryIdentity: PRODUCTION_DOCTOR_REPOSITORY_IDENTITY,
+			actor: "agent-a",
+			host: "host-a",
+			runtime: {
+				now: () => new Date("2026-08-17T02:00:00.000Z"),
+				actor: () => "agent-a",
+				host: () => "host-a",
+				newReceiptId: () => `receipt_${"9".repeat(32)}`,
+				interrupt() {},
+			},
+			activationAuthority: admittedActivationAuthorityForTest,
+		});
+		await production.store.initialize(receipt, {
+			ownerCapability: new Uint8Array([1]),
+			joinCapability: new Uint8Array([2]),
+		});
+		const taskStore = production.taskStore;
+		if (!taskStore) throw new Error("production Completion Task store missing");
+		const transactionId = receipt.transactionId as string;
+		const claimed = await taskStore.claimOrJoin({
+			claimReceiptId: receipt.receiptId,
+			receiptId: receipt.receiptId,
+			receiptRevision: receipt.revision,
+			transactionId,
+			remote: receipt.remote,
+			generation: receipt.leaseGeneration as string,
+			capabilityDigest: "0".repeat(64),
+			normalizedInput: '{"command":"complete"}',
+			recordedAt: "2026-08-17T01:00:00.000Z",
+		});
+		if (claimed.status === "refused") throw new Error("claim refused");
+
+		// Rewrite revision one as genuine legacy schema-one bytes. Seeding through a
+		// modern field would normalize receiptRevision and prove nothing.
+		const historyFile = join(
+			taskStore.paths.tasks,
+			claimed.state.taskId,
+			"history",
+			`${"0".repeat(11)}1.json`,
+		);
+		const {
+			receiptRevision: _revision,
+			attemptNumber: _attempt,
+			previousTerminalResult: _previous,
+			repairReentryBlocked: _blocked,
+			repairAuthorization: _authorization,
+			...legacyFields
+		} = JSON.parse(await readFile(historyFile, "utf8"));
+		await writeFile(
+			historyFile,
+			`${JSON.stringify({ ...legacyFields, schemaVersion: 1 }, null, 2)}\n`,
+			{ mode: 0o600 },
+		);
+
+		const reloaded = await taskStore.load(receipt.receiptId);
+		if (reloaded.status !== "loaded") throw new Error("legacy task unreadable");
+		expect(reloaded.state.receiptRevision).toBeNull();
+
+		let repairCalls = 0;
+		const composition: VaultGitCliComposition = {
+			...production,
+			engine: {
+				...production.engine,
+				async repair(input) {
+					repairCalls += 1;
+					return production.engine.repair(input);
+				},
+			},
+		};
+		return {
+			composition,
+			transactionId,
+			taskStore,
+			receiptId: receipt.receiptId,
+			historyDirectory: production.store.paths.history,
+			repairCalls: () => repairCalls,
+		};
+	}
+
+	async function receiptHistoryBytes(directory: string): Promise<string> {
+		const names = (await readdir(directory)).filter((name) =>
+			name.endsWith(".json"),
+		).sort();
+		const contents = await Promise.all(
+			names.map((name) => readFile(join(directory, name), "utf8")),
+		);
+		return JSON.stringify({ names, contents });
+	}
+
+	test("refuses a legacy Completion Task before engine.repair mutates the receipt", async () => {
+		const fixture = await legacyRepairFixture();
+		const before = await receiptHistoryBytes(fixture.historyDirectory);
+
+		const run = await runVaultGitForTest(
+			[
+				"repair",
+				"resume",
+				"--transaction-id",
+				fixture.transactionId,
+				"--capability-fd",
+				"7",
+				"--json",
+			],
+			{
+				composition: fixture.composition,
+				launchPrivate: false,
+				readCapability: async () => new Uint8Array([1]),
+			},
+		);
+
+		expect(run.exitCode).not.toBe(0);
+		const envelope = JSON.parse(run.stdout);
+		expect(envelope.data.blockers).toEqual(["receipt_conflict"]);
+		expect(envelope.data.changed_state).toBe("none");
+		expect(envelope.data.next_action).toMatchObject({
+			kind: "needs_human",
+			action_id: "request_operator_review",
+			owner: "vault_git_operator",
+		});
+		expect(envelope.data.retry_safety).toBe("operator_required");
+		expect(fixture.repairCalls()).toBe(0);
+
+		// Independent oracle: receipt history bytes are unchanged, so the receipt
+		// never advanced to writing.
+		expect(await receiptHistoryBytes(fixture.historyDirectory)).toBe(before);
+		const reread = await fixture.taskStore.load(fixture.receiptId);
+		if (reread.status !== "loaded") throw new Error("task unreadable");
+		expect(reread.state.repairAuthorization).toBeNull();
+	});
+
+	test("repeating the legacy refusal stays safe and never moves the receipt to writing", async () => {
+		const fixture = await legacyRepairFixture();
+		const before = await receiptHistoryBytes(fixture.historyDirectory);
+		const argv = [
+			"repair",
+			"resume",
+			"--transaction-id",
+			fixture.transactionId,
+			"--capability-fd",
+			"7",
+			"--json",
+		];
+		const options = {
+			composition: fixture.composition,
+			launchPrivate: false,
+			readCapability: async () => new Uint8Array([1]),
+		};
+
+		const first = await runVaultGitForTest(argv, options);
+		const second = await runVaultGitForTest(argv, options);
+
+		expect(second.exitCode).toBe(first.exitCode);
+		expect(JSON.parse(second.stdout).data.blockers).toEqual([
+			"receipt_conflict",
+		]);
+		expect(JSON.parse(second.stdout).data.phase).toBe(
+			JSON.parse(first.stdout).data.phase,
+		);
+		expect(fixture.repairCalls()).toBe(0);
+		expect(await receiptHistoryBytes(fixture.historyDirectory)).toBe(before);
+	});
+});

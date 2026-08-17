@@ -220,27 +220,21 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			transactionId,
 			"--json",
 		]);
-		expect(parseCliProcessJson(doctor)).toMatchObject({
+		const diagnosis = parseCliProcessJson(doctor);
+		expect(diagnosis).toMatchObject({
 			status: "ok",
 			data: {
 				phase: "checking",
-				finding: "checks_interrupted",
-				repair_action: "resume",
+				next_action: {
+					kind: "needs_human",
+					action_id: "escalate_validation_evidence",
+					owner: "vault_git_operator",
+					condition: "validation_evidence_required",
+				},
 			},
-			continuation: { next_action_id: "run_repair" },
+			continuation: { next_action_id: "escalate_validation_evidence" },
 		});
-		const resumed = await fixture.run([
-			"repair",
-			"resume",
-			"--transaction-id",
-			transactionId,
-			"--json",
-		]);
-		expect(parseCliProcessJson(resumed)).toMatchObject({
-			status: "ok",
-			data: { outcome: "repaired", phase: "writing" },
-			continuation: { next_action_id: "complete_transaction" },
-		});
+		expect(JSON.stringify(diagnosis)).not.toContain('"repair_action"');
 		assertLedgerState(fixture, "held");
 		assertWorktreeUnchanged(before, fixture.snapshot());
 	});
@@ -326,15 +320,29 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 			transactionId,
 			"--json",
 		]);
-		expect(parseCliProcessJson(doctor)).toMatchObject({
+		const diagnosis = parseCliProcessJson(doctor);
+		expect(diagnosis).toMatchObject({
 			status: "ok",
 			data: {
 				phase: "push_pending",
 				finding: "publication_pending",
-				repair_action: "retry-push",
+				retry_safety: "same_input_safe",
+				next_action: {
+					kind: "invoke",
+					action_id: "retry_proven_unpublished",
+					executable: "vault-git",
+					argv: [
+						"repair",
+						"retry-push",
+						"--transaction-id",
+						transactionId,
+						"--json",
+					],
+				},
 			},
-			continuation: { next_action_id: "run_repair" },
+			continuation: { next_action_id: "retry_proven_unpublished" },
 		});
+		expect(JSON.stringify(diagnosis)).not.toContain('"repair_action"');
 		await writeFile(`${fixture.shimMarker}.release`, "retry\n");
 		const retried = await fixture.run([
 			"repair",

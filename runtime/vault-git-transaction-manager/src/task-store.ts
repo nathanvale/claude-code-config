@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { VaultGitTaskState } from "./model.ts";
@@ -342,6 +341,7 @@ export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): Vaul
 			const state = createVaultGitTaskState({
 				taskId: `task_${randomUUID().replaceAll("-", "")}`,
 				receiptId: input.receiptId,
+				receiptRevision,
 				transactionId: input.transactionId,
 				leaseGeneration: input.generation,
 				recordedAt: input.recordedAt,
@@ -387,6 +387,13 @@ export function createVaultGitTaskStore(options: VaultGitTaskStoreOptions): Vaul
 				if (created) return { status: "existing", launch: "winner", state: next };
 				latest = await loadByTaskId(existing.claim.taskId);
 				if (latest.status !== "loaded") throw new Error("task CAS winner unavailable");
+			}
+			if (latest.state.receiptRevision !== receiptRevision) {
+				return {
+					status: "refused",
+					launch: "refused",
+					reason: "task_input_mismatch",
+				};
 			}
 			return { status: "existing", launch: "joined", state: latest.state };
 		},

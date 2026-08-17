@@ -13,6 +13,7 @@ import { validateVaultCommitSubject } from "./commit-policy.ts";
 import {
 	EVIDENCE_ID,
 	VAULT_GIT_EVENT_TYPES,
+	VAULT_GIT_NEXT_ACTION_IDS,
 	createVaultGitLifecycleResult,
 	isVaultGitCliSafeValue,
 	isVaultGitNextActionId,
@@ -114,7 +115,7 @@ export interface VaultGitInputFieldDescriptor {
  * into the public continuation; the remaining bind metadata stays internal.
  *
  * A `public` field carries the argv flag and value shape the pure public binder
- * emits. A `private_stdin` field carries no argv flag at all — its value is
+ * emits. A `private_stdin` field carries no argv flag at all; its value is
  * streamed through the private Setup binder's child stdin and never reaches argv.
  */
 type InputFieldSpec =
@@ -222,6 +223,15 @@ export interface VaultGitContinuationContext {
 	 */
 	readonly repair_action?: VaultGitRepairAction;
 	/**
+	 * The exact operator condition an escalate_validation_evidence handoff names,
+	 * fixed per U4 validation route matrix row (ADR-0002). Absent context keeps
+	 * the generic validation_evidence_required condition.
+	 */
+	readonly escalation_condition?:
+		| "candidate_integrity_reconciled"
+		| "deterministic_content_repair_available"
+		| "validation_evidence_required";
+	/**
 	 * The durable Vault Event of the transaction, required to validate a supplied
 	 * commit subject through the commit-policy owner when binding a completion.
 	 */
@@ -239,7 +249,7 @@ export interface VaultGitNextSafeActionRequest {
 
 /**
  * Explicit typed projection status. The enclosing lifecycle, activation, and
- * discovery results read this — never the continuation summary text — to decide
+ * discovery results read this, never the continuation summary text, to decide
  * whether to carry the `continuation_unavailable` blocker and `operator_required`
  * posture. `available` carries a concrete continuation; `unavailable` carries a
  * terminal `none` because the action id was unknown, a required selector was
@@ -438,7 +448,7 @@ function validateCommitSummaryValue(
 
 /**
  * A `begin` needs_input contract. `begin` requires an event plus one-or-more
- * owned leaf paths — neither is a permitted continuation selector — so the caller
+ * owned leaf paths. Neither is a permitted continuation selector, so the caller
  * supplies both as public input the binder completes into a begin invocation.
  */
 function beginContract(summary: string): CatalogEntry {
@@ -473,7 +483,7 @@ function beginContract(summary: string): CatalogEntry {
 /**
  * A `join` needs_input contract. Correcting the joined path set preserves
  * join-role authority: the transaction id is a required selector the result
- * carries, and only the corrected owned paths are caller input. No event — join
+ * carries, and only the corrected owned paths are caller input. No event, join
  * does not take one.
  */
 function joinContract(summary: string): CatalogEntry {
@@ -742,7 +752,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	// Home (the always-present activation surface), not plain status.
 	inspect_configured_vault: {
 		kind: "invoke",
-		summary: "Inspect the configured vault at Activation Home.",
+		summary: "Inspect the configured vault and its live activation dependencies.",
 		executable: "vault-git",
 		argvPrefix: ["activation"],
 		selectors: [],
@@ -750,7 +760,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	},
 	inspect_commands: {
 		kind: "invoke",
-		summary: "Read command discovery to choose one safe command.",
+		summary: "Use discovery metadata to choose one safe command.",
 		executable: "vault-git",
 		argvPrefix: ["commands"],
 		selectors: [],
@@ -758,7 +768,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	},
 	run_doctor: {
 		kind: "invoke",
-		summary: "Run authority-free Doctor, then follow its next action.",
+		summary: "Run authority-free Doctor, then follow its reported next action.",
 		executable: "vault-git",
 		argvPrefix: ["doctor"],
 		selectors: [{ ...TXN, optional: true }],
@@ -787,7 +797,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	//
 	// Capability material is private and never a public argv. The owner is grounded
 	// in the engine's capability emission sites: the owner/join capability holder,
-	// or the internal launcher that reloads it — not a generic operator default.
+	// or the internal launcher that reloads it, not a generic operator default.
 	use_owner_capability: {
 		kind: "needs_human",
 		summary: "Re-run the owning command with the owner capability.",
@@ -812,7 +822,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	// Activation-surface continuations.
 	prepare_fresh: {
 		kind: "invoke",
-		summary: "Prepare fresh activation evidence.",
+		summary: "Prepare fresh V2 evidence, then return to human review.",
 		executable: "vault-git",
 		argvPrefix: ["activation", "prepare"],
 		selectors: [],
@@ -820,7 +830,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	},
 	review_prepared: {
 		kind: "needs_human",
-		summary: "Open human review for the prepared evidence.",
+		summary: "Open human review for the current prepared evidence.",
 		handoff_kind: "command",
 		executable: "vault-git",
 		argvPrefix: ["activation", "review"],
@@ -838,7 +848,8 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 	},
 	configure_activation_identity: {
 		kind: "needs_human",
-		summary: "Configure the host activation identity, then rerun Doctor.",
+		summary:
+			"Configure the required host activation identity paths, then rerun Doctor.",
 		handoff_kind: "external_prerequisite",
 		owner: "vault_git_operator",
 		condition: "activation_identity_configured",
@@ -945,6 +956,43 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 		summary: "No further action; this workflow is finished.",
 	},
 };
+
+const WRITE_ACTION_IDS: ReadonlySet<VaultGitNextActionId> = new Set([
+	"reconcile_quarantine",
+	"complete_transaction",
+	"resume_writing",
+	"run_repair",
+	"retry_push",
+	"retry_remote",
+	"begin_transaction",
+	"run_janitor",
+	"apply_vault_content_repair",
+	"close_verified_publication",
+	"retry_proven_unpublished",
+]);
+
+function discoveryCatalogEntry(id: VaultGitNextActionId): CatalogEntry {
+	const direct = CATALOG[id];
+	if (direct) return direct;
+	return {
+		kind: "none",
+		summary:
+			id === "change_input"
+				? "Correct the command arguments and retry parsing."
+				: `Continue with the ${id.replaceAll("_", " ")} action.`,
+	};
+}
+
+/** Catalog-derived action affordances consumed by command discovery. @internal */
+export const VAULT_GIT_ACTION_AFFORDANCES = VAULT_GIT_NEXT_ACTION_IDS.map(
+	(id) => ({
+		id,
+		summary: discoveryCatalogEntry(id).summary,
+		sideEffects: WRITE_ACTION_IDS.has(id)
+			? (["read", "check", "network", "write"] as const)
+			: (["read", "check"] as const),
+	}),
+);
 
 /** Every action id owned by the authoritative catalog. */
 export const VAULT_GIT_NEXT_SAFE_ACTION_IDS = Object.keys(
@@ -1063,7 +1111,7 @@ function buildContinuation(
  * union. An unknown action id, a missing required selector, or a selector value
  * that fails its public contract classifies to `availability: "unavailable"`
  * with a terminal `none` continuation; the enclosing result reads `availability`
- * — never the summary text — to set `continuation_unavailable` and
+ * (never the summary text) to set `continuation_unavailable` and
  * `operator_required`. A rejected selector value is never echoed anywhere.
  *
  * @param request - The action id plus any public selectors it binds.
@@ -1075,70 +1123,114 @@ function buildContinuation(
  * emission context. When a context-dependent id is given without the context it
  * needs, returns undefined so the projector fails closed instead of guessing.
  */
+type ResolvedCatalogEntry = {
+	readonly actionId: string;
+	readonly entry: CatalogEntry;
+};
+
+function bindCatalogEntry(actionId: string): ResolvedCatalogEntry | undefined {
+	const entry = Object.hasOwn(CATALOG, actionId) ? CATALOG[actionId] : undefined;
+	return entry ? { actionId, entry } : undefined;
+}
+
+const CONTEXTUAL_ACTION_IDS = {
+	inspect_status: {
+		completion_task: "inspect_completion_task",
+		doctor_task: "inspect_doctor_task",
+		transaction_receipt: "inspect_transaction",
+	},
+	retry_remote: {
+		begin: "begin_transaction",
+		inspect: "inspect_remote_lease",
+	},
+	change_input: {
+		completion_task: "correct_completion_task_id",
+		doctor_task: "correct_doctor_task_id",
+	},
+} as const;
+
+function bindContextualEntry(
+	actionId: keyof typeof CONTEXTUAL_ACTION_IDS,
+	kind: string | undefined,
+): ResolvedCatalogEntry | undefined {
+	if (kind === undefined) return undefined;
+	const mapping = CONTEXTUAL_ACTION_IDS[actionId] as Readonly<
+		Record<string, string>
+	>;
+	const resolved = mapping[kind];
+	return resolved ? bindCatalogEntry(resolved) : undefined;
+}
+
+type CatalogEntryResolver = (
+	request: VaultGitNextSafeActionRequest,
+) => ResolvedCatalogEntry | undefined;
+
+function resolveValidationEscalation(
+	request: VaultGitNextSafeActionRequest,
+): ResolvedCatalogEntry {
+	return {
+		actionId: "escalate_validation_evidence",
+		entry: {
+			kind: "needs_human",
+			summary: "Escalate the validation evidence to the operator.",
+			handoff_kind: "external_prerequisite",
+			owner: "vault_git_operator",
+			condition:
+				request.context?.escalation_condition ??
+				"validation_evidence_required",
+		},
+	};
+}
+
+function resolveRepairEntry(
+	request: VaultGitNextSafeActionRequest,
+): ResolvedCatalogEntry | undefined {
+	const repairAction = request.context?.repair_action;
+	return repairAction
+		? { actionId: "run_repair", entry: repairEntry(repairAction) }
+		: undefined;
+}
+
+function resolveOwnedPathCorrection(
+	request: VaultGitNextSafeActionRequest,
+): ResolvedCatalogEntry | undefined {
+	const emission = request.context?.emission_command;
+	if (emission === "begin") {
+		return {
+			actionId: "change_owned_paths",
+			entry: beginContract("Correct the owned paths, then begin."),
+		};
+	}
+	if (emission === "join") {
+		return {
+			actionId: "change_owned_paths",
+			entry: joinContract("Correct the joined owned paths."),
+		};
+	}
+	return undefined;
+}
+
+const ENTRY_RESOLVERS: Partial<
+	Record<VaultGitNextActionId, CatalogEntryResolver>
+> = {
+	inspect_status: (request) =>
+		bindContextualEntry("inspect_status", request.context?.result_kind),
+	retry_remote: (request) =>
+		bindContextualEntry("retry_remote", request.context?.result_kind),
+	change_input: (request) =>
+		bindContextualEntry("change_input", request.context?.result_kind),
+	escalate_validation_evidence: resolveValidationEscalation,
+	run_repair: resolveRepairEntry,
+	change_owned_paths: resolveOwnedPathCorrection,
+};
+
 function resolveEntry(
 	request: VaultGitNextSafeActionRequest,
-): { readonly actionId: string; readonly entry: CatalogEntry } | undefined {
-	const kind = request.context?.result_kind;
-	const bind = (
-		actionId: string,
-	): { actionId: string; entry: CatalogEntry } | undefined => {
-		const entry = Object.hasOwn(CATALOG, actionId)
-			? CATALOG[actionId]
-			: undefined;
-		return entry ? { actionId, entry } : undefined;
-	};
-	switch (request.action_id) {
-		// Legacy inspect_status reprojects to a semantic id by which durable
-		// evidence produced it.
-		case "inspect_status":
-			if (kind === "completion_task") return bind("inspect_completion_task");
-			if (kind === "doctor_task") return bind("inspect_doctor_task");
-			if (kind === "transaction_receipt") return bind("inspect_transaction");
-			return undefined;
-		// retry_remote is a begin retry before remote contact, or an inspect-time
-		// remote retry through the remote-lease inspection surface. It never loops
-		// back to Doctor.
-		case "retry_remote":
-			if (kind === "begin") return bind("begin_transaction");
-			if (kind === "inspect") return bind("inspect_remote_lease");
-			return undefined;
-		// run_repair carries the exact doctor-classified repair action; project it
-		// to that repair's exact command, never a Doctor self-loop.
-		case "run_repair": {
-			const repairAction = request.context?.repair_action;
-			if (repairAction === undefined) return undefined;
-			return { actionId: "run_repair", entry: repairEntry(repairAction) };
-		}
-		// change_input names a concrete task-id correction only when the failing
-		// command context identifies which task id was wrong. A generic usage
-		// failure names no field and fails closed.
-		case "change_input":
-			if (kind === "completion_task") return bind("correct_completion_task_id");
-			if (kind === "doctor_task") return bind("correct_doctor_task_id");
-			return undefined;
-		// change_owned_paths is emitted by both begin and join admission. The begin
-		// correction needs event + paths; the join correction preserves join-role
-		// authority (transaction + paths, no event). Absent the discriminator, fail
-		// closed rather than guess.
-		case "change_owned_paths": {
-			const emission = request.context?.emission_command;
-			if (emission === "begin") {
-				return {
-					actionId: "change_owned_paths",
-					entry: beginContract("Correct the owned paths, then begin."),
-				};
-			}
-			if (emission === "join") {
-				return {
-					actionId: "change_owned_paths",
-					entry: joinContract("Correct the joined owned paths."),
-				};
-			}
-			return undefined;
-		}
-		default:
-			return bind(request.action_id);
-	}
+): ResolvedCatalogEntry | undefined {
+	const resolve = isVaultGitNextActionId(request.action_id)
+		? ENTRY_RESOLVERS[request.action_id]
+		: undefined;
+	return resolve ? resolve(request) : bindCatalogEntry(request.action_id);
 }
 
 /**
@@ -1152,7 +1244,7 @@ function repairEntry(action: VaultGitRepairAction): CatalogEntry {
 	// prior-writer attestation): it cannot resume a receipt, so it fails closed without
 	// the selector. Every other repair may resume a pre-acknowledgement receipt with no
 	// transaction id (validateInvocation: only takeover requires it), so the
-	// transaction id is OPTIONAL — emitted as `--transaction-id <id>` when present, and
+	// transaction id is OPTIONAL; emitted as `--transaction-id <id>` when present, and
 	// omitted (a runnable `repair <action> --json`) when absent.
 	if (action === "stale-lease-takeover") {
 		return {
@@ -1342,7 +1434,7 @@ const SEMANTIC_TO_COMPAT_ID: Readonly<Record<string, VaultGitNextActionId>> = {
  * selectors, and stamps the canonical compatibility id via the closed
  * semantic->compat mapping. A semantic id absent from the catalog, or whose
  * projection is unavailable, fails closed to a terminal none carrying the derived
- * compat id — no cast through the legacy action() path, which would throw or lie for
+ * compat id, with no cast through the legacy action() path, which would throw or lie for
  * a deliberately non-legacy id like inspect_doctor_task.
  *
  * @param semanticId - The durable semantic action id (a Next Safe Action catalog id).
@@ -1361,8 +1453,8 @@ export function rehydrateVaultGitPersistedNextAction(
 	const mappedCompatId = Object.hasOwn(SEMANTIC_TO_COMPAT_ID, semanticId)
 		? SEMANTIC_TO_COMPAT_ID[semanticId]
 		: undefined;
-	// Fail-closed: a persisted id with no compatibility contract — neither in the
-	// semantic->compat mapping nor a public compatibility id — has no public identity,
+	// Fail-closed: a persisted id with no compatibility contract (neither in the
+	// semantic->compat mapping nor a public compatibility id) has no public identity,
 	// so it must NOT become a runnable continuation. Return a full terminal none (a
 	// corrupted or future durable id can never be executed without a contract).
 	if (mappedCompatId === undefined && !isVaultGitNextActionId(semanticId)) {
@@ -1668,8 +1760,8 @@ function assertNeedsInputMatchesCatalog(
  * Bind ordered public input entries into the complete sanitized invoke.
  *
  * The pure public-input lane: it validates entries against the continuation's
- * public descriptors — refusing missing, extra, duplicate, or unknown field ids,
- * a private contract, a wrong value type, or an invalid value — and emits one
+ * public descriptors, refusing missing, extra, duplicate, or unknown field ids,
+ * a private contract, a wrong value type, or an invalid value, and emits one
  * argument per list element (never a joined value). It touches no process and no
  * private lane; a private-input contract is refused, not bound here.
  *
@@ -1858,7 +1950,7 @@ function privateValueNeedles(values: readonly string[]): readonly string[] {
  * `--input-stdin <contract-id>`, stream a structured (canonical-JSON, field-keyed)
  * stdin envelope through the injected child spawn, and return only the sanitized
  * Setup result. Private values never enter argv, the returned result, a thrown
- * error, or any serialization — a hostile spawn result or error is redacted.
+ * error, or any serialization; a hostile spawn result or error is redacted.
  *
  * @param ref - Public reference to the private continuation (no values).
  * @param values - Ordered private input entries supplied out of band.

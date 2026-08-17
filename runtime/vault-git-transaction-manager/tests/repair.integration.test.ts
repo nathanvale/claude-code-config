@@ -274,7 +274,9 @@ describe("deterministic push_pending repair", () => {
 			transactionId: fixture.transactionId,
 		});
 		expect(diagnosis).toMatchObject({
-			finding: "publication_pending",
+			finding: "remote_contract_breach",
+			blocker: "host_contract_breach",
+			publicationEvidence: "contract_breach",
 			retrySafety: "operator_required",
 			nextAction: { id: "request_operator_review" },
 		});

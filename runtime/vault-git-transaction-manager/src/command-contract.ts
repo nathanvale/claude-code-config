@@ -14,7 +14,6 @@ import {
 import {
 	VAULT_GIT_COMMANDS_CONTRACT_ID,
 	VAULT_GIT_EVENT_TYPES,
-	VAULT_GIT_NEXT_ACTION_IDS,
 	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_RESULT_CONTRACT_ID,
 	VAULT_GIT_SCHEMA_VERSION,
@@ -23,6 +22,10 @@ import {
 	type VaultGitNextActionId,
 	type VaultGitRepairAction,
 } from "./model.ts";
+import {
+	VAULT_GIT_ACTION_AFFORDANCES,
+	type VaultGitNextActionRef,
+} from "./next-safe-action.ts";
 
 /** Public vault-git command ids in stable discovery order. */
 export const VAULT_GIT_COMMANDS = [
@@ -111,39 +114,35 @@ const activationResultContract = {
 } as const;
 
 /** Runtime action affordances shared by discovery and envelopes. */
-export const vaultGitActions = VAULT_GIT_NEXT_ACTION_IDS.map((id) => ({
-	id,
-	summary: actionSummary(id),
-	sideEffects: actionSideEffects(id),
-})) as readonly (CommandFacadeActionAffordance & { id: VaultGitNextActionId })[];
+export const vaultGitActions = VAULT_GIT_ACTION_AFFORDANCES satisfies readonly (
+	CommandFacadeActionAffordance & { id: VaultGitNextActionId }
+)[];
 
-function actionSummary(id: VaultGitNextActionId): string {
-	if (id === "wait_for_runtime") return "Wait for the remaining runtime owner before writing.";
-	if (id === "review_prepared") return "Open human review for the current prepared evidence.";
-	if (id === "return_to_human_review") return "Return to the human review surface for the final choice.";
-	if (id === "prepare_fresh") return "Prepare fresh V2 evidence, then return to human review.";
-	if (id === "configure_activation_identity") return "Configure the required host activation identity paths, then rerun Doctor.";
-	if (id === "inspect_configured_vault") return "Inspect the configured vault and its live activation dependencies.";
-	if (id === "run_doctor") return "Run authority-free Doctor, then follow its reported next action.";
-	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
-	if (id === "change_input") return "Correct the command arguments and retry parsing.";
-	return `Continue with the ${id.replaceAll("_", " ")} action.`;
-}
-
-function actionSideEffects(
+/**
+ * Build one legacy action reference from the declared affordance catalog.
+ *
+ * @param id - Compatibility action id
+ * @param summary - Optional call-site summary override
+ * @param context - Optional contextual reprojection discriminators
+ * @returns One catalog-backed compatibility action reference
+ * @internal
+ */
+export function createVaultGitActionRef(
 	id: VaultGitNextActionId,
-): readonly ("read" | "check" | "network" | "write")[] {
-	return new Set<VaultGitNextActionId>([
-		"complete_transaction",
-		"resume_writing",
-		"run_repair",
-		"retry_push",
-		"retry_remote",
-		"begin_transaction",
-		"run_janitor",
-	]).has(id)
-		? ["read", "check", "network", "write"]
-		: ["read", "check"];
+	summary?: string,
+	context?: VaultGitNextActionRef["context"],
+): VaultGitNextActionRef {
+	const declared = vaultGitActions.find((candidate) => candidate.id === id);
+	if (!declared) {
+		throw new Error(
+			`vault-git next action ${id} is missing from the declared affordances`,
+		);
+	}
+	return {
+		id,
+		summary: summary ?? declared.summary,
+		...(context ? { context } : {}),
+	};
 }
 
 const actionAffordances = { continuations: vaultGitActions } as const;

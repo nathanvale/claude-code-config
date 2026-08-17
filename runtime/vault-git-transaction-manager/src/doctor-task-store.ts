@@ -14,6 +14,7 @@ import {
 	digestVaultGitDoctorTaskBinding,
 	digestVaultGitDoctorTaskClaimSlot,
 	parseVaultGitDoctorTaskState,
+	VaultGitDoctorTaskInvalidRouteError,
 	type VaultGitDoctorTaskAdvanceInput,
 	type VaultGitDoctorTaskBindingInput,
 	type VaultGitDoctorTaskState,
@@ -32,6 +33,7 @@ export interface VaultGitDoctorTaskStore {
 	loadByTaskId(taskId: string): Promise<
 		| { readonly status: "absent" }
 		| { readonly status: "corrupt" }
+		| { readonly status: "invalid_route" }
 		| { readonly status: "loaded"; readonly state: VaultGitDoctorTaskState }
 	>;
 	transition(
@@ -101,6 +103,9 @@ export function createVaultGitDoctorTaskStore(input: {
 				? { status: "loaded" as const, state }
 				: { status: "corrupt" as const };
 		} catch (error) {
+			if (error instanceof VaultGitDoctorTaskInvalidRouteError) {
+				return { status: "invalid_route" as const };
+			}
 			return isMissing(error)
 				? { status: "absent" as const }
 				: { status: "corrupt" as const };
