@@ -2,7 +2,7 @@
 name: one-password
 description: "1Password/op: scoped service-account reads first, targeted secret read/store/inject, interactive desktop sign-in fallback."
 role: tool-workflow
-metadata: {"clawdbot":{"emoji":"🔐","requires":{"bins":["op"]},"install":[{"id":"brew","kind":"brew","formula":"1password-cli","bins":["op"],"label":"Install 1Password CLI (brew)"}]}}
+metadata: {"clawdbot":{"emoji":"🔐","requires":{"bins":["op"]}}}
 ---
 
 # 1Password CLI
@@ -19,8 +19,9 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 ## Token custody
 
 - Let `$HOME/code/dotfiles/bin/with-one-password-token` own token custody and process-scoped injection. Never read, source, create, or export its token source from this workflow; never place the token in shell rc, tmux/PTY environment, or ambient env.
-- Browser-login secrets and the Browser Automation token are out of scope: `browser-use` owns that custody and delivery end-to-end (`skills/browser-use/src/browser-use-op.ts`, handle-only env spec; typed repair continuations discoverable through the `browser-use` `auth` command family). Never fetch browser-login secrets with this skill.
-- Browser sessions receive no vault or item administration. Keep explicit vault listing and item create/update requests in this workflow; never grant those operations through a Browser Use credential transaction.
+- Browser filling is out of scope: this wrapper delivers targeted `op` reads and single-value process injection, never a browser fill. Never fetch browser-login secrets or fill a browser through this skill.
+- Browser Use stays credential-neutral and stops at a login wall (M0); no confidential browser-fill bridge exists yet. A confidential browser-fill bridge is separate future work, not owned here.
+- Keep explicit vault listing and item create/update requests in this workflow.
 
 ## Workflow
 
