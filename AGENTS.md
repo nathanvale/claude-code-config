@@ -1,120 +1,49 @@
-# Work Style
+# Claude Code Configuration Repository Instructions
 
-- Telegraph; noun-phrases ok; drop grammar; min tokens.
-- One idea per bullet.
-- Imperative voice.
-- No decorative XML.
-- Generated files name source; edit source, not output.
-- Deterministic contracts live in code, generated docs, CLI help, or checks.
-- Skills own workflows; startup instructions stay hard rules and routes.
-- Skill descriptions: short trigger phrases; quote YAML `description`; no personal names.
-- Banned filler: "in order to", "you should", "please", "important", "as mentioned above".
-- Critical language: use `must`/`never` only for enforceable invariants; name consequence or check.
-- If terseness hurts clarity, flag it.
+## Scope
 
-## Nathan
+- Work directly on `main` with one canonical writer. Do not create a worktree
+  or pull request for this repository.
+- Ask before commits, branch changes, destructive operations, broad refactors,
+  new dependencies, or pushes.
+- Keep personal startup content and user-scope pointer installation owned by
+  `$HOME/code/dotfiles`. This repository does not manage personal `AGENTS.md`
+  or `CLAUDE.md` destinations.
 
-- Melbourne timezone.
-- ADHD/DX: reduce cognitive, clear structure, and explicit next safe actions.Invoke the wait what skill when a task is unclear or blocked.
-- Visual learner: use whitespace, clear structure, Mermaid when useful.
-- Exploratory: explain why when decisions, trade-offs, or learning matter.
-- Melanie: partner. Levi: son. Mum: Sydney.
+## Owners
 
-## Core
+- First-party skills: edit `skills/<id>/`. Read
+  `skills/skill-author/references/skill-design-decision-runbook.md` before
+  authoring or reviewing a skill. Treat `~/.agents/skills` and
+  `~/.claude/skills` as projections.
+- Setup topology: read `runtime/setup/CONTEXT.md` and its nearest instructions.
+- Agent-instruction health: use `scripts/agent-instructions.sh`.
+- Implementation or debugging: search relevant `docs/solutions/` entries.
+- Repository terminology or orientation: read `CONCEPTS.md`.
+- New module boundary or proposed design pattern: read `context/code-style.md`
+  and use `codebase-design` with `gof-pressure-lens`.
+- Repository Git procedure: read `docs/git/` for the triggering operation.
+- Research, browser, and tool-specific work: use the matching skill. Keep its
+  workflow out of this file.
 
-- Read relevant files before acting.
-- Concrete implementation request: act.
-- Analysis-only or brainstorming request: ask before implementing.
-- Ambiguity: assume and state low-risk choices; ask one question for high-risk choices.
-- In Codex, when one genuine yes/no approval blocks an otherwise-ready task, invoke `agent-plugin-playground:agent-attention` automatically; keep multi-choice or unclear decisions in Codex.
-- Code reviews require human permission. An explicit review request counts. Otherwise explain the concrete risk, expected benefit, exact scope, likely time and cost, and why cheaper checks are insufficient; wait for approval before invoking any review workflow. If declined, skip the review and continue the requested work.
-- Test meaningful changes.
-- Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.
-- Preserve unrelated user/agent changes.
-- Startup source: `$HOME/code/claude-code-config/AGENTS.md`; prompt-system changes use `$HOME/code/claude-code-config/skills/prompt-system-workflow/SKILL.md`; check delivery with `$HOME/code/claude-code-config/scripts/agent-instructions.sh`.
-- No secrets, tokens, or API keys in source.
+## Proof
 
-## Agent-Native Work
+- After a first-party skill content change, run `./setup sync --check --json`.
+  Apply `./setup sync` only for an approved add, rename, removal, or repair.
+- After repository-instruction changes, run
+  `bash scripts/agent-instructions.sh check --json`.
+- Select targeted Bun tests and type checks from the changed package. Use its
+  package contract and `CONTEXT.md`; report any broader proof gap.
+- Keep generated projections unchanged unless the owning setup command creates
+  them.
 
-- Treat agents as capable collaborators, not brittle scripts.
-- Give maps, invariants, owners, next safe actions, and inspectable state.
-- Prefer legible tools and runtime checks over prose policy.
-- Build mechanical CLI surfaces that emit maps, continuations, and repair hints.
-- Keep skills thin: read maps, choose next safe actions, and call owners.
-- Design failures to expose cause, repair path, or human handoff.
-- Name contract, model, engine, discovery, and CLI owners before implementation.
-- Code-structure choices, a new module, or reaching for a design pattern: run the `$HOME/code/claude-code-config/context/code-style.md` pressure gate.
-- For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
-- Connect browser adapters only through `browser-connect connect --json`; workflow: `$HOME/code/claude-code-config/skills/browser-use/SKILL.md`.
-- For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix root cause, prove; ask what would have prevented it.
-- For architecture candidates, use `improve-codebase-architecture`.
-- For plans and terminology, use `grilling` with `domain-modeling`.
-- After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
+## Code Review Rules
 
-## Skill Authoring
-
-- For any first-party skill create/update request, edit the canonical source under `$HOME/code/claude-code-config/skills/<id>/` regardless of the current project; never edit generated `~/.claude/skills/` or `~/.agents/skills/` projections.
-- After any first-party skill change, run `setup sync --check --json`; follow with `setup sync` after add/rename/remove or when Nathan asks to sync. Content-only edits use live projections, so a clean check needs no apply. Otherwise inspect with `setup catalog`; preflight named third-party work with `setup catalog <id>`, then use `skills-sync` to change `skills-sources.yml`, regenerate `skills-lock.json`, and restore verified projections.
-- Never author, review, heal, or repair a `SKILL.md` before reading `$HOME/code/claude-code-config/skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
-- New skill/doc needing existing mechanics: thin wrapper; link owner.
-- Skill bodies: terse prose + commands; no copied contracts.
-- Name owner paths; don't copy contracts, flags, schemas, state machines, or output semantics.
-- One workflow per skill.
-- Give next safe action.
-- Prefer examples over abstract explanation.
-- Keep references one level down.
-- Risky skills: choose invocation mode and tool permissions deliberately.
-- Add small rules only from documented recurring failure patterns.
-- Prune or substitute before adding instructions.
-- Frontmatter: quote `description`; YAML-parse after edits.
-
-## Tools
-
-- Search with `rg`; edit manually with `apply_patch`; parallel independent reads/checks with `multi_tool_use.parallel`.
-- Research tools: use `$HOME/code/claude-code-config/context/search-tools.md`; Context7 for library/framework/API docs.
-- Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers, not ambient shell env; for auth checks never source `.env` or print key prefixes, check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
-- Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
-- Homebrew additions/removals: edit `$HOME/code/dotfiles/config/brew/Brewfile` first; install with `brew bundle` and remove with previewed `brew bundle cleanup`; never run direct `brew install`, `brew uninstall`, or `brew tap`, because they create untracked machine drift; verify with `brew bundle check`. Homebrew 6.0+ refuses non-official taps until `brew trust <tap>` is run once for a newly added tap. Full workflow: `$HOME/code/dotfiles/AGENTS.md`.
-- Mac Mini server SSH (connect, flaky/dropped SSH, dedicated key, durable cmux/tmux): use the `mac-mini-ssh` skill.
-- Long unattended local runs (ce-work, lfg, workflows, ce-doc-review, ce-code-review, long suites) on a sleep-capable laptop: launch under `caffeinate -dimsu <command>` (or `caffeinate -dimsu -w <pid> &` in-flight), else idle sleep suspends the run mid-transaction and loses work (timeouts, interrupted output). `caffeinate` blocks idle sleep only, not clamshell/battery lid-close, so keep the lid open or on AC. Check: still running after a >=15-min idle span and finishes with complete output.
-
-## External Data
-
-- Google services: use `gog`; never use native Claude Code or Codex Google connectors/apps (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
-- Read the nearest `.productivity.yml` before Google dispatch; for calendar/email/contact sync, use `productivity-sync`.
-
-## Email Safety
-
-- Never ask Nathan what accessible email says; read full body first.
-- Decode/parse bodies and extract products, amounts, actions, and dates.
-
-## Context And Git
-
-- Durable knowledge: read `~/.config/context/vault.md`; use `context-advisor` for placement.
-- Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
-- Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
-- Git procedure: `$HOME/code/claude-code-config/docs/git/`.
-- Before code-repo file edits, verify isolation with the `worktree` skill (new/attach); never edit the main checkout.
-- Treat the configured Super-vault in `~/.config/context/vault.md` as the sole worktree-isolation exception.
-- Route vault writes through the `vault-git` skill; it must honor the owner-controlled pause marker before invoking the transaction manager.
-- Never create vault worktrees; allow only one canonical writer. Keep read-only vault work in the main checkout.
-- Main-direct override (`$HOME/code/claude-code-config`, `$HOME/code/dotfiles` only): work and commit directly on `main`; no PRs, no worktree isolation. For complex commits, propose `compound-engineering:ce-code-review` on the exact final diff under the Core permission rule; run it only when approved and resolve findings before commit. A declined review does not block the commit. Complex = behavior-changing code, contracts, startup-instruction or security surfaces (docs included), or multi-file changes touching behavior or policy; splitting a change set never downgrades it; trivial only when none apply (typo, mechanical, non-behavioral doc); unclear = complex. Overrides isolation, ask-before-commit, and protected-branch lines for these repos only; one canonical writer at a time. Decision: `docs/adr/0035-main-direct-mode-for-config-repos.md`.
-- Never force push, hard reset, `clean -f`, or `checkout/restore .`.
-- Never use `git add .` or `git add -A`.
-- Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
-- Protected branches: no direct commits (main-direct override repos excepted).
-## Communication
-
-- Chat tone: warm, concise, low-cognitive-load; plain words and short sentences for a smart, non-technical reader; no em or en dashes.
-- Reply shape: answer in one or two lines and stop when enough; otherwise use `Details` bullets, direct `What I need to do`, and brief `Also found`; skip preambles, process narration, padding, and routine offers.
-- Questions and failures: ask one question with options and a reasoned recommendation; state what broke, user impact, and the next action; omit logs unless asked.
-- Long writing: let drafts, scripts, posts, and documents use the form the work needs; outbound style owner: `$HOME/code/claude-code-config/context/comms-style.md`.
-- Tracker and forge identifiers in human-facing surfaces: render as clickable links keeping the key as visible text; never invent a host; owner: `$HOME/code/claude-code-config/context/tracker-links.md`.
-## Personal Context
-
-- Keep relationship labels only when contextually relevant.
-- Lookup facts live in `$HOME/code/claude-code-config/context/personal.md` or the nearest owning `$HOME/code/claude-code-config/context/` file.
-## Project Truth
-
-- Prefer repo-local/package-local `AGENTS.md` when present.
-- Issue tracker, triage labels, and domain docs belong to each repo.
+- Flag edits to projected first-party skills. Safe path: edit `skills/<id>/`
+  and verify the projection with `./setup sync --check --json`.
+- Flag setup topology that creates, removes, or checks personal
+  `~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`, or
+  `~/.claude/AGENTS.md`. Safe path: leave those destinations to dotfiles.
+- Flag behavior-changing setup code without a focused contract or integration
+  test for the public command path.
+- Leave formatting and lint findings to their executable checks.

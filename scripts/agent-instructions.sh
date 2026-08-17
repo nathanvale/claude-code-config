@@ -8,97 +8,6 @@ COMMAND="check"
 FORMAT="plain"
 STAGED=false
 STAGED_DECISION="not_requested"
-CONFIG_FILE="$SCRIPT_DIR/agent-instructions.config"
-STARTUP_OWNER="$SCRIPT_DIR"
-
-load_config() {
-	if [[ ! -f "$CONFIG_FILE" ]]; then
-		return
-	fi
-
-	while IFS='=' read -r key value; do
-		case "$key" in
-		startup_owner)
-			STARTUP_OWNER="$(resolve_startup_owner "$value")"
-			;;
-		'' | \#*)
-			;;
-		*)
-			add_warn "unknown agent instruction config key: $key"
-			;;
-		esac
-	done < "$CONFIG_FILE"
-}
-
-startup_owner_has_files() {
-	local owner="$1"
-	[[ -f "$owner/AGENTS.md" || -f "$owner/CLAUDE.md" ]]
-}
-
-main_worktree_path() {
-	git -C "$SCRIPT_DIR" worktree list --porcelain 2>/dev/null |
-		awk 'NR == 1 && $1 == "worktree" { print substr($0, 10); exit }'
-}
-
-explicit_self_startup_owner() {
-	local value="${1%/}"
-	if [[ "$value" == *..* ]]; then
-		return 1
-	fi
-	while [[ "$value" == ./* ]]; do
-		value="${value#./}"
-		value="${value%/}"
-	done
-	[[ "$value" == "." ]]
-}
-
-resolve_startup_owner() {
-	local value="$1"
-	if [[ "$value" == /* ]]; then
-		canonical_path "$value"
-		return
-	fi
-
-	local candidate
-	candidate="$(canonical_path "$SCRIPT_DIR/$value")"
-	local current_worktree
-	current_worktree="$(canonical_path "$SCRIPT_DIR")"
-	if explicit_self_startup_owner "$value"; then
-		printf "%s" "$current_worktree"
-		return
-	fi
-
-	local main_worktree
-	main_worktree="$(main_worktree_path || true)"
-	if [[ -n "$main_worktree" ]]; then
-		main_worktree="$(canonical_path "$main_worktree")"
-	fi
-
-	local main_candidate=""
-	if [[ -n "$main_worktree" && "$main_worktree" != "$current_worktree" ]]; then
-		main_candidate="$(canonical_path "$main_worktree/$value")"
-		if [[ "$candidate" == "$current_worktree" ]] &&
-			! explicit_self_startup_owner "$value" &&
-			startup_owner_has_files "$main_candidate"; then
-			printf "%s" "$main_candidate"
-			return
-		fi
-	fi
-
-	if startup_owner_has_files "$candidate"; then
-		canonical_path "$candidate"
-		return
-	fi
-
-	if [[ -n "$main_candidate" ]] &&
-		! explicit_self_startup_owner "$value" &&
-		startup_owner_has_files "$main_candidate"; then
-		canonical_path "$main_candidate"
-		return
-	fi
-
-	canonical_path "$candidate"
-}
 
 if [[ $# -gt 0 ]]; then
 	case "$1" in
@@ -188,29 +97,6 @@ line_count() {
 	wc -l < "$file" | tr -d ' '
 }
 
-canonical_path() {
-	local path="$1"
-	local dir
-	local base
-	dir="$(dirname "$path")"
-	base="$(basename "$path")"
-	if [[ -d "$dir" ]]; then
-		printf "%s/%s" "$(cd "$dir" >/dev/null && pwd -P)" "$base"
-	else
-		printf "%s" "$path"
-	fi
-}
-
-resolve_link_target() {
-	local link="$1"
-	local target
-	target="$(readlink "$link")"
-	if [[ "$target" != /* ]]; then
-		target="$(dirname "$link")/$target"
-	fi
-	canonical_path "$target"
-}
-
 check_line_budget() {
 	local label="$1"
 	local file="$2"
@@ -274,7 +160,7 @@ check_owner_paths() {
 is_staged_relevant_path() {
 	local path="$1"
 	case "$path" in
-	AGENTS.md | CLAUDE.md | agent-instructions.config | scripts/agent-instructions.sh | instruction-appendices/*)
+	AGENTS.md | CLAUDE.md | scripts/agent-instructions.sh | instruction-appendices/*)
 		return 0
 		;;
 	esac
@@ -395,75 +281,12 @@ check_appendices() {
 	fi
 }
 
-check_projection_drift() {
-	local codex_user="$HOME/.codex/AGENTS.md"
-	local source="$STARTUP_OWNER/AGENTS.md"
-	local expected_source
-	expected_source="$(canonical_path "$source")"
-
-	if [[ -L "$codex_user" ]]; then
-		local target
-		target="$(resolve_link_target "$codex_user")"
-		if [[ "$target" == "$expected_source" ]]; then
-			add_pass "Codex user startup symlinked to configured startup owner"
-		else
-			add_fail "Codex user startup symlink points elsewhere: $target"
-		fi
-	elif [[ -f "$codex_user" ]]; then
-		if diff -q "$source" "$codex_user" >/dev/null 2>&1; then
-			add_pass "Codex user startup managed copy matches configured startup owner"
-		else
-			add_fail "Codex user startup drift: ~/.codex/AGENTS.md"
-		fi
-	else
-		add_warn "Codex user startup missing"
-	fi
-
-	local claude_file="$HOME/.claude/CLAUDE.md"
-	local claude_agents="$HOME/.claude/AGENTS.md"
-	local expected_claude
-	expected_claude="$(canonical_path "$STARTUP_OWNER/CLAUDE.md")"
-	if [[ -L "$claude_file" ]]; then
-		local target
-		target="$(resolve_link_target "$claude_file")"
-		if [[ "$target" == "$expected_claude" ]]; then
-			add_pass "Claude CLAUDE.md symlinked to configured startup owner"
-		else
-			add_fail "Claude CLAUDE.md symlink points elsewhere: $target"
-		fi
-	elif [[ -e "$claude_file" ]]; then
-		add_warn "Claude startup exists but is not symlink"
-	else
-		add_fail "Claude CLAUDE.md missing"
-	fi
-
-	if [[ -L "$claude_agents" ]]; then
-		local target
-		target="$(resolve_link_target "$claude_agents")"
-		if [[ "$target" == "$expected_source" ]]; then
-			add_pass "Claude AGENTS.md symlinked to configured startup owner"
-		else
-			add_fail "Claude AGENTS.md symlink points elsewhere: $target"
-		fi
-	elif [[ -e "$claude_agents" ]]; then
-		add_warn "Claude AGENTS.md exists but is not symlink"
-	else
-		add_fail "Claude AGENTS.md missing"
-	fi
-}
-
 run_checks() {
-	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
 	check_line_budget "CLAUDE.md" "$SCRIPT_DIR/CLAUDE.md" 50
-	if [[ -f "$HOME/.codex/AGENTS.md" ]]; then
-		check_line_budget "Codex user startup" "$HOME/.codex/AGENTS.md" 150
-	fi
 	check_no_leakage "$SCRIPT_DIR/AGENTS.md"
-	check_no_leakage "$HOME/.codex/AGENTS.md"
 	check_owner_paths
 	check_appendices
-	check_projection_drift
 }
 
 json_string() {
@@ -580,11 +403,9 @@ print_status() {
 		return
 	fi
 
-echo "Instruction owner map"
-echo "startup owner: $(canonical_path "$STARTUP_OWNER")"
-echo "startup: AGENTS.md"
-echo "claude: CLAUDE.md"
-echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
+	echo "Instruction owner map"
+	echo "repository instructions: AGENTS.md and CLAUDE.md"
+	echo "personal instruction setup: \$HOME/code/dotfiles project skill agents-md-setup"
 	echo "checks: scripts/agent-instructions.sh"
 	echo "skills: setup projections plus bunx skills acquisition"
 	echo "repo truth: docs/agents/"

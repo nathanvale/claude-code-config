@@ -115,7 +115,6 @@ function createFixture(): Fixture {
 	mkdirSync(repository, { recursive: true });
 	writeRepositoryFile(repository, "AGENTS.md", "# Agent instructions\n");
 	writeRepositoryFile(repository, "CLAUDE.md", "# Claude wrapper\n");
-	writeRepositoryFile(repository, "agent-instructions.config", "startup_owner=.\n");
 	writeRepositoryFile(repository, "scripts/agent-instructions.sh", readFileSync(sourceScript, "utf8"));
 	chmodSync(script, 0o755);
 	for (const path of registeredOwnerPaths) {
@@ -136,11 +135,7 @@ function createFixture(): Fixture {
 	git(repository, ["add", "--all"]);
 	git(repository, ["commit", "--quiet", "-m", "test: seed instruction topology"]);
 
-	mkdirSync(join(home, ".codex"), { recursive: true });
-	mkdirSync(join(home, ".claude"), { recursive: true });
-	symlinkSync(join(repository, "AGENTS.md"), join(home, ".codex/AGENTS.md"));
-	symlinkSync(join(repository, "AGENTS.md"), join(home, ".claude/AGENTS.md"));
-	symlinkSync(join(repository, "CLAUDE.md"), join(home, ".claude/CLAUDE.md"));
+	mkdirSync(home, { recursive: true });
 
 	return { root, repository, home, script };
 }
@@ -172,20 +167,14 @@ function parseReport(result: ProcessResult): StagedReport {
 	}
 }
 
-function expectDeliveredRoute(
+function expectLocalRoute(
 	fixture: Fixture,
 	agents: string,
 	route: string,
-	staleReplacement: string,
 	qualificationSource?: string,
 ): void {
 	writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
-	expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
-		route,
-	);
-	expect(readFileSync(join(fixture.home, ".claude/AGENTS.md"), "utf8")).toContain(
-		route,
-	);
+	expect(readFileSync(join(fixture.repository, "AGENTS.md"), "utf8")).toContain(route);
 	expect(runScript(fixture, ["check"]).exitCode).toBe(0);
 	if (qualificationSource) {
 		const sourcePath = join(fixture.repository, qualificationSource);
@@ -199,17 +188,6 @@ function expectDeliveredRoute(
 		writeFileSync(sourcePath, source);
 		expect(runScript(fixture, ["check"]).exitCode).toBe(0);
 	}
-
-	unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
-	writeFileSync(
-		join(fixture.home, ".codex/AGENTS.md"),
-		agents.replace(route, staleReplacement),
-	);
-	const drifted = runScript(fixture, ["check", "--json"]);
-	expect(drifted.exitCode).toBe(1);
-	expect(parseReport(drifted).failures).toContain(
-		"Codex user startup drift: ~/.codex/AGENTS.md",
-	);
 }
 
 function findContrastingSortLocale(): string | undefined {
@@ -228,31 +206,29 @@ function findContrastingSortLocale(): string | undefined {
 }
 
 describe("agent instruction staged health", () => {
-	test("delivers the mandatory test-design route through both startup surfaces", () => {
+	test("keeps the mandatory test-design route in the repository source", () => {
 		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
 		expect(agents).toContain(testDesignStartupRule);
 
 		withFixture((fixture) => {
-			expectDeliveredRoute(
+			expectLocalRoute(
 				fixture,
 				agents,
 				testDesignStartupRule,
-				"stale startup without the test-design route",
 				"skills/test-design/references/pattern-library.md",
 			);
 		});
 	});
 
-	test("delivers the vault-git write route through both startup surfaces", () => {
+	test("keeps the vault-git write route in the repository source", () => {
 		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
 		expect(agents).toContain(vaultGitStartupRule);
 
 		withFixture((fixture) => {
-			expectDeliveredRoute(
+			expectLocalRoute(
 				fixture,
 				agents,
 				vaultGitStartupRule,
-				"stale startup without the vault-git route",
 			);
 		});
 	});
@@ -317,14 +293,12 @@ describe("agent instruction staged health", () => {
 			const exactInputs = [
 				"AGENTS.md",
 				"CLAUDE.md",
-				"agent-instructions.config",
 				"scripts/agent-instructions.sh",
 				...registeredOwnerPaths,
 				appendixPath,
 			];
 			writeRepositoryFile(fixture.repository, "AGENTS.md", "# Changed agent instructions\n");
 			writeRepositoryFile(fixture.repository, "CLAUDE.md", "# Changed Claude wrapper\n");
-			writeRepositoryFile(fixture.repository, "agent-instructions.config", "startup_owner=./\n");
 			writeFileSync(fixture.script, `${readFileSync(fixture.script, "utf8")}\n# staged fixture change\n`);
 			for (const path of registeredOwnerPaths) {
 				writeRepositoryFile(fixture.repository, path, `changed ${path}\n`);

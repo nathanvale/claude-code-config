@@ -7,23 +7,23 @@ import { describe, expect, test } from "bun:test";
 import { applyStartupTopology, inspectStartupTopology, STARTUP_LINKS } from "../src/startup-topology.ts";
 
 describe("startup topology", () => {
-	test("owns the exact thirteen non-skill startup links", () => {
+	test("owns ten non-instruction startup links", () => {
 		expect(STARTUP_LINKS.map((entry) => entry.destination)).toEqual([
-			".claude/CLAUDE.md", ".claude/AGENTS.md", ".claude/context", ".claude/rules",
+			".claude/context", ".claude/rules",
 			".claude/commands", ".claude/agents", ".claude/runbooks", ".claude/hooks",
 			".claude/hooks.json", ".claude/settings.json", ".claude/.mcp.json",
-			".codex/AGENTS.md", ".config/context",
+			".config/context",
 		]);
 	});
 
 	test("plans and creates missing links while deferring a missing source", async () => {
 		const fixture = await startupFixture();
 		const first = await inspectStartupTopology(fixture.source, fixture.home);
-		expect(first.operations).toHaveLength(13);
+		expect(first.operations).toHaveLength(10);
 		expect(first.operations.every((operation) => operation.action === "create")).toBe(true);
 		const result = await applyStartupTopology(first);
-		expect(result.applied).toHaveLength(13);
-		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(await realpath(join(fixture.source, "AGENTS.md")));
+		expect(result.applied).toHaveLength(10);
+		expect(await readlink(join(fixture.home, ".config/context"))).toBe(await realpath(join(fixture.source, "context")));
 
 		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "context")));
 		const missing = await inspectStartupTopology(fixture.source, fixture.home);
@@ -33,8 +33,8 @@ describe("startup topology", () => {
 	test("preserves a foreign link and real-file conflict", async () => {
 		const fixture = await startupFixture();
 		await mkdir(join(fixture.home, ".claude"), { recursive: true });
-		await symlink("/tmp/foreign", join(fixture.home, ".claude/CLAUDE.md"));
-		await writeFile(join(fixture.home, ".claude/AGENTS.md"), "foreign\n");
+		await symlink("/tmp/foreign", join(fixture.home, ".claude/context"));
+		await writeFile(join(fixture.home, ".claude/rules"), "foreign\n");
 		const plan = await inspectStartupTopology(fixture.source, fixture.home);
 		expect(plan.findings.filter((finding) => finding.id === "foreign_symlink")).toHaveLength(1);
 		expect(plan.findings.filter((finding) => finding.id === "real_entry")).toHaveLength(1);

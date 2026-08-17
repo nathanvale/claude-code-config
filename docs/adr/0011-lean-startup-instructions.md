@@ -10,9 +10,15 @@ date: 2026-06-02
 > direct first-party skill projection. `bunx skills` remains the third-party
 > acquisition owner. The lean-authoring decision remains accepted.
 
+> **Personal instruction amendment (2026-08-16):** Dotfiles now owns personal
+> Claude Code and Codex instruction setup through its project-scoped
+> `agents-md-setup` skill. This repository keeps only its repository
+> instructions and no longer creates, removes, or checks personal instruction
+> files.
+
 ## Decision
 
-Root `AGENTS.md` is the canonical user-scope startup instruction source.
+Root `AGENTS.md` is this repository's canonical instruction source.
 
 Prompt fragments, committed Codex generated output, and
 `docs/specs/prompt-system.md` are retired as authoring surfaces.
@@ -36,8 +42,8 @@ Missing provenance alone does not transfer ownership to Setup. Equal-current
 or recognized migration evidence may rebuild it; every other existing copy is
 preserved and routed to human repair after state loss.
 
-Claude and Codex delivery should target root `AGENTS.md` directly. A managed
-copy is acceptable only as an install artifact checked against `AGENTS.md`.
+Personal Claude Code and Codex delivery belongs to the dotfiles project. This
+repository points to that owner instead of copying its contract.
 
 ## Rationale
 
@@ -52,7 +58,9 @@ Lean authoring keeps the model simple:
 
 ## Live Sources
 
-- Startup source: `AGENTS.md`
+- Repository instruction source: `AGENTS.md`
+- Personal instruction setup:
+  `$HOME/code/dotfiles/.agents/skills/agents-md-setup/SKILL.md`
 - Runtime health: `scripts/agent-instructions.sh`
 - Install topology: `setup` and `runtime/setup/`
 - Vocabulary: `CONTEXT.md`
@@ -62,12 +70,14 @@ Lean authoring keeps the model simple:
 
 ## Delivery Topology
 
-- Configured startup owner: `agent-instructions.config` `startup_owner`.
-- Claude startup wrapper: `~/.claude/CLAUDE.md` symlinks to the configured owner `CLAUDE.md`.
-- Claude shared startup: `~/.claude/AGENTS.md` symlinks to the configured owner `AGENTS.md`.
-- Codex user startup: `~/.codex/AGENTS.md` symlinks to, or is a managed copy of, the configured owner `AGENTS.md`.
+- Personal instruction adapters are regular files owned and verified by the
+  dotfiles project skill.
+- Setup excludes `~/.claude/CLAUDE.md`, `~/.claude/AGENTS.md`, and
+  `~/.codex/AGENTS.md` from its startup topology.
 - Skill projection: `skills/` is the first-party source; Setup creates direct per-skill links in `~/.claude/skills/` and `~/.agents/skills/`. A real entry or foreign symlink that shadows a source skill is preserved and diagnosed.
-- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, and startup delivery drift. Setup composes that evidence with topology health.
+- Health check: `scripts/agent-instructions.sh check --json` proves repository
+  instruction line budgets, owner paths, leakage, and appendices. Setup
+  composes that evidence with its remaining topology health.
 - Hook topology: Setup reconciles copied hooks only from provenance-backed or recognized migration evidence; unproven content is preserved for human repair.
 
 ## Registered Owners

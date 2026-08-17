@@ -5,8 +5,6 @@ import type { SetupDomainResult, SetupFinding } from "./model.ts";
 import { canonicalPath, isInsideOrEqual, unsafeExistingParent } from "./path-safety.ts";
 
 export const STARTUP_LINKS = [
-	{ destination: ".claude/CLAUDE.md", source: "CLAUDE.md" },
-	{ destination: ".claude/AGENTS.md", source: "AGENTS.md" },
 	{ destination: ".claude/context", source: "context" },
 	{ destination: ".claude/rules", source: "rules" },
 	{ destination: ".claude/commands", source: "commands" },
@@ -16,7 +14,6 @@ export const STARTUP_LINKS = [
 	{ destination: ".claude/hooks.json", source: "hooks.json" },
 	{ destination: ".claude/settings.json", source: "settings.json" },
 	{ destination: ".claude/.mcp.json", source: ".mcp.json" },
-	{ destination: ".codex/AGENTS.md", source: "AGENTS.md" },
 	{ destination: ".config/context", source: "context" },
 ] as const;
 
