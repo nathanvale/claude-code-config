@@ -20,11 +20,18 @@ attachment.
   `browser-connect connect <adapter> --json`. Save the verified handoff, run
   `browser-use targets list --mode handoff-bound --handoff <path> --json`, then
   dispatch supported work through `browser-use operate ... --handoff <path>`.
-- Open-ended login wall: keep the verified handoff and run
-  `browser-use auth login --help` only to discover the contract and required
-  invocation. Then invoke the admitted `browser-use auth login` command and
-  follow its typed continuation; never create a Runbook only to access auth.
-- Use Browser Use's custody-aware task, runbook, auth, or operate command to
+  Switching target or tab keeps that stable identity: reselect from
+  `targets list` and pass the same handoff; never re-derive a target by index.
+- Parallel agents: each run holds its own Target Lease and Browser Lane, so a
+  concurrent agent never borrows another's target. Release the lease when the
+  work finishes; a stale lease is a typed repair, not a reason to bypass
+  custody.
+- Open-ended login wall: stop. Confidential credential delivery is a separate
+  future bridge and is not part of this milestone. Report the wall, the target,
+  and what remains blocked, then hand back to the user. Do not attempt to fill
+  credentials through an adapter, and do not treat a login wall as a product
+  defect to escalate.
+- Use Browser Use's custody-aware task, runbook, or operate command to
   perform and prove the requested outcome. An unsupported operation remains a
   typed product gap; direct adapter or raw CDP commands are outside Browser
   Use-mediated Target Lease and Browser Lane enforcement.
@@ -59,8 +66,11 @@ attachment.
   (`runtime/browser-connect/REPAIR.md#v1-inspect_listener`).
 - Never print tokens, cookies, passwords, or auth-bearing URLs; report secret
   checks by shape only (present/absent, length, status code).
-- Never route a browser login through the generic `one-password` skill or an
-  ambient `op` session. Follow the `browser-use auth login` continuation.
+- Never route a browser login through the generic `one-password` skill, the
+  generic `with-one-password-token` bin, or an ambient `op` session. None of
+  them can confidentially deliver a credential into a browser; treating one as
+  a login path leaks the value into this agent's context. Stop at the login
+  wall instead.
 
 ## Owners
 
@@ -68,13 +78,8 @@ attachment.
 - Bundled guide content: `skills/browser-use/src/browser-use-guide.ts`.
 - Connection, Verified Handoff Envelope, repair paths: `runtime/browser-connect`
   (`src/command-contract.ts`, `REPAIR.md`).
-- Browser Authentication Transaction and its two entry modes:
-  `skills/browser-use/src/browser-use-runbook-auth.ts`.
-- Managed and user-present 1Password access leases:
-  `skills/browser-use/src/browser-use-auth-access.ts`.
-- Admitted native access-provider wiring:
-  `skills/browser-use/src/browser-use-runtime.ts` and
-  `runtime/browser-use-security`.
+- Target Lease, Browser Lane, and custody admission:
+  `skills/browser-use/src/browser-use-runtime.ts`.
 
 ## Next Safe Action
 
