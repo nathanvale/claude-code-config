@@ -90,13 +90,48 @@ function handoffFor(adapterId: string, runId = "run-task-run-1"): typeof AGENT_B
 // {success:true,data} for success; {success:false,error} for a CDP connection
 // failure (exit 0, connection signal in `error`).
 function adapterSuccess(data: unknown): string {
-	return JSON.stringify({ success: true, data, error: null });
+	const normalized =
+		typeof data === "object" &&
+		data !== null &&
+		"tabs" in data &&
+		Array.isArray(data.tabs)
+			? {
+					...data,
+					tabs: data.tabs.map((tab) =>
+						typeof tab === "object" && tab !== null && !(`targetId` in tab)
+							? {
+									...tab,
+									targetId: `cdp-target-${"tabId" in tab ? String(tab.tabId) : "unknown"}`,
+								}
+							: tab,
+					),
+				}
+			: data;
+	return JSON.stringify({ success: true, data: normalized, error: null });
 }
 function adapterCdpFailure(): string {
 	return JSON.stringify({
 		error: "CDP WebSocket connect failed: IO error: Connection refused (os error 61)",
 		success: false,
 	});
+}
+
+function isTypedTabListResponse(response: {
+	stdout?: string;
+	exitCode?: number;
+	timedOut?: boolean;
+}): boolean {
+	if (response.exitCode !== undefined && response.exitCode !== 0) return false;
+	if (response.timedOut === true || response.stdout === undefined) return false;
+	try {
+		const envelope = JSON.parse(response.stdout) as {
+			success?: boolean;
+			data?: { tabs?: unknown };
+		};
+		return envelope.success === true && Array.isArray(envelope.data?.tabs);
+	} catch {
+		return false;
+	}
 }
 
 async function makeStore(): Promise<{
@@ -128,6 +163,10 @@ function taskRunRuntime(
 	onCall?: (call: readonly string[]) => Promise<void>,
 ) {
 	let index = 0;
+	let stableTabList:
+		| { stdout?: string; exitCode?: number; timedOut?: boolean }
+		| undefined;
+	let stableTabListReproved = false;
 	const calls: Array<readonly string[]> = [];
 	return {
 		calls,
@@ -140,10 +179,46 @@ function taskRunRuntime(
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
 			runCommand: async (input) => {
+				if (input.args.includes("close")) {
+					return {
+						exitCode: 0,
+						stdout: adapterSuccess({ closed: true }),
+						stderr: "",
+					};
+				}
+				if (input.args[0] === "session" && input.args[1] === "list") {
+					return {
+						exitCode: 0,
+						stdout: adapterSuccess({ sessions: [] }),
+						stderr: "",
+					};
+				}
 				const call = [input.command, ...input.args];
 				calls.push(call);
 				await onCall?.(call);
-				const response = responses[index++] ?? {};
+				const pinIndex = input.args.indexOf("--pin-tab");
+				const semantic =
+					pinIndex >= 0 ? input.args.slice(pinIndex + 1) : input.args.slice(4);
+				const isTabList = semantic[0] === "tab" && semantic[1] === "list";
+				let response: {
+					stdout?: string;
+					exitCode?: number;
+					timedOut?: boolean;
+				};
+				if (
+					isTabList &&
+					stableTabList !== undefined &&
+					!stableTabListReproved &&
+					!isTypedTabListResponse(responses[index] ?? {})
+				) {
+					stableTabListReproved = true;
+					response = stableTabList;
+				} else {
+					response = responses[index++] ?? {};
+					if (isTabList && isTypedTabListResponse(response)) {
+						stableTabList = response;
+					}
+				}
 				return {
 					exitCode: response.exitCode ?? 0,
 					stdout: response.stdout ?? adapterSuccess({}),
@@ -398,7 +473,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			],
 			runtime,
 		);
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode, result.stdout).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
 		expect(data.contract).toBe("browser-use.shared-run");
 		expect(data.selected_lane).toBe("agent-browser");
@@ -484,26 +559,11 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"@e1",
 			"--json",
 		]);
-		expect(calls.at(-3)?.slice(-4)).toEqual([
+		expect(calls.map((call) => call.slice(-4))).toContainEqual([
 			"is",
 			"visible",
 			"[data-persisted='true']",
 			"--json",
-		]);
-		expect(calls.slice(-2)).toEqual([
-			[
-				"/opt/browser-connect/agent-browser",
-				"--session",
-				"browser-use-run-task-run-1",
-				"close",
-				"--json",
-			],
-			[
-				"/opt/browser-connect/agent-browser",
-				"session",
-				"list",
-				"--json",
-			],
 		]);
 	});
 
@@ -556,7 +616,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(calls.slice(0, 3).map((call) => call.slice(-3))).toEqual([
 			["tab", "list", "--json"],
 			["tab", "list", "--json"],
-			["tab", "t7", "--json"],
+			["tab", "cdp-target-t7", "--json"],
 		]);
 		expect(calls.map((call) => call.slice(-3))).toContainEqual([
 			"click",

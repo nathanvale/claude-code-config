@@ -90,14 +90,42 @@ describe("vault-git Next Safe Action catalog", () => {
 		});
 	});
 
-	test("provide_host_enrollment_inputs is feature-gated and unavailable now", () => {
-		// The Host Enrollment feature is not yet shipped, so this action fails
-		// closed rather than emitting a contract for a command that cannot run.
+	test("provide_host_enrollment_inputs projects the shipped private input contract", () => {
 		expect(
 			projectVaultGitNextSafeAction({
 				action_id: "provide_host_enrollment_inputs",
-			}).availability,
-		).toBe("unavailable");
+			}),
+		).toEqual({
+			availability: "available",
+			continuation: {
+				kind: "needs_input",
+				action_id: "provide_host_enrollment_inputs",
+				summary: "Provide the Host Enrollment inputs.",
+				input_contract_id: "setup.vault-git.host-enrollment",
+				fields: [
+					{ id: "ssh_identity_file_path", input_channel: "private_stdin" },
+					{ id: "ssh_public_key_path", input_channel: "private_stdin" },
+					{ id: "ssh_known_hosts_path", input_channel: "private_stdin" },
+				],
+			},
+		});
+	});
+
+	test("preview_host_enrollment_repair projects the shipped Setup preview invoke", () => {
+		expect(
+			projectVaultGitNextSafeAction({
+				action_id: "preview_host_enrollment_repair",
+			}),
+		).toEqual({
+			availability: "available",
+			continuation: {
+				kind: "invoke",
+				action_id: "preview_host_enrollment_repair",
+				summary: "Preview the Host Enrollment repair.",
+				executable: "setup",
+				argv: ["sync", "--domain", "vault-git", "--check", "--json"],
+			},
+		});
 	});
 
 	test("catalog owns every closed #390 action id exactly once", () => {

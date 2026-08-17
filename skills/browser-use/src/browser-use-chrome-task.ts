@@ -206,6 +206,8 @@ export type ChromeTask = {
 	run_id: string;
 	target_page_id: number;
 	allowed_origins: readonly string[];
+	/** Canonical target URL admitted before the Target Lease was acquired. */
+	expected_target_url?: string;
 	operations: readonly ChromeTaskOperation[];
 	/** Absolute directory the driver created for native artifacts (R21). When
 	 *  absent, artifact-producing operations fail closed rather than inlining. */
@@ -629,7 +631,47 @@ async function selectPageOnce(
 			),
 		};
 	}
+	if (
+		task.expected_target_url !== undefined &&
+		normalizedHttpUrl(url) !== normalizedHttpUrl(task.expected_target_url)
+	) {
+		return {
+			kind: "refused",
+			failure: failure(
+				"chrome_task_target_unavailable",
+				"not-achieved",
+				"The requested page id no longer resolves to the leased canonical target URL.",
+			),
+		};
+	}
 	return { kind: "attached" };
+}
+
+function normalizedHttpUrl(value: string): string | undefined {
+	try {
+		const parsed = new URL(value);
+		return parsed.protocol === "http:" || parsed.protocol === "https:"
+			? parsed.href
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve one adapter page id to its current exact URL without operating it. */
+export async function resolveChromeTaskPageUrl(
+	runtime: BrowserUseRuntime,
+	task: ChromeTask,
+): Promise<{ ok: true; url: string } | { ok: false }> {
+	const validation = validateTask(task);
+	if (!validation.ok) return { ok: false };
+	const listed = await runTool(runtime, task, "list_pages", {});
+	const envelope = envelopeOf(listed);
+	if (envelope === undefined) return { ok: false };
+	const url = pageUrlFromListing(envelope.text, task.target_page_id);
+	return url !== undefined && originIsAllowed(url, validation.allowedOrigins)
+		? { ok: true, url }
+		: { ok: false };
 }
 
 /**

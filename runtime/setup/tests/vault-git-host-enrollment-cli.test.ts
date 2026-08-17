@@ -331,6 +331,58 @@ describe("Setup Vault Git Host Enrollment CLI", () => {
 		}
 	});
 
+	test("oversized private input reports only the 16,384-byte limit; missing input stays unavailable", async () => {
+		const secret = "private-oversized-do-not-echo";
+		const oversized = JSON.stringify({
+			...PRIVATE_VALUES,
+			ssh_known_hosts_path: `/${secret}/${"x".repeat(17_000)}`,
+		});
+		const argv = [
+			"sync",
+			"--domain",
+			"vault-git",
+			"--input-stdin",
+			"setup.vault-git.host-enrollment",
+		] as const;
+
+		const oversizedIo = capture();
+		const oversizedCalls: string[] = [];
+		expect(await main([...argv], {
+			...oversizedIo,
+			runtime: Object.assign(domainRuntime(oversizedCalls), {
+				vaultGitHostEnrollment: fakeOwner(oversizedCalls),
+				readPrivateStdin: async () => oversized,
+			}),
+		})).toBe(2);
+		expect(oversizedCalls).toEqual([]);
+		expect(oversizedIo.stderr.text).toContain(
+			"Private Host Enrollment input exceeds the 16,384-byte limit",
+		);
+		expect(oversizedIo.stderr.text).not.toContain("unavailable");
+		for (const text of [oversizedIo.stdout.text, oversizedIo.stderr.text]) {
+			expect(text).not.toContain(secret);
+			expect(text).not.toContain(String(oversized.length));
+			for (const value of Object.values(PRIVATE_VALUES)) {
+				expect(text).not.toContain(value);
+			}
+		}
+
+		const missingIo = capture();
+		const missingCalls: string[] = [];
+		expect(await main([...argv], {
+			...missingIo,
+			runtime: Object.assign(domainRuntime(missingCalls), {
+				vaultGitHostEnrollment: fakeOwner(missingCalls),
+				readPrivateStdin: undefined,
+			}),
+		})).toBe(2);
+		expect(missingCalls).toEqual([]);
+		expect(missingIo.stderr.text).toContain(
+			"Private Host Enrollment input is unavailable",
+		);
+		expect(missingIo.stderr.text).not.toContain("16,384");
+	});
+
 	test("plain user sync projects Vault Git domain status without enrollment dispatch", async () => {
 		const calls: string[] = [];
 		const io = capture();

@@ -79,7 +79,11 @@ import {
 	reviewedActionVerifierIdentityIsValid,
 } from "./browser-use-reviewed-action-approval";
 import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
-import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
+import type {
+	BrowserUseCdpTargetIdentity,
+	BrowserUseDevToolsRequest,
+	BrowserUseTargetProofRefusalCause,
+} from "./browser-use-target-proof";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
@@ -1320,6 +1324,18 @@ export type BrowserUseRuntime = {
 	authenticatedStateProof?: BrowserUseAuthenticatedStateProof;
 	/** Endpoint-bound transport shared by both entry modes. */
 	authTransport?: BrowserUseAuthTransportFactory;
+	/**
+	 * Exact browser-level target resolver. Production falls back to the verified
+	 * handoff WebSocket; tests inject this seam so no live browser is contacted.
+	 */
+	resolveTargetIdentity?: (input: {
+		expected_url: string;
+		allowed_origins: readonly string[];
+		preferred_target_id?: string;
+	}) => Promise<
+		| { ok: true; target: BrowserUseCdpTargetIdentity }
+		| { ok: false; cause: BrowserUseTargetProofRefusalCause }
+	>;
 	/** Presence-backed lifecycle signer. Ordinary runbook execution never calls it. */
 	bindingApprovalBroker?: BrowserUseBindingApprovalBrokerPort;
 	/** Presence-free verifier for immutable binding revisions. */

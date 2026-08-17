@@ -34,20 +34,30 @@ providers:
       - gog-weekly-digest
       - gog-youtube
   mattpocock/skills:
-    ref: 84fdeffd12f2ee307994d1eb6feb48173b6e0502
+    ref: 068b6e0c62393147daf03530149cdce209c93da8
     skills:
       - ask-matt
+      - claude-handoff
+      - code-review
       - codebase-design
       - diagnosing-bugs
       - domain-modeling
+      - git-guardrails-claude-code
       - grill-me
       - grill-with-docs
       - grilling
       - handoff
       - implement
       - improve-codebase-architecture
+      - loop-me
+      - migrate-to-shoehorn
       - prototype
+      - research
+      - resolving-merge-conflicts
+      - scaffold-exercises
       - setup-matt-pocock-skills
+      - setup-pre-commit
+      - setup-ts-deep-modules
       - tdd
       - teach
       - to-questionnaire
@@ -56,4 +66,8 @@ providers:
       - triage
       - wait-what
       - wayfinder
+      - wizard
+      - writing-beats
       - writing-for-agents
+      - writing-fragments
+      - writing-shape

@@ -19,6 +19,7 @@ import {
 	type SetupCommand,
 	type SetupScope,
 } from "./model.ts";
+import { VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS } from "./vault-git-host-enrollment.ts";
 
 export type SetupAudience = "operator" | "agent";
 export type SetupMutation = "check" | "write";
@@ -73,6 +74,28 @@ const checkFlag = {
 	"--check": { type: "boolean", description: "Preview from current evidence without writing." },
 } as const;
 
+/**
+ * Setup-owned private input contracts, projected through command discovery so a
+ * real consumer derives the action argv, contract id, and ordered field
+ * ids/channels without a hand-authored duplicate. The parser and the
+ * `--input-stdin` flag grammar derive their accepted contract ids from here.
+ */
+export const SETUP_INPUT_CONTRACTS = [
+	{
+		id: "setup.vault-git.host-enrollment",
+		action_id: "provide_host_enrollment_inputs",
+		action_argv: ["sync", "--domain", "vault-git"],
+		fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS.map((field) => ({
+			id: field.id,
+			input_channel: field.inputChannel,
+		})),
+	},
+] as const;
+
+type SetupInputContractId = (typeof SETUP_INPUT_CONTRACTS)[number]["id"];
+
+const setupInputContractIds = SETUP_INPUT_CONTRACTS.map((contract) => contract.id);
+
 const vaultGitDomainFlags = {
 	"--domain": {
 		type: "enum",
@@ -84,7 +107,8 @@ const vaultGitDomainFlags = {
 		description: "Select the verified prior installed release.",
 	},
 	"--input-stdin": {
-		type: "string",
+		type: "enum",
+		values: setupInputContractIds,
 		description: "Read one named private-input contract from stdin.",
 	},
 } as const;
@@ -197,7 +221,15 @@ export const setupContractEntries = SETUP_COMMANDS.map(
 
 export function projectSetupCommandDiscoveryTree() {
 	return projectCommandDiscoveryTree(setupContractEntries, {
-		augment: () => ({ global_diagnostic_flags: SETUP_GLOBAL_DIAGNOSTIC_FLAGS }),
+		augment: (
+			command,
+		): {
+			global_diagnostic_flags: typeof SETUP_GLOBAL_DIAGNOSTIC_FLAGS;
+			input_contracts?: typeof SETUP_INPUT_CONTRACTS;
+		} => ({
+			global_diagnostic_flags: SETUP_GLOBAL_DIAGNOSTIC_FLAGS,
+			...(command === "sync" ? { input_contracts: SETUP_INPUT_CONTRACTS } : {}),
+		}),
 	});
 }
 
@@ -211,7 +243,7 @@ export interface ParsedSetupInvocation {
 	noColor: boolean;
 	check: boolean;
 	domain?: "vault-git";
-	inputStdin?: "setup.vault-git.host-enrollment";
+	inputStdin?: SetupInputContractId;
 	rollback: boolean;
 	alias?: "no_args";
 }
@@ -235,7 +267,7 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 	let noColor = false;
 	let check = false;
 	let domain: "vault-git" | undefined;
-	let inputStdin: "setup.vault-git.host-enrollment" | undefined;
+	let inputStdin: SetupInputContractId | undefined;
 	let rollback = false;
 
 	for (let index = noArgs || flagOnlyAlias ? 0 : 1; index < argv.length; index += 1) {
@@ -253,10 +285,13 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 			}
 			case "--input-stdin": {
 				const value = inlineValue ?? requireValue(argv, index, flag);
-				if (value !== "setup.vault-git.host-enrollment") {
+				const contract = SETUP_INPUT_CONTRACTS.find(
+					(candidate) => candidate.id === value,
+				);
+				if (!contract) {
 					throw usageError("Unsupported --input-stdin contract");
 				}
-				inputStdin = value;
+				inputStdin = contract.id;
 				if (inlineValue === undefined) index += 1;
 				break;
 			}

@@ -33,6 +33,13 @@ export interface VaultGitHostEnrollmentInputField {
 	readonly inputChannel: "private_stdin";
 }
 
+/** The one immutable private-input descriptor projected by inspect and preview. */
+export const VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS = [
+	{ id: "ssh_identity_file_path", inputChannel: "private_stdin" },
+	{ id: "ssh_public_key_path", inputChannel: "private_stdin" },
+	{ id: "ssh_known_hosts_path", inputChannel: "private_stdin" },
+] as const satisfies readonly VaultGitHostEnrollmentInputField[];
+
 export interface VaultGitHostEnrollmentStatus {
 	readonly state: "not_enrolled";
 	readonly station: "vault_git.host_enrollment_inputs_required";
@@ -549,8 +556,12 @@ function parseRuntimeSelection(value: unknown): RuntimeSelectionRecord | undefin
 		candidate.schema_version !== 1 ||
 		typeof candidate.selected_digest !== "string" ||
 		!SHA256_PATTERN.test(candidate.selected_digest) ||
+		// A record naming itself as its prior would offer a meaningless
+		// self-rollback; treat it as invalid so rollback fails closed instead.
 		!(candidate.prior_digest === null ||
-			(typeof candidate.prior_digest === "string" && SHA256_PATTERN.test(candidate.prior_digest)))
+			(typeof candidate.prior_digest === "string" &&
+				SHA256_PATTERN.test(candidate.prior_digest) &&
+				candidate.prior_digest !== candidate.selected_digest))
 	) {
 		return undefined;
 	}
@@ -651,6 +662,33 @@ async function replaceableSelectorState(
 	throw new Error("Refusing to replace a foreign Vault Git selector");
 }
 
+/**
+ * The prior may never equal the new selection — a stale record naming the same
+ * digest would otherwise persist a meaningless self-rollback. The live selector
+ * stays rollback-eligible on containment proof alone (rollback re-verifies its
+ * bytes); a record-sourced candidate must byte-verify before it is trusted.
+ */
+async function distinctPriorDigest(
+	roots: VaultGitHostEnrollmentRoots,
+	selectedDigest: string,
+	selectorState: ReplaceableSelectorState,
+	existingSelection: RuntimeSelectionRecord | undefined,
+): Promise<string | null> {
+	const livePathDigest = selectorState.pathDigest;
+	if (livePathDigest !== undefined && livePathDigest !== selectedDigest) {
+		return livePathDigest;
+	}
+	for (const candidate of [
+		existingSelection?.selected_digest,
+		existingSelection?.prior_digest ?? undefined,
+	]) {
+		if (candidate === undefined || candidate === selectedDigest) continue;
+		const executable = join(roots.dataRoot, "runtimes", candidate, "vault-git");
+		if (await runtimeMatches(executable, candidate)) return candidate;
+	}
+	return null;
+}
+
 /** Create the Setup-owned Host Enrollment boundary for one isolated host state. */
 export function createVaultGitHostEnrollment(
 	roots: VaultGitHostEnrollmentRoots,
@@ -688,11 +726,7 @@ export function createVaultGitHostEnrollment(
 					kind: "needs_input",
 					actionId: "provide_host_enrollment_inputs",
 					inputContractId: "setup.vault-git.host-enrollment",
-					fields: [
-						{ id: "ssh_identity_file_path", inputChannel: "private_stdin" },
-						{ id: "ssh_public_key_path", inputChannel: "private_stdin" },
-						{ id: "ssh_known_hosts_path", inputChannel: "private_stdin" },
-					],
+					fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS,
 				},
 				installedRuntime: null,
 				selectedRuntime: null,
@@ -709,11 +743,7 @@ export function createVaultGitHostEnrollment(
 						kind: "needs_input",
 						actionId: "apply_host_enrollment",
 						inputContractId: "setup.vault-git.host-enrollment",
-						fields: [
-							{ id: "ssh_identity_file_path", inputChannel: "private_stdin" },
-							{ id: "ssh_public_key_path", inputChannel: "private_stdin" },
-							{ id: "ssh_known_hosts_path", inputChannel: "private_stdin" },
-						],
+						fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS,
 					},
 					installedRuntime: null,
 					selectedRuntime: null,
@@ -769,11 +799,17 @@ export function createVaultGitHostEnrollment(
 				await writeOwnerFile(activationPath, `${JSON.stringify(activation)}\n`);
 			}
 			if (!selectionUnchanged) {
+				const priorDigest = await distinctPriorDigest(
+					roots,
+					installedRuntime.digest,
+					selectorState,
+					existingSelection,
+				);
 				await selectRuntime(roots, installedRuntime.digest);
 				const selection: RuntimeSelectionRecord = {
 					schema_version: 1,
 					selected_digest: installedRuntime.digest,
-					prior_digest: selectedDigest ?? existingSelection?.selected_digest ?? null,
+					prior_digest: priorDigest,
 				};
 				await writeOwnerFile(selectionPath, `${JSON.stringify(selection)}\n`);
 				return {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,11 @@ import {
 	parseJson,
 	TARGETS_CONTRACT,
 } from "./browser-use-test-helpers";
+import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 import { REAL_VERIFIED_HANDOFF_ENVELOPE } from "./browser-connect-handoff-fixtures";
+
+const operationXdg = makeTempXdgEnv();
+afterAll(() => operationXdg.dispose());
 
 // =========================================================================
 // U1 process-boundary proof: the envelope-derived mcporter transport (R6).
@@ -368,6 +372,7 @@ describe.skipIf(IS_CI && (!mcporterOnPath || !pinnedAdapterPresent))(
 			"/state.json": SELECTED_STATE_PAGE_3,
 		};
 		const runtime = makeRuntime({
+			env: operationXdg.env,
 			now: () => 2_000,
 			readTextFile: async (path) => {
 				const contents = files[path];

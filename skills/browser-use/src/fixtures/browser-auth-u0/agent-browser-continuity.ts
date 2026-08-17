@@ -242,7 +242,7 @@ try {
 
 	process.stdout.write(
 		`${JSON.stringify({
-			adapter_version: "0.31.2",
+			adapter_version: "0.34.0",
 			handoff_verified: true,
 			same_target: afterTarget?.id === target.id,
 			origin_reproved: deliveryResult?.origin_ok === true,

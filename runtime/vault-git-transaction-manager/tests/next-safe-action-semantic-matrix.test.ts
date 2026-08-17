@@ -70,8 +70,6 @@ interface MatrixRow {
 // unavailable today. Mapped to the owning implementation unit for test bookkeeping
 // only — the runtime names product features, never plan units.
 const FEATURE_GATED: Readonly<Record<string, string>> = {
-	preview_host_enrollment_repair: "vault_git_host_enrollment",
-	provide_host_enrollment_inputs: "vault_git_host_enrollment",
 	apply_vault_content_repair: "vault_content_repair",
 	resume_vault_content_promotion: "vault_content_repair",
 };
@@ -513,6 +511,22 @@ const MATRIX: readonly MatrixRow[] = [
 	},
 
 	// --- #390 validation route matrix ---
+	{
+		label: "preview_host_enrollment_repair -> invoke setup sync --domain vault-git --check",
+		action_id: "preview_host_enrollment_repair",
+		expect: {
+			kind: "invoke",
+			argv: ["sync", "--domain", "vault-git", "--check", "--json"],
+		},
+	},
+	{
+		label: "provide_host_enrollment_inputs -> Setup private needs_input",
+		action_id: "provide_host_enrollment_inputs",
+		expect: {
+			kind: "needs_input",
+			input_contract_id: "setup.vault-git.host-enrollment",
+		},
+	},
 	{
 		label: "provision_repository_ssh -> external prerequisite (repository_ssh_owner)",
 		action_id: "provision_repository_ssh",

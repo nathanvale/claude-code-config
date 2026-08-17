@@ -44,9 +44,7 @@ export type VaultGitExternalPrerequisiteOwner =
  * A product capability an action's continuation depends on to be executable.
  * The runtime names product features, never implementation-plan units.
  */
-export type VaultGitRequiredFeature =
-	| "vault_git_host_enrollment"
-	| "vault_content_repair";
+export type VaultGitRequiredFeature = "vault_content_repair";
 
 /** Public transaction-id selector value, `txn_` + 32 hex. */
 const PUBLIC_TRANSACTION_ID = /^txn_[0-9a-f]{32}$/;
@@ -563,7 +561,6 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 		kind: "invoke",
 		summary: "Preview the Host Enrollment repair.",
 		executable: "setup",
-		requiresFeature: "vault_git_host_enrollment",
 		argvPrefix: ["sync", "--domain", "vault-git", "--check"],
 		selectors: [],
 		argvSuffix: ["--json"],
@@ -572,7 +569,6 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 		kind: "needs_input",
 		summary: "Provide the Host Enrollment inputs.",
 		input_contract_id: "setup.vault-git.host-enrollment",
-		requiresFeature: "vault_git_host_enrollment",
 		setupActionArgv: ["sync", "--domain", "vault-git"],
 		// All private: bound only through the private Setup binder's stdin lane,
 		// never the public binder. No argv flags, no public bind template.

@@ -56,6 +56,24 @@ export function makeRuntime(
 			}),
 			stderr: "",
 		}),
+		resolveTargetIdentity: async (input) => {
+			let parsed: URL;
+			try {
+				parsed = new URL(input.expected_url);
+			} catch {
+				return { ok: false, cause: "target-proof-invalid" as const };
+			}
+			return {
+				ok: true,
+				target: {
+					target_id: input.preferred_target_id ?? "cdp-target-test",
+					top_level_url: parsed.href,
+					...(parsed.protocol === "http:" || parsed.protocol === "https:"
+						? { top_level_origin: parsed.origin }
+						: {}),
+				},
+			};
+		},
 		...overrides,
 	});
 }

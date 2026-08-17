@@ -412,6 +412,64 @@ describe("Vault Git Host Enrollment", () => {
 		expect(await realpath(selectorPath)).toContain(first.selectedRuntime.digest);
 	});
 
+	test("a stale Runtime Selection never persists itself as its own prior", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
+		temporaryRoots.push(root);
+		const fixture = await createEnrollmentFixture(root);
+		const selectionPath = join(fixture.configRoot, "runtime-selection.json");
+		const readSelection = async () =>
+			JSON.parse(await readFile(selectionPath, "utf8")) as {
+				selected_digest: string;
+				prior_digest: string | null;
+			};
+
+		const first = await fixture.enrollment.apply(fixture.privateInput);
+		if (first.state !== "applied") throw new Error("expected first selection");
+		await rm(fixture.selectorPath);
+		const reselected = await fixture.enrollment.apply(fixture.privateInput);
+		expect(reselected.state).toBe("applied");
+		const afterReselect = await readSelection();
+		expect(afterReselect.selected_digest).toBe(first.selectedRuntime.digest);
+		expect(afterReselect.prior_digest).toBeNull();
+
+		await commitRuntimeSource(fixture.sourceRepoRoot, fixture.runtimeEntrypoint, "runtime two");
+		const second = await fixture.enrollment.apply(fixture.privateInput);
+		if (second.state !== "applied") throw new Error("expected upgraded selection");
+		await rm(fixture.selectorPath);
+		const reselectedUpgrade = await fixture.enrollment.apply(fixture.privateInput);
+		expect(reselectedUpgrade.state).toBe("applied");
+		const afterUpgradeReselect = await readSelection();
+		expect(afterUpgradeReselect.selected_digest).toBe(second.selectedRuntime.digest);
+		expect(afterUpgradeReselect.prior_digest).toBe(first.selectedRuntime.digest);
+		expect(afterUpgradeReselect.prior_digest).not.toBe(
+			afterUpgradeReselect.selected_digest,
+		);
+
+		const rolledBack = await fixture.enrollment.rollback(false);
+		expect(rolledBack).toEqual({
+			state: "applied",
+			station: "vault_git.rollback_applied",
+			selectedRuntime: first.selectedRuntime,
+			priorRuntime: second.selectedRuntime,
+		});
+
+		await writeFile(
+			selectionPath,
+			`${JSON.stringify({
+				schema_version: 1,
+				selected_digest: first.selectedRuntime.digest,
+				prior_digest: first.selectedRuntime.digest,
+			})}\n`,
+			{ mode: 0o600 },
+		);
+		await expect(fixture.enrollment.rollback(false)).rejects.toThrow(
+			"prior Runtime Selection is unavailable",
+		);
+		expect(await realpath(fixture.selectorPath)).toContain(
+			first.selectedRuntime.digest,
+		);
+	});
+
 	test("foreign selector is preserved and blocks enrollment", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
 		temporaryRoots.push(root);

@@ -17,21 +17,25 @@ attachment.
   `task run --intent <id>` → `run status`).
 - Open-ended task: read `browser-connect dashboard --json`, select a
   connectable adapter from its evidence, then run
-  `browser-connect connect <adapter> --json`.
+  `browser-connect connect <adapter> --json`. Save the verified handoff, run
+  `browser-use targets list --mode handoff-bound --handoff <path> --json`, then
+  dispatch supported work through `browser-use operate ... --handoff <path>`.
 - Open-ended login wall: keep the verified handoff and run
   `browser-use auth login --help` only to discover the contract and required
   invocation. Then invoke the admitted `browser-use auth login` command and
   follow its typed continuation; never create a Runbook only to access auth.
-- Read the selected adapter's native help or tool schema. Use that surface to
-  perform and prove the requested outcome. Return only bounded outcome and
-  artifact references through Browser Use.
+- Use Browser Use's custody-aware task, runbook, auth, or operate command to
+  perform and prove the requested outcome. An unsupported operation remains a
+  typed product gap; direct adapter or raw CDP commands are outside Browser
+  Use-mediated Target Lease and Browser Lane enforcement.
 - Never copy adapter commands, response parsing, tab or page mechanics,
   navigation, actions, snapshots, screenshots, findings, or retries into this
   skill or Browser Use runtime. Owner: `docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md`.
 - `browser-use --help` — all command families; every leaf has `--help`.
-- Connection attaches automatically on `task run` / `runbook run`. Open-ended
-  native delegation uses browser-connect directly because it owns attachment.
-  Envelopes and repair paths stay owned by `runtime/browser-connect`.
+- Connection attaches automatically on `task run` / `runbook run`. Browser
+  Connect owns open-ended attachment; Browser Use owns custody admission and
+  operation outcomes. Envelopes and repair paths stay owned by
+  `runtime/browser-connect`.
 - For Runbook or Reviewed Action authoring and activation, read
   `../../docs/runbooks/authoring-runbooks.md` before mutation.
 - For browser-use project work, read `references/coding-task-tracker.md` before

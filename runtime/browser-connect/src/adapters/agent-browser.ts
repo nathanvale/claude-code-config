@@ -223,9 +223,15 @@ export const agentBrowserDefinition = {
 		try {
 			const result = await runtime.runCommand({
 				command: resolution.path,
-				// Read-only invocation: attach via injected endpoint and snapshot
-				// (no navigation, no mutation) through the adapter's own binary.
-				args: [...injection.argv, "--session", sessionName, "snapshot"],
+				// Connection-only invocation: prove the injected CDP endpoint through
+				// the adapter's own binary without binding or creating a page target.
+				args: [
+					...injection.argv,
+					"--session",
+					sessionName,
+					"get",
+					"cdp-url",
+				],
 				timeoutMs: PROBE_TIMEOUT_MS,
 			});
 			if (result.timedOut) {
@@ -250,7 +256,7 @@ export const agentBrowserDefinition = {
 						route,
 						probe_executable: resolution.path,
 					},
-					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and returned its CDP endpoint without binding a page target.`,
 				};
 			}
 		} catch (error) {

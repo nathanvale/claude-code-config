@@ -1157,7 +1157,7 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 		expect(data.attachment.probe_executable).toBe("/fake/bin/agent-browser");
 
 		const probe = calls.commands.find((command) =>
-			command.args.includes("snapshot"),
+			command.args.includes("cdp-url"),
 		);
 		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
 		expect(sessionFlag).toBeGreaterThanOrEqual(0);
@@ -1173,7 +1173,8 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 			expect.stringMatching(/^ws:\/\//),
 			"--session",
 			probeSessionName,
-			"snapshot",
+			"get",
+			"cdp-url",
 		]);
 
 		const release = calls.commands.find((command) =>

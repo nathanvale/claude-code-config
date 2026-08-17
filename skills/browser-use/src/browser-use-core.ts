@@ -265,7 +265,14 @@ export function truncateText(value: string, maxLength: number): string {
 // alone would wrongly admit it; the discovery filter drops any non-`page` type
 // (R32, DDA-D28). Absent on the chrome-devtools-mcp text envelope and the older
 // `{pages:[…]}` fakes, so an absent type is treated as a navigable page.
-export type RawPage = { id?: string; title?: string; url?: string; type?: string };
+export type RawPage = {
+	id?: string;
+	/** Canonical CDP target identity when the adapter returns it separately. */
+	cdp_target_id?: string;
+	title?: string;
+	url?: string;
+	type?: string;
+};
 
 // Project one raw adapter page into a display-safe Browser Target Candidate. The
 // raw id is used only to derive a per-envelope candidate id (hashed, never

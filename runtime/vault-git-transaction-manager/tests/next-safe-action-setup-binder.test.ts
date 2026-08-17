@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	parseSetupInvocation,
+	projectSetupCommandDiscoveryTree,
+} from "../../setup/src/command-contract.ts";
+import {
 	bindVaultGitPrivateSetupInput,
+	projectVaultGitNextSafeAction,
 	type VaultGitSetupDiscoveryResult,
 	type VaultGitSetupResult,
 	type VaultGitSetupSpawn,
@@ -214,6 +219,76 @@ describe("vault-git private Setup binder", () => {
 			).rejects.toThrow(/divergen|contract|field|channel|argv/i);
 			expect(calls).toHaveLength(0);
 		}
+	});
+
+	test("the discovered Setup contract binds the exact private-stdin invocation", async () => {
+		const sync = projectSetupCommandDiscoveryTree().commands.sync;
+		const contract = sync?.input_contracts?.find(
+			(candidate) => candidate.id === "setup.vault-git.host-enrollment",
+		);
+		if (!contract) {
+			throw new Error(
+				"Setup discovery does not publish the Host Enrollment input contract",
+			);
+		}
+		expect(contract.action_id).toBe("provide_host_enrollment_inputs");
+
+		const { spawn, calls } = recordingSpawn();
+		const result = await bindVaultGitPrivateSetupInput(
+			{ action_id: contract.action_id },
+			VALID_VALUES,
+			{
+				discovery: {
+					action_argv: contract.action_argv,
+					input_contract_id: contract.id,
+					fields: contract.fields,
+				},
+				spawn,
+			},
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].argv).toEqual([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--input-stdin",
+			"setup.vault-git.host-enrollment",
+		]);
+		expect(calls[0].stdin).toBe(EXPECTED_STDIN);
+		for (const secret of [SECRET_IDENTITY, SECRET_PUBLIC, SECRET_KNOWN_HOSTS]) {
+			expect(calls[0].argv.join(" ")).not.toContain(secret);
+			expect(JSON.stringify(result)).not.toContain(secret);
+		}
+
+		expect(parseSetupInvocation([...calls[0].argv])).toMatchObject({
+			command: "sync",
+			domain: "vault-git",
+			inputStdin: "setup.vault-git.host-enrollment",
+		});
+		expect(sync?.mutation).toBe("write");
+		expect(sync?.side_effects).toContain("write");
+		expect(sync?.flags["--input-stdin"]).toMatchObject({
+			type: "enum",
+			values: ["setup.vault-git.host-enrollment"],
+		});
+	});
+
+	test("the projected Setup preview invoke is parser-accepted by Setup", () => {
+		const projection = projectVaultGitNextSafeAction({
+			action_id: "preview_host_enrollment_repair",
+		});
+		expect(projection.availability).toBe("available");
+		const continuation = projection.continuation;
+		if (continuation.kind !== "invoke") {
+			throw new Error("expected an invoke continuation");
+		}
+		expect(continuation.executable).toBe("setup");
+		expect(parseSetupInvocation([...continuation.argv])).toMatchObject({
+			command: "sync",
+			domain: "vault-git",
+			check: true,
+			json: true,
+		});
 	});
 
 	test("refuses a public (non-private) contract through the Setup lane before spawning", async () => {

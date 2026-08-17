@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
@@ -28,6 +28,16 @@ import {
 	connectFailureEnvelope,
 	verifiedHandoffEnvelope,
 } from "./browser-connect-handoff-fixtures";
+import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
+import { openBrowserUsePaths } from "./browser-use-paths";
+import {
+	acquireBrowserLaneLease,
+	acquireTargetOperationLease,
+	browserAuthorityIdOf,
+	releaseBrowserLaneLease,
+	releaseRunTargetOwnership,
+	releaseTargetOperationLease,
+} from "./browser-use-browser-custody";
 
 // =========================================================================
 // U7 Browser Operation Front Door (envelope-era contract from migration U1)
@@ -57,8 +67,30 @@ const FIXTURE_TARGET_ENVELOPE_ID = targetEnvelopeIdOf({
 	handoffEvidenceId: FIXTURE_EVIDENCE_ID,
 });
 
+const operationXdgCleanups: Array<() => void> = [];
+afterAll(() => {
+	for (const cleanup of operationXdgCleanups) cleanup();
+});
+
 function operationCandidateId(pageId = "1"): string {
 	return candidateIdOf(FIXTURE_TARGET_ENVELOPE_ID, ["adapter_page_id", pageId]);
+}
+
+const FIXTURE_BROWSER_AUTHORITY = browserAuthorityIdOf({
+	environmentName: FIXTURE_ENVELOPE.data.environment.name,
+	environmentProfile: FIXTURE_ENVELOPE.data.environment.profile,
+	endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http,
+	endpointWs: FIXTURE_ENVELOPE.data.endpoint.ws,
+});
+
+async function custodyDeps(runtime: BrowserUseRuntime) {
+	const opened = await openBrowserUsePaths(runtime.platformFs, runtime.env);
+	if (!opened.ok) throw new Error(`paths refused: ${opened.refusal.code}`);
+	return {
+		fs: runtime.platformFs,
+		paths: opened.paths,
+		clock: runtime.now,
+	};
 }
 
 function selectedStateFile(overrides: Record<string, unknown> = {}): string {
@@ -81,7 +113,12 @@ function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 
 function operationRuntime(input: {
 	files?: Record<string, string>;
-	pages?: Array<{ id?: string; url?: string; title?: string }>;
+	pages?: Array<{
+		id?: string;
+		targetId?: string;
+		url?: string;
+		title?: string;
+	}>;
 	adapter?: "agent-browser" | "chrome-devtools-mcp";
 	env?: Record<string, string | undefined>;
 	operationResult?: McporterCommandResult;
@@ -109,8 +146,10 @@ function operationRuntime(input: {
 	const pages = input.pages ?? [
 		{ id: "1", url: "https://example.com/app", title: "App" },
 	];
+	const xdg = makeTempXdgEnv();
+	operationXdgCleanups.push(xdg.dispose);
 	const runtime = makeRuntime({
-		env: input.env ?? {},
+		env: { ...xdg.env, ...(input.env ?? {}) },
 		now: input.now ?? (() => 2_000),
 		readTextFile: async (path) => {
 			if (path in files) return files[path];
@@ -140,10 +179,20 @@ function operationRuntime(input: {
 						data: {
 							tabs: pages.map((page) => ({
 								tabId: page.id,
+								targetId:
+									page.targetId ?? `cdp-target-${page.id ?? "unknown"}`,
 								url: page.url,
 								title: page.title,
 							})),
 						},
+					}),
+				);
+			}
+			if (vector.includes("get") && vector.includes("url")) {
+				return okCommand(
+					JSON.stringify({
+						success: true,
+						data: { url: pages[0]?.url ?? "https://example.com/app" },
 					}),
 				);
 			}
@@ -169,6 +218,75 @@ function operationRuntime(input: {
 }
 
 describe("U7 operation gates", () => {
+	test("a foreign Target Lease refuses a chrome snapshot before operation dispatch", async () => {
+		const { runtime, calls } = operationRuntime();
+		const deps = await custodyDeps(runtime);
+		const held = await acquireTargetOperationLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: "other-run",
+			adapterId: "agent-browser",
+			rawTargetId: "cdp-target-test",
+			operation: "read",
+			ttlMs: 30_000,
+			ownershipEvidence: {
+				kind: "adapter-creation-receipt",
+				adapter_id: "agent-browser",
+				run_id: "other-run",
+				raw_target_id: "cdp-target-test",
+			},
+		});
+		if (!held.ok) throw new Error("fixture target lease failed");
+		await releaseTargetOperationLease(deps, held.lease);
+		try {
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_owned_by_other_run",
+			});
+			expect(
+				calls.some((call) => call.args.includes("take_snapshot")),
+			).toBe(false);
+		} finally {
+			await releaseRunTargetOwnership(deps, "other-run");
+		}
+	});
+
+	test("a held Browser Lane refuses screenshot capture before dispatch", async () => {
+		const { runtime, calls } = operationRuntime({ adapter: "agent-browser" });
+		const deps = await custodyDeps(runtime);
+		const held = await acquireBrowserLaneLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: "other-run",
+			mutation: "domain-policy",
+			ttlMs: 30_000,
+		});
+		if (!held.ok) throw new Error("fixture Browser Lane failed");
+		try {
+			const result = await runForTest(
+				[
+					"operate",
+					"screenshot",
+					"--out",
+					"shot.png",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "browser_lane_held",
+			});
+			expect(calls.some((call) => call.args.includes("screenshot"))).toBe(false);
+		} finally {
+			await releaseBrowserLaneLease(deps, held.lease);
+		}
+	});
+
 	test("operate requires --handoff before any transport", async () => {
 		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(["operate", "snapshot", "--json"], runtime);
@@ -556,7 +674,7 @@ describe("U7 operation success and transport", () => {
 		expect(commandVector(operationCloseCall)).not.toContain("--cdp");
 	});
 
-	test("keeps successful operation truth when terminal release fails", async () => {
+	test("blocks successful operation truth when terminal release fails", async () => {
 		const { runtime } = operationRuntime({
 			adapter: "agent-browser",
 			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
@@ -575,10 +693,10 @@ describe("U7 operation success and transport", () => {
 			runtime,
 		);
 
-		expect(result.exitCode).toBe(0);
-		expect(parseJson(result.stdout).data).toMatchObject({
-			snapshot: { text: "Root\nButton" },
-			release: { released: false, cause: "command-failed" },
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "browser_operation_transport_failed" },
+			data: { release: { released: false, cause: "command-failed" } },
 		});
 	});
 
@@ -635,7 +753,7 @@ describe("U7 operation success and transport", () => {
 				"--session",
 				`browser-use-${FIXTURE_RUN_ID}`,
 				"tab",
-				"t1",
+				"cdp-target-t1",
 				"--json",
 			],
 			[
@@ -644,6 +762,18 @@ describe("U7 operation success and transport", () => {
 				FIXTURE_ENVELOPE.data.endpoint.ws,
 				"--session",
 				`browser-use-${FIXTURE_RUN_ID}`,
+				"--pin-tab",
+				"get",
+				"url",
+				"--json",
+			],
+			[
+				FIXTURE_ENVELOPE.data.attachment.probe_executable,
+				"--cdp",
+				FIXTURE_ENVELOPE.data.endpoint.ws,
+				"--session",
+				`browser-use-${FIXTURE_RUN_ID}`,
+				"--pin-tab",
 				"snapshot",
 				"--json",
 			],
@@ -767,8 +897,8 @@ describe("U7 operation success and transport", () => {
 				code: "browser_operation_transport_failed",
 				...(message ? { message } : {}),
 			});
-			// Discovery list + release, activation + snapshot, then operation release.
-			expect(calls).toHaveLength(7);
+			// Discovery list + release, activation + strict proof + snapshot, then operation release.
+			expect(calls).toHaveLength(8);
 			// Activation succeeded, so the failure envelope truthfully reports the
 			// window-focus side effect.
 			expect(json.data).toMatchObject({ side_effects: { focus: true } });
@@ -776,13 +906,15 @@ describe("U7 operation success and transport", () => {
 		}
 	});
 
-	test("agent-browser maps an unstartable operation spawn to dependency-missing", async () => {
+	test("agent-browser discovery release failure stops before custody or operation spawn", async () => {
 		// Discovery (tab list) works; every subsequent native spawn throws, as a
 		// missing agent-browser binary would. The lane maps the thrown spawn to
 		// browser_operation_dependency_missing instead of leaking the throw.
 		const calls: McporterCommandInput[] = [];
+		const xdg = makeTempXdgEnv();
+		operationXdgCleanups.push(xdg.dispose);
 		const runtime = makeRuntime({
-			env: {},
+			env: xdg.env,
 			now: () => 2_000,
 			readTextFile: async (path) => {
 				if (path === "/h.json") {
@@ -795,18 +927,23 @@ describe("U7 operation success and transport", () => {
 			runCommand: async (call) => {
 				calls.push(call);
 				const vector = commandVector(call);
-				if (vector.includes("tab") && vector.includes("list")) {
+			if (vector.includes("tab") && vector.includes("list")) {
 					return okCommand(
 						JSON.stringify({
 							success: true,
 							data: {
 								tabs: [
-									{ tabId: "t1", url: "https://example.com/app", title: "App" },
+									{
+										tabId: "t1",
+										targetId: "cdp-target-t1",
+										url: "https://example.com/app",
+										title: "App",
+									},
 								],
 							},
 						}),
 					);
-				}
+			}
 				throw new Error("spawn agent-browser ENOENT");
 			},
 		});
@@ -814,13 +951,13 @@ describe("U7 operation success and transport", () => {
 			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
-		expect(result.exitCode).toBe(1);
+		expect(result.exitCode).toBe(20);
 		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "browser_operation_dependency_missing",
+			code: "browser_operation_transport_failed",
 		});
-		// Both terminal seams attempt release even when the fake throws: discovery
-		// list + release, then activation + operation release.
-		expect(calls).toHaveLength(4);
+		// Discovery list + its failed exact release. No custody or operation call.
+		expect(calls).toHaveLength(2);
+		expect(calls.some((call) => call.args.includes("cdp-target-t1"))).toBe(false);
 		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 	});
 

@@ -246,7 +246,17 @@ const RESPONSES: readonly string[] = [
 ];
 let responseIndex = 0;
 const runtime: AgentBrowserExecutionRuntime = {
-	runCommand: async () => {
+	runCommand: async (input) => {
+		if (input.args[0] === "--session" && input.args.at(-2) === "close") {
+			return { exitCode: 0, stdout: adapterSuccess({ closed: true }), stderr: "" };
+		}
+		if (input.args[0] === "session" && input.args[1] === "list") {
+			return {
+				exitCode: 0,
+				stdout: adapterSuccess({ sessions: [] }),
+				stderr: "",
+			};
+		}
 		const stdout = RESPONSES[responseIndex++] ?? adapterSuccess({});
 		return { exitCode: 0, stdout, stderr: "" };
 	},

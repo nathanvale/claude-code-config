@@ -296,8 +296,15 @@ async function readVaultGitHostEnrollmentInput(
 	runtime: SetupCliRuntime,
 ): Promise<VaultGitHostEnrollmentInput> {
 	const source = await runtime.readPrivateStdin?.();
-	if (source === undefined || source.length > 16_384) {
+	if (source === undefined) {
 		throw new CliUsageError("Private Host Enrollment input is unavailable");
+	}
+	// Distinct oversized diagnosis names only the limit; the content, its exact
+	// size, and any derived private data stay out of every output stream.
+	if (source.length > 16_384) {
+		throw new CliUsageError(
+			"Private Host Enrollment input exceeds the 16,384-byte limit",
+		);
 	}
 	let parsed: unknown;
 	try {

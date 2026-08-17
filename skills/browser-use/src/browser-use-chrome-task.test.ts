@@ -138,6 +138,18 @@ function baseTask(overrides: Partial<ChromeTask> = {}): ChromeTask {
 }
 
 describe("Chrome DevTools MCP task lane", () => {
+	test("refuses when a numeric page id reorders away from the leased exact URL", async () => {
+		const runtime = runtimeFor([{ stdout: pagesListing() }]);
+		const result = await executeChromeTask(
+			runtime,
+			baseTask({ expected_target_url: "https://example.test/other" }),
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			code: "chrome_task_target_unavailable",
+		});
+	});
+
 	test("proves the target page origin, reads console + network, returns bounded evidence", async () => {
 		const runtime = runtimeFor([
 			{ stdout: pagesListing() },

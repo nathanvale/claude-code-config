@@ -82,6 +82,28 @@ import {
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import { deriveSessionName } from "./browser-use-adapter-session-lease";
 import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
+import type { RunStoreDeps } from "./browser-use-runs";
+import {
+	type BrowserUsePathRefusal,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import {
+	type BrowserCustodyRefusalCode,
+	type BrowserLaneLease,
+	type TargetOperationLease,
+	acquireBrowserLaneLease,
+	acquireTargetOperationLease,
+	browserAuthorityIdOf,
+	heartbeatTargetOperationLease,
+	releaseBrowserLaneLease,
+	releaseRunTargetOwnership,
+	releaseTargetOperationLease,
+	targetRefOf,
+} from "./browser-use-browser-custody";
+import type {
+	BrowserUseCdpTargetIdentity,
+	BrowserUseTargetProofRefusalCause,
+} from "./browser-use-target-proof";
 
 // ---------------------------------------------------------------------------
 // Browser Operations (plan U7, evidence re-based in migration U1).
@@ -122,7 +144,20 @@ type OperationSideEffects = {
 type OperationTargetEntry = {
 	candidate: BrowserTargetCandidate;
 	adapterPageRef?: string;
+	canonicalTargetId?: string;
+	rawUrl: string;
 };
+
+/** Exact browser-level target resolver injected by the CLI driver. */
+export type BrowserOperationTargetIdentityResolver = (input: {
+	handoff: HandoffFacts;
+	expectedUrl: string;
+	allowedOrigins: readonly string[];
+	preferredTargetId?: string;
+}) => Promise<
+	| { ok: true; target: BrowserUseCdpTargetIdentity }
+	| { ok: false; cause: BrowserUseTargetProofRefusalCause }
+>;
 
 /** Run-scoped PNG target owned by the screenshot Browser Operation. */
 export type ScreenshotArtifact = {
@@ -168,6 +203,12 @@ export async function captureBrowserUseScreenshotMedia(input: {
 	handoff: HandoffFacts;
 	adapterPageRef: string;
 	artifact: ScreenshotArtifact;
+	custody: {
+		deps: RunStoreDeps;
+		rawTargetId: string;
+		targetLease: TargetOperationLease;
+		ttlMs: number;
+	};
 }): Promise<BrowserUseScreenshotMediaCaptureResult> {
 	if (
 		!authorizesOperationClass(
@@ -193,15 +234,59 @@ export async function captureBrowserUseScreenshotMedia(input: {
 			message: directory.failure.message,
 		};
 	}
-	const captured = await runOperationLane({
-		runtime: input.runtime,
-		handoff: input.handoff,
-		adapterPageRef: input.adapterPageRef,
-		operation: "screenshot",
-		screenshot: input.artifact,
-		verbose: false,
-		bringToFront: false,
+	const authorityId = browserAuthorityIdOf(input.handoff);
+	if (
+		input.custody.targetLease.authority_id !== authorityId ||
+		input.custody.targetLease.run_id !== input.handoff.runId ||
+		input.custody.targetLease.target_ref !==
+			targetRefOf(input.custody.rawTargetId)
+	) {
+		return {
+			ok: false,
+			code: "target_lease_lost",
+			message:
+				"Screenshot capture requires the exact active Target Lease for this Browser target.",
+		};
+	}
+	const targetLease = await heartbeatTargetOperationLease(
+		input.custody.deps,
+		input.custody.targetLease,
+		{ ttlMs: input.custody.ttlMs },
+	);
+	if (!targetLease.ok) {
+		return {
+			ok: false,
+			code: targetLease.code,
+			message: targetLease.message,
+		};
+	}
+	const browserLane = await acquireBrowserLaneLease(input.custody.deps, {
+		authorityId,
+		runId: input.handoff.runId,
+		mutation: "capture",
+		ttlMs: 120_000,
 	});
+	if (!browserLane.ok) {
+		return {
+			ok: false,
+			code: browserLane.code,
+			message: browserLane.message,
+		};
+	}
+	let captured: Awaited<ReturnType<typeof runOperationLane>>;
+	try {
+		captured = await runOperationLane({
+			runtime: input.runtime,
+			handoff: input.handoff,
+			adapterPageRef: input.adapterPageRef,
+			operation: "screenshot",
+			screenshot: input.artifact,
+			verbose: false,
+			bringToFront: false,
+		});
+	} finally {
+		await releaseBrowserLaneLease(input.custody.deps, browserLane.lease);
+	}
 	return captured.ok
 		? {
 				ok: true,
@@ -246,6 +331,8 @@ type ResolvedOperationTarget = {
 	candidate: BrowserTargetCandidate;
 	source: "hints" | "selected_state" | "single_candidate";
 	adapterPageRef: string;
+	canonicalTargetId?: string;
+	rawUrl: string;
 };
 
 export async function runOperate(input: {
@@ -257,6 +344,7 @@ export async function runOperate(input: {
 	runIdExplicit: boolean;
 	diagnosticVerbose: boolean;
 	durationMs: () => number;
+	resolveTargetIdentity: BrowserOperationTargetIdentityResolver;
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	const flags = parsed.flagValues;
@@ -324,16 +412,97 @@ export async function runOperate(input: {
 	if (artifactDirectory && !artifactDirectory.ok) return fail(artifactDirectory.failure);
 
 	const bringToFront = flags["--bring-to-front"] !== undefined;
-	const operationCall = await runOperationLane({
-		runtime,
-		handoff: binding.context.handoff,
-		adapterPageRef: target.target.adapterPageRef,
-		operation: operationInputs.inputs.operation,
-		screenshot: operationInputs.inputs.screenshot,
-		viewport: operationInputs.inputs.viewport,
-		verbose: input.diagnosticVerbose,
-		bringToFront,
+	const targetUrl = new URL(target.target.rawUrl);
+	const targetIdentity =
+		target.target.canonicalTargetId === undefined
+			? await input.resolveTargetIdentity({
+					handoff: binding.context.handoff,
+					expectedUrl: target.target.rawUrl,
+					allowedOrigins: [targetUrl.origin],
+				})
+			: {
+					ok: true as const,
+					target: {
+						target_id: target.target.canonicalTargetId,
+						top_level_url: target.target.rawUrl,
+						top_level_origin: targetUrl.origin,
+					},
+				};
+	if (!targetIdentity.ok) {
+		return fail(operationTargetProofFailure(targetIdentity.cause));
+	}
+	const openedPaths = await openBrowserUsePaths(runtime.platformFs, runtime.env);
+	if (!openedPaths.ok) return fail(operationPathFailure(openedPaths.refusal));
+	const custodyDeps: RunStoreDeps = {
+		fs: runtime.platformFs,
+		paths: openedPaths.paths,
+		clock: runtime.now,
+	};
+	const targetLease = await acquireTargetOperationLease(custodyDeps, {
+		authorityId: browserAuthorityIdOf(binding.context.handoff),
+		runId,
+		adapterId: binding.context.handoff.adapter,
+		rawTargetId: targetIdentity.target.target_id,
+		operation:
+			operationInputs.inputs.operation === "emulate" ? "action" : "read",
+		ttlMs: 120_000,
+		ownershipEvidence: {
+			kind: "explicit-adoption",
+			adapter_id: binding.context.handoff.adapter,
+			run_id: runId,
+			raw_target_id: targetIdentity.target.target_id,
+			target_envelope_id: targetContext.context.targetEnvelopeId,
+			target_candidate_id: target.target.candidate.candidate_id,
+			target_candidate_identity: {
+				kind: "adapter-page-id",
+				raw_adapter_page_id: target.target.adapterPageRef,
+			},
+		},
 	});
+	if (!targetLease.ok) return fail(operationCustodyFailure(targetLease));
+	let browserLane: BrowserLaneLease | undefined;
+	const browserMutation =
+		operationInputs.inputs.operation === "screenshot"
+			? "capture"
+			: operationInputs.inputs.operation === "emulate"
+				? "viewport"
+				: undefined;
+	if (browserMutation !== undefined) {
+		const acquiredLane = await acquireBrowserLaneLease(custodyDeps, {
+			authorityId: browserAuthorityIdOf(binding.context.handoff),
+			runId,
+			mutation: browserMutation,
+			ttlMs: 120_000,
+		});
+		if (!acquiredLane.ok) {
+			await releaseTargetOperationLease(custodyDeps, targetLease.lease);
+			await releaseRunTargetOwnership(custodyDeps, runId);
+			return fail(operationCustodyFailure(acquiredLane));
+		}
+		browserLane = acquiredLane.lease;
+	}
+	let operationCall: Awaited<ReturnType<typeof runOperationLane>>;
+	try {
+		operationCall = await runOperationLane({
+			runtime,
+			handoff: binding.context.handoff,
+			adapterPageRef:
+				binding.context.handoff.adapter === "agent-browser"
+					? (target.target.canonicalTargetId ?? target.target.adapterPageRef)
+					: target.target.adapterPageRef,
+			operation: operationInputs.inputs.operation,
+			screenshot: operationInputs.inputs.screenshot,
+			viewport: operationInputs.inputs.viewport,
+			verbose: input.diagnosticVerbose,
+			bringToFront,
+		});
+	} finally {
+		if (browserLane !== undefined) {
+			await releaseBrowserLaneLease(custodyDeps, browserLane);
+		}
+		await releaseTargetOperationLease(custodyDeps, targetLease.lease);
+		await releaseRunTargetOwnership(custodyDeps, runId);
+	}
 	if (!operationCall.ok) {
 		return fail(
 			operationCall.failure,
@@ -488,6 +657,14 @@ async function loadOperationTargetContext(
 	if (!discovery.ok) {
 		return { ok: false, failure: operationFailureFromDiscovery(discovery.failure) };
 	}
+	if (discovery.release !== undefined) {
+		return {
+			ok: false,
+			failure: operationTransportExitedFailure(
+				"The Agent Browser discovery session could not be released; operation custody was not admitted.",
+			),
+		};
+	}
 
 	const targetEnvelopeId = targetEnvelopeIdOf({
 		runId: binding.handoff.runId,
@@ -578,11 +755,13 @@ async function resolveOperationTargetEntry(input: {
 
 	return {
 		ok: true,
-		target: {
-			candidate: resolution.candidate,
-			source: resolution.source,
-			adapterPageRef: targetEntry.adapterPageRef,
-		},
+			target: {
+				candidate: resolution.candidate,
+				source: resolution.source,
+				adapterPageRef: targetEntry.adapterPageRef,
+				canonicalTargetId: targetEntry.canonicalTargetId,
+				rawUrl: targetEntry.rawUrl,
+			},
 	};
 }
 
@@ -649,7 +828,50 @@ function operationTargetEntries(
 		.map((page, index) => ({
 			candidate: toCandidate(page, index, targetEnvelopeId, true),
 			adapterPageRef: page.id === "" ? undefined : page.id,
+			canonicalTargetId: page.cdp_target_id,
+			rawUrl: page.url as string,
 		}));
+}
+
+function operationTargetProofFailure(
+	cause: BrowserUseTargetProofRefusalCause,
+): OperationFailure {
+	return {
+		code: cause,
+		message:
+			cause === "origin-mismatch"
+				? "The resolved CDP target is no longer on the selected allowed origin."
+				: "The selected adapter page could not be resolved to exactly one canonical CDP target.",
+		actionId: "inspect_operation_diagnostics",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "retry",
+	};
+}
+
+function operationPathFailure(refusal: BrowserUsePathRefusal): OperationFailure {
+	return {
+		code: refusal.code,
+		message: refusal.message,
+		actionId: "inspect_operation_diagnostics",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	};
+}
+
+function operationCustodyFailure(input: {
+	code: BrowserCustodyRefusalCode;
+	message: string;
+}): OperationFailure {
+	return {
+		code: input.code,
+		message: input.message,
+		actionId: "inspect_operation_diagnostics",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability:
+			input.code === "target_lease_held" || input.code === "browser_lane_held"
+				? "retry"
+				: "repair_state",
+	};
 }
 
 type OperationStateLoad =
@@ -982,21 +1204,32 @@ async function runAgentBrowserOperation(
 	);
 	return release.released
 		? operationOutcome
-		: { ...operationOutcome, release };
+		: !operationOutcome.ok
+			? { ...operationOutcome, release }
+		: {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					"The owning Agent Browser operation session could not be released; inspect custody before continuing.",
+				),
+				focus: true,
+				release,
+			};
 }
 
 async function runAgentBrowserOperationSession(
 	input: OperationLaneInput,
 ): Promise<OperationLaneResult> {
-	const baseArgs = [
+	const baseArgs = (strictTabBinding: boolean) => [
 		"--cdp",
 		input.handoff.endpointWs,
 		"--session",
 		deriveSessionName(input.handoff.runId),
+		...(strictTabBinding ? ["--pin-tab"] : []),
 	];
 	const call = async (
 		args: string[],
 		label: string,
+		strictTabBinding = true,
 	): Promise<
 		| { ok: true; result: McporterCommandResult; data: unknown }
 		| { ok: false; failure: OperationFailure }
@@ -1005,7 +1238,7 @@ async function runAgentBrowserOperationSession(
 		try {
 			result = await input.runtime.runCommand({
 				command: input.handoff.probeExecutable,
-				args: [...baseArgs, ...args, "--json"],
+				args: [...baseArgs(strictTabBinding), ...args, "--json"],
 				timeoutMs: 30_000,
 			});
 		} catch {
@@ -1057,12 +1290,7 @@ async function runAgentBrowserOperationSession(
 			};
 		}
 		if (envelope.success !== true) {
-			const errorText =
-				typeof envelope.error === "string" && envelope.error.trim() !== ""
-					? redactUnsafeText(
-							envelope.error.replaceAll(input.adapterPageRef, "[redacted]"),
-						)
-					: "The adapter reported a failure response.";
+			const errorText = "The adapter reported a failure response.";
 			return {
 				ok: false,
 				failure: operationTransportExitedFailure(errorText),
@@ -1071,9 +1299,17 @@ async function runAgentBrowserOperationSession(
 		return { ok: true, result, data: envelope.data };
 	};
 
-	const activated = await call(["tab", input.adapterPageRef], "tab activation");
+	const activated = await call(
+		["tab", input.adapterPageRef],
+		"canonical target activation",
+		false,
+	);
 	if (!activated.ok) {
 		return { ok: false, failure: activated.failure, focus: false };
+	}
+	const pinnedProof = await call(["get", "url"], "strict target proof");
+	if (!pinnedProof.ok) {
+		return { ok: false, failure: pinnedProof.failure, focus: true };
 	}
 	if (input.operation === "screenshot") {
 		const screenshotArgs = [

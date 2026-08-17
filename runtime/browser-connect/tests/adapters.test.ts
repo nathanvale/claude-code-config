@@ -335,7 +335,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			respond: (input) =>
 				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
 					exitCode: 0,
-					stdout: "snapshot",
+					stdout: "cdp-url",
 					stderr: "",
 				},
 		});
@@ -366,7 +366,8 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			ENDPOINT.ws,
 			"--session",
 			probeSessionName,
-			"snapshot",
+			"get",
+			"cdp-url",
 		]);
 		expect(log.commands[1]?.args).toEqual([
 			"--session",
@@ -397,7 +398,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			expect(result.failureClass).toBe("attachment-failed");
 		}
 		const probeCall = log.commands.find((command) =>
-			command.args.includes("snapshot"),
+			command.args.includes("cdp-url"),
 		);
 		const sessionFlag = probeCall?.args.indexOf("--session") ?? -1;
 		const probeSessionName = probeCall?.args[sessionFlag + 1];

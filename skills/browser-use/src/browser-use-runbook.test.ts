@@ -191,6 +191,12 @@ function runtimeFor(
 		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
 			calls.push([input.command, ...input.args]);
+			if (input.args[0] === "--session" && input.args.at(-2) === "close") {
+				return { exitCode: 0, stdout: json({ closed: true }), stderr: "" };
+			}
+			if (input.args[0] === "session" && input.args[1] === "list") {
+				return { exitCode: 0, stdout: json({ sessions: [] }), stderr: "" };
+			}
 			const response = responses[index++] ?? {};
 			return {
 				exitCode: response.exitCode ?? 0,
@@ -1711,7 +1717,10 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 			const runtime: AgentBrowserExecutionRuntime = {
 				beforeMutationDispatch: base.beforeMutationDispatch,
 				runCommand: async (command) => {
-					events.push(command.args.slice(4, 6).join(" "));
+					const pinIndex = command.args.indexOf("--pin-tab");
+					const semanticArgs =
+						pinIndex >= 0 ? command.args.slice(pinIndex + 1) : command.args.slice(4);
+					events.push(semanticArgs.slice(0, 2).join(" "));
 					return await base.runCommand(command);
 				},
 			};
@@ -1887,7 +1896,10 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 			const runtime: AgentBrowserExecutionRuntime = {
 				beforeMutationDispatch: base.beforeMutationDispatch,
 				runCommand: async (command) => {
-					events.push(command.args.slice(4, 6).join(" "));
+					const pinIndex = command.args.indexOf("--pin-tab");
+					const semanticArgs =
+						pinIndex >= 0 ? command.args.slice(pinIndex + 1) : command.args.slice(4);
+					events.push(semanticArgs.slice(0, 2).join(" "));
 					return await base.runCommand(command);
 				},
 			};

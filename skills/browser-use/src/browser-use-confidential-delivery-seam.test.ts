@@ -125,6 +125,16 @@ function runtimeFor(
 		calls,
 		runCommand: async (input) => {
 			calls.push([input.command, ...input.args]);
+			if (input.args[0] === "--session" && input.args.at(-2) === "close") {
+				return { exitCode: 0, stdout: adapterSuccess({ closed: true }), stderr: "" };
+			}
+			if (input.args[0] === "session" && input.args[1] === "list") {
+				return {
+					exitCode: 0,
+					stdout: adapterSuccess({ sessions: [] }),
+					stderr: "",
+				};
+			}
 			const response = responses[index++] ?? {};
 			return {
 				exitCode: response.exitCode ?? 0,
