@@ -3448,14 +3448,21 @@ function payloadForDoctorTask(
 	const terminal = state.terminalResult;
 	const diagnosis = terminal?.kind === "doctor_result" ? terminal : null;
 	const workerFailure = terminal?.kind === "worker_failure" ? terminal : null;
-	// Compute the terminal continuation union once; reuse it as the payload's next
-	// action and to stamp the public task_terminal_result's semantic id.
+	// Compute the terminal continuation union once for the payload's next action.
 	const terminalUnion = terminal
 		? doctorTerminalNextAction(terminal, state.taskId)
 		: null;
+	// The nested terminal result resolves the durable carrier separately: when the
+	// union fails closed to action_id "none" (missing selector), stamping that id
+	// would erase the persisted semantic action from public history.
 	const publicTerminal =
 		terminal && terminalUnion
-			? projectDoctorTaskTerminal(terminal, terminalUnion.action_id)
+			? projectDoctorTaskTerminal(
+					terminal,
+					terminalUnion.action_id === "none"
+						? doctorTerminalDurableSemanticId(terminal)
+						: terminalUnion.action_id,
+				)
 			: null;
 	return createVaultGitLifecycleResult({
 		command: "doctor",
@@ -3568,10 +3575,30 @@ function doctorTerminalNextAction(
 }
 
 /**
+ * The durable semantic identity of a terminal's persisted next-action carrier,
+ * independent of current executability: a semantic carrier's id verbatim, a legacy
+ * carrier's id through the Doctor Task identity split. Stamped into the nested
+ * task_terminal_result when the outer continuation fails closed, so fail-closed
+ * posture never erases the persisted semantic action.
+ */
+function doctorTerminalDurableSemanticId(
+	terminal: VaultGitDoctorTaskTerminal,
+): string {
+	if (terminal.kind === "worker_failure") {
+		return terminal.nextAction.id;
+	}
+	const carrier = resolveVaultGitDoctorTerminalNextAction(terminal);
+	return carrier.kind === "semantic"
+		? carrier.actionId
+		: doctorTerminalSemanticId(carrier.actionId);
+}
+
+/**
  * Project the durable terminal into its public `task_terminal_result`, stamping the
- * authoritative semantic id already computed by the caller (never reprojecting, so
- * there is no duplicate logic and no selector-less projection). The durable record is
- * untouched, so legacy history bytes remain unchanged.
+ * semantic id already resolved by the caller: the projected union's action_id, or
+ * the durable carrier's semantic id when the union failed closed (never
+ * reprojecting, so there is no duplicate logic and no selector-less projection).
+ * The durable record is untouched, so legacy history bytes remain unchanged.
  */
 function projectDoctorTaskTerminal(
 	terminal: VaultGitDoctorTaskTerminal,
@@ -3779,6 +3806,9 @@ function payloadForRuntime(
 	}
 	if (result.kind === "repair") {
 		const value = result.value;
+		// The engine's receipt-owned transaction identity is authoritative; the
+		// caller's invocation selector is only a fallback and never overrides it.
+		const repairTransactionId = value.transactionId ?? invocationTransactionId;
 		return createVaultGitLifecycleResult({
 			command,
 			outcome: value.status,
@@ -3797,8 +3827,8 @@ function payloadForRuntime(
 			transaction_state: value.state,
 			// The repaired transaction id, so a continuation that binds it (e.g.
 			// reconcile_quarantine) projects a real invoke rather than failing closed.
-			...(invocationTransactionId
-				? { transaction_id: invocationTransactionId }
+			...(repairTransactionId
+				? { transaction_id: repairTransactionId }
 				: {}),
 			repair_action: value.action,
 			next_action: action(

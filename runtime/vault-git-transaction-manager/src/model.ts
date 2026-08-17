@@ -342,11 +342,13 @@ export function isVaultGitCliSafeValue(value: unknown): value is string {
 /**
  * Pure repository-relative Owned Path leaf predicate: the single owner of the
  * leaf-path rule that receipt custody, the remote ledger, the Git adapter, and
- * the Next Safe Action input binder share. It composes CLI-safe token safety with
- * the relative/segment rules: not absolute, no trailing separator, and no empty,
- * `.`, `..`, or case-insensitive `.git` segment. This is the containment-free
- * rule; the Git adapter composes its own realpath escape check on top for on-disk
- * admission.
+ * the Next Safe Action input binder share. It owns the repository-relative
+ * leaf and control-byte rules only: non-empty string, no NUL or CR control byte,
+ * not absolute, no trailing separator, and no empty, `.`, `..`, or
+ * case-insensitive `.git` segment. It is NOT CLI argv safety — a caller binding
+ * the value into argv must separately apply {@link isVaultGitCliSafeValue}. This
+ * is the containment-free rule; the Git adapter composes its own realpath escape
+ * check on top for on-disk admission.
  *
  * @param value - Candidate repository-relative path.
  * @returns `true` when the value is a safe Owned Path leaf.
@@ -364,10 +366,9 @@ export function isVaultGitOwnedPathLeaf(value: unknown): value is string {
 	// magic characters, or contain an embedded newline (git handles these via `--` /
 	// literal pathspecs and NUL-delimited plumbing). So this predicate does NOT
 	// compose the CLI-token rule (isVaultGitCliSafeValue), which exists only for
-	// argv-bound values. It applies its own containment-free checks — matching the
-	// prior adapter/store/ledger contract exactly: non-empty string, no NUL or CR
-	// control byte (the record and plumbing delimiters), not absolute, no trailing
-	// separator, and no empty, `.`, `..`, or case-insensitive `.git` segment. The Git
+	// argv-bound values. The NUL/CR rejection (the record and plumbing delimiters)
+	// is the pre-existing Git-adapter safety set, intentionally adopted for every
+	// sharer at convergence; do not broaden accepted NUL or CR behaviour. The Git
 	// adapter composes its own realpath escape check on top for on-disk admission.
 	if (
 		typeof value !== "string" ||

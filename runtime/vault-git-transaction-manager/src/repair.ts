@@ -87,6 +87,13 @@ export interface VaultGitRepairResult {
 	readonly retrySafety: VaultGitRetrySafety;
 	/** Exactly one safe continuation. */
 	readonly nextAction: VaultGitRepairNextAction;
+	/**
+	 * Authoritative non-secret transaction correlation from the validated receipt
+	 * or quarantine evidence, present whenever the engine loaded and validated that
+	 * durable identity. A public selector projection only: callers must prefer it
+	 * over their own invocation selector, and it grants no authority.
+	 */
+	readonly transactionId?: string;
 	/** Opaque diagnostics correlation without a private path. */
 	readonly diagnosticsReference: string;
 	/** Stable refusal reason when no action completed. */
@@ -109,6 +116,18 @@ const summaries = {
 	inspectReceipt: "Inspect private receipt integrity with an operator.",
 	reconcile: "Reconcile preserved local evidence before clearing quarantine.",
 } as const;
+
+/**
+ * Stamp the validated durable transaction identity onto a repair result. A null
+ * or absent identity leaves the result unchanged, so pre-acknowledgement receipts
+ * and unvalidated refusals never project a guessed selector.
+ */
+function withTransactionId(
+	result: VaultGitRepairResult,
+	transactionId: string | null | undefined,
+): VaultGitRepairResult {
+	return transactionId ? { ...result, transactionId } : result;
+}
 
 const activationRetrySafety: Record<
 	VaultGitActivationRestrictionCause,
@@ -175,16 +194,21 @@ export async function repairVaultGitTransaction(
 	if (input.remote !== receipt.remote || (receipt.transactionId && input.transactionId !== receipt.transactionId)) {
 		return refused(input.action, "human_required", receipt.phase, "transaction_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
+	// Identity validated: every later result carries the receipt-owned transaction
+	// id, read from the CURRENT receipt at return time so a resume that adopts a
+	// lease stamps the adopted identity.
+	const stamped = (result: VaultGitRepairResult): VaultGitRepairResult =>
+		withTransactionId(result, receipt.transactionId);
 	if (
 		receipt.phase === "closed" &&
 		(input.action === "close-verified" ||
 			input.action === "retry-push" ||
 			input.action === "resume")
 	) {
-		return repaired(input.action, "closed", "closed", "none", "none", summaries.none, diagnostics);
+		return stamped(repaired(input.action, "closed", "closed", "none", "none", summaries.none, diagnostics));
 	}
 	if (receipt.phase === "closed" && input.action === "stale-lease-takeover") {
-		return refused(input.action, "human_required", "closed", "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", "closed", "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics));
 	}
 
 	if (input.action === "stale-lease-takeover") {
@@ -197,7 +221,7 @@ export async function repairVaultGitTransaction(
 	// authorization precedes dispatch, including close-verified and
 	// reconcile-quarantine.
 	const authorization = await authorizeOwner(options, receipt, input.capability);
-	if (authorization) return { ...authorization, action: input.action };
+	if (authorization) return stamped({ ...authorization, action: input.action });
 	if (input.action === "reconcile-quarantine") {
 		return reconcileQuarantine(options, input, receipt);
 	}
@@ -207,7 +231,7 @@ export async function repairVaultGitTransaction(
 		issueTakeoverToken: false,
 	});
 	if (doctor.repairAction !== input.action) {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 	}
 
 	if (input.action === "close-verified") {
@@ -219,14 +243,14 @@ export async function repairVaultGitTransaction(
 			recordedAt: options.runtime.now().toISOString(),
 		});
 		await options.store.append(receipt);
-		return repaired(input.action, "closed", "closed", "local", "none", summaries.none, diagnostics);
+		return stamped(repaired(input.action, "closed", "closed", "local", "none", summaries.none, diagnostics));
 	}
 
 	if (input.action === "retry-push") {
 		return publishPrepared(options, input.action, loaded.history, receipt);
 	}
 	if (input.action !== "resume") {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 	}
 
 	if (receipt.transactionId === null) {
@@ -285,20 +309,20 @@ export async function repairVaultGitTransaction(
 
 	const identity = await options.repository.resolveCanonicalIdentity().catch(() => null);
 	if (!identity || !receipt.transactionId || !receipt.leaseGeneration) {
-		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics));
 	}
 	if (
 		receipt.phase === "committing" &&
 		identity.localMainHead !== receipt.localMainHead
 	) {
 		if (!options.repository.inspectLocalCommit || !receipt.transactionId) {
-			return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics));
 		}
 		const recoveredCommit = await options.repository.inspectLocalCommit(
 			identity.localMainHead,
 		);
 		if (!isResumedLocalCommit(recoveredCommit, receipt)) {
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 		}
 		receipt = nextVaultGitReceipt(receipt, {
 			phase: "push_pending",
@@ -313,7 +337,7 @@ export async function repairVaultGitTransaction(
 		return publishPrepared(options, input.action, [...loaded.history, receipt], receipt);
 	}
 	if (identity.localMainHead !== receipt.localMainHead) {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 	}
 	const resumeFence = await validateRepairWriteAuthority(
 		options,
@@ -321,9 +345,9 @@ export async function repairVaultGitTransaction(
 		receipt,
 		"active",
 	);
-	if (resumeFence) return resumeFence;
+	if (resumeFence) return stamped(resumeFence);
 	if (receipt.phase === "writing") {
-		return repaired(input.action, "active", "writing", "none", "complete_transaction", summaries.complete, diagnostics);
+		return stamped(repaired(input.action, "active", "writing", "none", "complete_transaction", summaries.complete, diagnostics));
 	}
 	const writing = nextVaultGitReceipt(receipt, {
 		phase: "writing",
@@ -332,7 +356,7 @@ export async function repairVaultGitTransaction(
 		recordedAt: options.runtime.now().toISOString(),
 	});
 	await options.store.append(writing);
-	return repaired(input.action, "active", "writing", "local", "complete_transaction", summaries.complete, diagnostics);
+	return stamped(repaired(input.action, "active", "writing", "local", "complete_transaction", summaries.complete, diagnostics));
 }
 
 function matchesAcquisitionIntent(
@@ -403,8 +427,10 @@ async function publishPrepared(
 	receipt: VaultGitReceipt,
 ): Promise<VaultGitRepairResult> {
 	const diagnostics = receipt.diagnosticsReference;
+	const stamped = (result: VaultGitRepairResult): VaultGitRepairResult =>
+		withTransactionId(result, receipt.transactionId);
 	if (!receipt.transactionId || !receipt.leaseGeneration || !receipt.leaseAcquiredAt || !receipt.expectedMainCommit || !options.ledger.git.atomicClose) {
-		return refused(action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+		return stamped(refused(action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics));
 	}
 	// Retry publication is a remote write: the same fail-closed safety proof
 	// that gates foreground writes gates the repair push (host_contract_breach
@@ -418,7 +444,7 @@ async function publishPrepared(
 		safety = { status: "refused", reason: "repository_hook" };
 	}
 	if (safety.status === "refused") {
-		return refused(action, "human_required", receipt.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(action, "human_required", receipt.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics));
 	}
 	const preparedAt =
 		history.find((entry) => entry.expectedMainCommit === receipt.expectedMainCommit)
@@ -431,7 +457,7 @@ async function publishPrepared(
 		receipt,
 		"push_pending",
 	);
-	if (authorityFence) return authorityFence;
+	if (authorityFence) return stamped(authorityFence);
 	let publication: VaultGitAtomicCloseResult;
 	try {
 		publication = await options.ledger.git.atomicClose({
@@ -459,7 +485,7 @@ async function publishPrepared(
 			},
 		});
 	} catch {
-		return refused(action, "human_required", current.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial");
+		return stamped(refused(action, "human_required", current.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial"));
 	}
 	if (publication.status === "closed") {
 		const closed = nextVaultGitReceipt(current, {
@@ -470,7 +496,7 @@ async function publishPrepared(
 			recordedAt: options.runtime.now().toISOString(),
 		});
 		await options.store.append(closed);
-		return repaired(action, "closed", "closed", "remote", "none", summaries.none, diagnostics);
+		return stamped(repaired(action, "closed", "closed", "remote", "none", summaries.none, diagnostics));
 	}
 	if (publication.status === "host_contract_breach") {
 		const breach = nextVaultGitReceipt(current, {
@@ -481,9 +507,9 @@ async function publishPrepared(
 			recordedAt: options.runtime.now().toISOString(),
 		});
 		await options.store.append(breach);
-		return refused(action, "human_required", "human_required", "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial");
+		return stamped(refused(action, "human_required", "human_required", "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial"));
 	}
-	return refused(action, "push_pending", "push_pending", "push_pending", "request_operator_review", summaries.retry, diagnostics, "partial", "same_input_unsafe");
+	return stamped(refused(action, "push_pending", "push_pending", "push_pending", "request_operator_review", summaries.retry, diagnostics, "partial", "same_input_unsafe"));
 }
 
 async function validateRepairActivation(
@@ -523,12 +549,16 @@ async function staleLeaseTakeover(
 	) {
 		return refused(input.action, "human_required", receipt.phase, "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
 	}
+	// Takeover identity validated above: every later result carries the
+	// receipt-owned transaction id.
+	const stamped = (result: VaultGitRepairResult): VaultGitRepairResult =>
+		withTransactionId(result, receipt.transactionId);
 	const doctor = await diagnoseVaultGitTransaction(options, {
 		transactionId: input.transactionId,
 		issueTakeoverToken: false,
 	});
 	if (doctor.repairAction !== "stale-lease-takeover") {
-		return refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics));
 	}
 	let savedProof: VaultGitDoctorProof;
 	try {
@@ -547,10 +577,10 @@ async function staleLeaseTakeover(
 			savedProof.receiptRevision !== freshProof.receiptRevision ||
 			savedProof.proofFingerprint !== freshProof.proofFingerprint
 		) {
-			return refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics));
 		}
 	} catch {
-		return refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics));
 	}
 	const transactionId = receipt.transactionId;
 	const ledgerGeneration = receipt.leaseGeneration;
@@ -566,7 +596,7 @@ async function staleLeaseTakeover(
 			recordedAt: options.runtime.now().toISOString(),
 		});
 	} catch {
-		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics));
 	}
 	const consumed = await options.store.consumeDoctorToken(
 		savedProof,
@@ -575,7 +605,7 @@ async function staleLeaseTakeover(
 	);
 	if (!consumed) {
 		await clearTakeoverPending(options, transactionId, ledgerGeneration);
-		return refused(input.action, "human_required", receipt.phase, "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics));
 	}
 	const superseded = await supersedeRemoteLease(options.ledger, {
 		remote: receipt.remote,
@@ -588,11 +618,11 @@ async function staleLeaseTakeover(
 			// The remote provably did not change: clear the pending marker; the
 			// burned token routes back through one fresh doctor proof.
 			await clearTakeoverPending(options, transactionId, ledgerGeneration);
-			return refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics));
 		}
 		// Unknown remote outcome: keep the pending marker so doctor reconciles
 		// the interrupted takeover against ledger evidence.
-		return refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics, superseded.changedState);
+		return stamped(refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics, superseded.changedState));
 	}
 	const abandoned = nextVaultGitReceipt(receipt, {
 		phase: "closed",
@@ -611,9 +641,9 @@ async function staleLeaseTakeover(
 	} catch {
 		// The takeover-pending marker survives; doctor finalizes the landed
 		// abandonment from remote evidence on its next pass.
-		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+		return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial"));
 	}
-	return repaired(input.action, "superseded", "closed", "remote", "reconcile_quarantine", summaries.reconcile, diagnostics);
+	return stamped(repaired(input.action, "superseded", "closed", "remote", "reconcile_quarantine", summaries.reconcile, diagnostics));
 }
 
 /**
@@ -650,6 +680,10 @@ async function reconcileQuarantine(
 	) {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
+	// Quarantine identity validated above: every later result carries the
+	// marker-owned transaction id.
+	const stamped = (result: VaultGitRepairResult): VaultGitRepairResult =>
+		withTransactionId(result, marker.transactionId);
 	if (isQuarantineReconciliationReceipt(receipt, marker)) {
 		return finalizeQuarantineReconciliation(options, input, receipt, marker);
 	}
@@ -664,7 +698,7 @@ async function reconcileQuarantine(
 			receipt.ownedPaths,
 		);
 		if (prepared.status === "refused" && prepared.reason === "timed_out") {
-			return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "none", "same_input_safe");
+			return stamped(refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "none", "same_input_safe"));
 		}
 		if (prepared.status === "ready") {
 			recoveryPlan = prepared.plan;
@@ -677,26 +711,26 @@ async function reconcileQuarantine(
 					recoveryPlan,
 				});
 			} catch {
-				return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+				return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics));
 			}
 		}
 	}
 	if (recoveryPlan !== null) {
 		if (!options.repository.applyStagedRecovery) {
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 		}
 		const recovered = await options.repository.applyStagedRecovery(recoveryPlan);
 		if (recovered.status !== "recovered") {
 			if (recovered.reason === "timed_out") {
-				return refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "partial", "same_input_safe");
+				return stamped(refused(input.action, "superseded", receipt.phase, "host_quarantined", "reconcile_quarantine", summaries.reconcile, diagnostics, "partial", "same_input_safe"));
 			}
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics, "partial");
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics, "partial"));
 		}
 		return finalizeQuarantineReconciliation(options, input, receipt, marker);
 	}
 	const identity = await options.repository.resolveCanonicalIdentity().catch(() => null);
 	if (!identity) {
-		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+		return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 	}
 	const ownedPaths = receipt.ownedPaths.map((entry) => entry.path);
 	if (identity.localMainHead === receipt.localMainHead) {
@@ -704,7 +738,7 @@ async function reconcileQuarantine(
 			!options.repository.hashOwnedPaths ||
 			!options.repository.captureUnrelatedState
 		) {
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 		}
 		try {
 				const [hashes, unrelated] = await Promise.all([
@@ -722,10 +756,10 @@ async function reconcileQuarantine(
 							?.baselineHash !== hash.contentHash,
 				)
 			) {
-				return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+				return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 			}
 		} catch {
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 		}
 	} else {
 		const settled = await inspectSettledOwnedPaths(
@@ -734,7 +768,7 @@ async function reconcileQuarantine(
 			identity.localMainHead,
 		).catch(() => false);
 		if (!settled) {
-			return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
+			return stamped(refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics));
 		}
 	}
 	return finalizeQuarantineReconciliation(options, input, receipt, marker);
@@ -751,6 +785,8 @@ async function finalizeQuarantineReconciliation(
 	>,
 ): Promise<VaultGitRepairResult> {
 	const diagnostics = receipt.diagnosticsReference;
+	const stamped = (result: VaultGitRepairResult): VaultGitRepairResult =>
+		withTransactionId(result, marker.transactionId);
 	if (!isQuarantineReconciliationReceipt(receipt, marker)) {
 		const reconciledReceipt = nextVaultGitReceipt(receipt, {
 			phase: "closed",
@@ -766,7 +802,7 @@ async function finalizeQuarantineReconciliation(
 				loaded?.status !== "loaded" ||
 				!isQuarantineReconciliationReceipt(loaded.receipt, marker)
 			) {
-				return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+				return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial"));
 			}
 		}
 	}
@@ -778,9 +814,9 @@ async function finalizeQuarantineReconciliation(
 			recordedAt: options.runtime.now().toISOString(),
 		});
 	} catch {
-		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+		return stamped(refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial"));
 	}
-	return repaired(input.action, "closed", "closed", "local", "none", summaries.none, diagnostics);
+	return stamped(repaired(input.action, "closed", "closed", "local", "none", summaries.none, diagnostics));
 }
 
 /** Match only the receipt revision that proves this exact quarantine settled. */

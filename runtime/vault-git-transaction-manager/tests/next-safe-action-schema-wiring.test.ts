@@ -19,8 +19,8 @@ import {
  * Next Safe Action discriminated union in the versioned lifecycle contract; the
  * compat id + summary are derived fields on that union; the lifecycle-result
  * constructor rejects a supplied compat id/summary that diverges from the union;
- * the private receipt schema version stays numeric 2 while the public JSON schema
- * literal bumps to 2. Independent oracle: literals and argv hand-authored here.
+ * the public lifecycle/discovery schema literal is 2 and the activation-result
+ * schema literal is 3. Independent oracle: literals and argv hand-authored here.
  */
 
 const TXN = "txn_11111111111111111111111111111111";

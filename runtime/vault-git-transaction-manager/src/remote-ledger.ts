@@ -928,6 +928,10 @@ function isOneLine(value: unknown): value is string {
 	);
 }
 
+// Convergence on the shared leaf rule is intentionally STRICTER than the ledger's
+// prior local predicate: it adopts the pre-existing Git-adapter NUL/CR safety set.
+// Do not reintroduce a ledger-local rule that accepts NUL or CR bytes — they are
+// the ledger record and Git plumbing delimiters.
 const isOwnedPath = isVaultGitOwnedPathLeaf;
 
 function isIsoDate(value: unknown): value is string {

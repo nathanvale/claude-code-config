@@ -1451,6 +1451,13 @@ describe("vault-git CLI composition", () => {
 				expect(envelope.continuation).toEqual({
 					next_action_id: repairCase.result.nextAction.id,
 				});
+				expect(envelope.runtime_actions).toHaveLength(1);
+				expect(envelope.runtime_actions[0].id).toBe(
+					envelope.data.next_action.id,
+				);
+				expect(envelope.runtime_actions[0].id).toBe(
+					envelope.continuation.next_action_id,
+				);
 			}
 
 			const plain = await runVaultGitForTest(args, options);
@@ -1465,6 +1472,131 @@ describe("vault-git CLI composition", () => {
 					.filter((line) => line.startsWith("next:")),
 			).toEqual([`next: ${repairCase.result.nextAction.id}`]);
 		}
+	});
+
+	test("repair projection binds the receipt-owned transaction id when the caller omits the selector", async () => {
+		const receiptTransactionId = "txn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const engine = fakeEngine({
+			async repair() {
+				return {
+					...repairResult(
+						"reconcile-quarantine",
+						"superseded",
+						"closed",
+						"reconcile_quarantine",
+					),
+					transactionId: receiptTransactionId,
+				};
+			},
+		});
+		const run = await runVaultGitForTest(
+			["repair", "reconcile-quarantine", "--capability-fd", "7", "--json"],
+			{
+				composition: fakeComposition(engine),
+				launchPrivate: false,
+				readCapability: async () => new Uint8Array([1]),
+			},
+		);
+		expect(run.exitCode).toBe(0);
+		const envelope = JSON.parse(run.stdout);
+		expect(envelope.data.transaction_id).toBe(receiptTransactionId);
+		expect(envelope.data.next_action).toMatchObject({
+			kind: "invoke",
+			action_id: "reconcile_quarantine",
+			executable: "vault-git",
+			argv: [
+				"repair",
+				"reconcile-quarantine",
+				"--transaction-id",
+				receiptTransactionId,
+				"--json",
+			],
+		});
+		expect(envelope.data.blockers ?? []).not.toContain(
+			"continuation_unavailable",
+		);
+	});
+
+	test("repair projection prefers the receipt-owned transaction id over a mismatched caller selector", async () => {
+		const receiptTransactionId = "txn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const hostileTransactionId = "txn_00000000000000000000000000000001";
+		const engine = fakeEngine({
+			async doctor() {
+				return {
+					status: "diagnosed",
+					state: "expired",
+					phase: "writing",
+					finding: "lease_expired",
+					changedState: "none",
+					retrySafety: "operator_required",
+					nextAction: {
+						id: "run_repair",
+						summary: "Run the admitted repair.",
+					},
+					diagnosticsReference: "doctor:fixture",
+					repairAction: "stale-lease-takeover",
+					transactionId: hostileTransactionId,
+					ledgerGeneration: "generation-a",
+				};
+			},
+			async repair() {
+				return {
+					...repairResult(
+						"stale-lease-takeover",
+						"superseded",
+						"closed",
+						"reconcile_quarantine",
+					),
+					transactionId: receiptTransactionId,
+				};
+			},
+		});
+		const composition = fakeComposition(engine, {
+			async readDoctorProof() {
+				return {
+					transactionId: hostileTransactionId,
+					ledgerGeneration: "generation-a",
+					receiptId: "receipt-fixture",
+					receiptRevision: 1,
+					proofFingerprint: "fingerprint-fixture",
+					issuedAt: "2026-01-01T00:00:00.000Z",
+				};
+			},
+		});
+		const run = await runVaultGitForTest(
+			[
+				"repair",
+				"stale-lease-takeover",
+				"--transaction-id",
+				hostileTransactionId,
+				"--prior-writer-stopped",
+				"--capability-fd",
+				"7",
+				"--json",
+			],
+			{
+				composition,
+				launchPrivate: false,
+				readCapability: async () => new Uint8Array([1]),
+			},
+		);
+		expect(run.exitCode).toBe(0);
+		const envelope = JSON.parse(run.stdout);
+		expect(envelope.data.transaction_id).toBe(receiptTransactionId);
+		expect(envelope.data.next_action).toMatchObject({
+			kind: "invoke",
+			action_id: "reconcile_quarantine",
+			argv: [
+				"repair",
+				"reconcile-quarantine",
+				"--transaction-id",
+				receiptTransactionId,
+				"--json",
+			],
+		});
+		expect(JSON.stringify(envelope.data.next_action.argv)).not.toContain(
+			hostileTransactionId,
+		);
 	});
 });
 
@@ -1995,6 +2127,87 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 			argv: ["doctor", "--task-id", doctorTaskId, "--json"],
 		});
 		expect(next.id).toBe("inspect_status");
+	});
+
+	// Fail-closed must not erase durable semantic meaning: a terminal whose persisted
+	// semantic action needs a transaction selector that no durable state carries fails
+	// the OUTER next_action closed (terminal none + continuation_unavailable), while
+	// the nested task_terminal_result keeps the persisted semantic id.
+	test("a missing continuation selector fails the outer action closed without erasing the persisted semantic id", async () => {
+		const stateRoot = await temp("vault-git-u1-cli-doctor-selectorless-");
+		const doctorRepoId = "e".repeat(64);
+		const doctorTaskId = `doctor_task_${"4".repeat(32)}`;
+		const historyDir = join(
+			stateRoot,
+			"vault-git-transaction-manager",
+			doctorRepoId,
+			"doctor-tasks",
+			doctorTaskId,
+			"history",
+		);
+		await mkdir(historyDir, { recursive: true, mode: 0o700 });
+		const selectorlessState = {
+			schemaVersion: 1,
+			taskId: doctorTaskId,
+			bindingDigest: "d".repeat(64),
+			receiptId: `receipt_${"b".repeat(32)}`,
+			receiptRevision: 7,
+			// No transaction correlation anywhere: the reconcile_quarantine
+			// continuation cannot rebuild its argv.
+			transactionId: null,
+			revision: 3,
+			state: "closed",
+			phase: "terminal",
+			recordedAt: "2026-08-14T01:00:00.000Z",
+			updatedAt: "2026-08-14T01:00:03.000Z",
+			heartbeatAt: null,
+			checkpoint: "terminal",
+			launchGeneration: `doctor_launch_${"9".repeat(32)}`,
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				kind: "doctor_result",
+				status: "diagnosed",
+				state: "superseded",
+				phase: "closed",
+				finding: "host_quarantined",
+				changedState: "none",
+				retrySafety: "same_input_safe",
+				nextActionId: "reconcile_quarantine",
+			},
+		};
+		const file = join(historyDir, "000000000003.json");
+		await writeFile(file, `${JSON.stringify(selectorlessState, null, 2)}\n`, {
+			mode: 0o600,
+		});
+		await chmod(file, 0o600);
+
+		const composition = {
+			...fakeComposition(fakeEngine()),
+			doctorTaskStore: createVaultGitDoctorTaskStore({
+				stateRoot,
+				repositoryId: doctorRepoId,
+			}),
+		} as VaultGitCliComposition;
+		const run = await runVaultGitForTest(
+			["doctor", "--task-id", doctorTaskId, "--json"],
+			{ composition, launchPrivate: false },
+		);
+		const data = JSON.parse(run.stdout).data;
+		// Outer continuation fails closed as a visible blocker, never a runnable guess.
+		expect(data.next_action).toMatchObject({
+			kind: "none",
+			id: "reconcile_quarantine",
+			action_id: "none",
+		});
+		expect(data.blockers).toContain("continuation_unavailable");
+		expect(data.retry_safety).toBe("operator_required");
+		// The nested durable terminal keeps its persisted semantic action id.
+		expect(data.task_terminal_result.nextActionId).toBe(
+			"reconcile_quarantine",
+		);
 	});
 });
 

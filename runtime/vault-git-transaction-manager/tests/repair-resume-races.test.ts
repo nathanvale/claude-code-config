@@ -100,6 +100,32 @@ describe("resume repair races", () => {
 		expect(fixture.atomicCloseCalls()).toBe(0);
 	});
 
+	test("resume without a caller selector returns the adopted receipt-owned transaction id", async () => {
+		const fixture = await resumeFixture({
+			phase: "intent_durable",
+			ledger: () => intentHeldLedger(TRANSACTION_ID, LEASE_GENERATION),
+		});
+
+		// Pre-acknowledgement resume legitimately omits the transaction selector;
+		// the durable identity comes from the adopted matching intent lease.
+		const result = await fixture.repair.run({
+			action: "resume",
+			remote: "origin",
+			capability: OWNER_CAPABILITY,
+		});
+
+		expect(result).toMatchObject({
+			status: "repaired",
+			state: "active",
+			phase: "writing",
+			transactionId: TRANSACTION_ID,
+		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { transactionId: TRANSACTION_ID, phase: "writing" },
+		});
+	});
+
 	test("a second unrelated HEAD after Doctor is never recorded or published", async () => {
 		const fixture = await resumeFixture({
 			phase: "committing",

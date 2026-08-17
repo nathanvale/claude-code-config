@@ -32,8 +32,8 @@ const VALID_VALUES = [
 	{ id: "ssh_known_hosts_path", value: SECRET_KNOWN_HOSTS },
 ];
 
-// Independent expected stdin: canonical JSON keyed by field id, values verbatim
-// (newline preserved), computed WITHOUT the binder.
+// Independent expected stdin: canonical JSON keyed by field id, with the quote
+// and backslash escaped by JSON serialization, computed WITHOUT the binder.
 const EXPECTED_STDIN = JSON.stringify({
 	ssh_identity_file_path: SECRET_IDENTITY,
 	ssh_public_key_path: SECRET_PUBLIC,
