@@ -160,6 +160,30 @@ describe("setup command contract", () => {
 		])).toThrow("Unsupported --input-stdin contract");
 	});
 
+	test("discovery declares private-input application as a write and keeps the repair preview read-only", () => {
+		const sync = projectSetupCommandDiscoveryTree().commands.sync;
+		const contract = sync?.input_contracts?.find(
+			(candidate) => candidate.id === "setup.vault-git.host-enrollment",
+		);
+		expect(contract?.action_id).toBe("provide_host_enrollment_inputs");
+		const continuations = sync?.action_affordances?.continuations ?? [];
+		const byId = new Map(continuations.map((action) => [action.id, action]));
+		expect(byId.get("provide_host_enrollment_inputs")?.side_effects).toEqual([
+			"read",
+			"check",
+			"write",
+		]);
+		expect(byId.get("apply_host_enrollment")?.side_effects).toEqual([
+			"read",
+			"check",
+			"write",
+		]);
+		expect(byId.get("preview_host_enrollment_repair")?.side_effects).toEqual([
+			"read",
+			"check",
+		]);
+	});
+
 	test("rejects inline values for boolean flags", () => {
 		for (const [command, flag] of [
 			["status", "--json"],

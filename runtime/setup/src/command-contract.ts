@@ -142,10 +142,12 @@ const actionSummaries: Record<SetupActionId, string> = {
 	apply_vault_git_rollback: "Apply the verified prior installed release selection.",
 };
 
+// provide_host_enrollment_inputs is a write: its discovered argv applies Host
+// Enrollment through the private stdin lane, so it never belongs in this set.
 const readActions = new Set<SetupActionId>([
 	"preview_sync", "run_doctor", "change_input", "inspect_diagnostics", "inspect_lock",
 	"rerun_check", "inspect_results", "inspect_catalog", "use_source", "discover_external",
-	"provide_host_enrollment_inputs", "preview_host_enrollment_repair",
+	"preview_host_enrollment_repair",
 	"provision_repository_ssh", "wait_for_vault_git_idle",
 ]);
 

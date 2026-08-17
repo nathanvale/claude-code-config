@@ -556,14 +556,21 @@ function parseRuntimeSelection(value: unknown): RuntimeSelectionRecord | undefin
 		candidate.schema_version !== 1 ||
 		typeof candidate.selected_digest !== "string" ||
 		!SHA256_PATTERN.test(candidate.selected_digest) ||
-		// A record naming itself as its prior would offer a meaningless
-		// self-rollback; treat it as invalid so rollback fails closed instead.
 		!(candidate.prior_digest === null ||
 			(typeof candidate.prior_digest === "string" &&
-				SHA256_PATTERN.test(candidate.prior_digest) &&
-				candidate.prior_digest !== candidate.selected_digest))
+				SHA256_PATTERN.test(candidate.prior_digest)))
 	) {
 		return undefined;
+	}
+	// A legacy record naming itself as its prior stays an enrolled selection,
+	// but its meaningless self-rollback normalizes to null so rollback fails
+	// closed instead of reselecting the same runtime.
+	if (candidate.prior_digest === candidate.selected_digest) {
+		return {
+			schema_version: 1,
+			selected_digest: candidate.selected_digest,
+			prior_digest: null,
+		};
 	}
 	return candidate as unknown as RuntimeSelectionRecord;
 }

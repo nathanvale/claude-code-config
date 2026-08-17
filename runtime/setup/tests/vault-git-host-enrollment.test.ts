@@ -470,6 +470,39 @@ describe("Vault Git Host Enrollment", () => {
 		);
 	});
 
+	test("a legacy self-prior Runtime Selection stays enrolled with a null prior on read", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
+		temporaryRoots.push(root);
+		const fixture = await createEnrollmentFixture(root);
+		const selectionPath = join(fixture.configRoot, "runtime-selection.json");
+
+		const first = await fixture.enrollment.apply(fixture.privateInput);
+		if (first.state !== "applied") throw new Error("expected first selection");
+		const legacyRecord = `${JSON.stringify({
+			schema_version: 1,
+			selected_digest: first.selectedRuntime.digest,
+			prior_digest: first.selectedRuntime.digest,
+		})}\n`;
+		await writeFile(selectionPath, legacyRecord, { mode: 0o600 });
+
+		expect(await fixture.enrollment.inspect()).toEqual({
+			state: "enrolled",
+			station: "vault_git.runtime_selected",
+			hostHandle: first.hostHandle,
+			installedRuntime: first.selectedRuntime,
+			selectedRuntime: first.selectedRuntime,
+			priorRuntime: null,
+		});
+
+		await expect(fixture.enrollment.rollback(false)).rejects.toThrow(
+			"prior Runtime Selection is unavailable",
+		);
+		expect(await realpath(fixture.selectorPath)).toContain(
+			first.selectedRuntime.digest,
+		);
+		expect(await readFile(selectionPath, "utf8")).toBe(legacyRecord);
+	});
+
 	test("foreign selector is preserved and blocks enrollment", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
 		temporaryRoots.push(root);

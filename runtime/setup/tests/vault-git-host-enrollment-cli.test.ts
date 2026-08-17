@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
 
 import {
 	main,
@@ -381,6 +382,46 @@ describe("Setup Vault Git Host Enrollment CLI", () => {
 			"Private Host Enrollment input is unavailable",
 		);
 		expect(missingIo.stderr.text).not.toContain("16,384");
+	});
+
+	test("the private input limit measures UTF-8 bytes, not UTF-16 length", async () => {
+		const secret = "private-multibyte-do-not-echo";
+		// "€" is one UTF-16 code unit but three UTF-8 bytes, so this payload is
+		// under the limit by string length while over it by encoded bytes.
+		const multibyte = JSON.stringify({
+			...PRIVATE_VALUES,
+			ssh_known_hosts_path: `/${secret}/${"€".repeat(6_000)}`,
+		});
+		expect(multibyte.length).toBeLessThanOrEqual(16_384);
+		expect(Buffer.byteLength(multibyte, "utf8")).toBeGreaterThan(16_384);
+
+		const io = capture();
+		const calls: string[] = [];
+		expect(await main([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--input-stdin",
+			"setup.vault-git.host-enrollment",
+		], {
+			...io,
+			runtime: Object.assign(domainRuntime(calls), {
+				vaultGitHostEnrollment: fakeOwner(calls),
+				readPrivateStdin: async () => multibyte,
+			}),
+		})).toBe(2);
+		expect(calls).toEqual([]);
+		expect(io.stderr.text).toContain(
+			"Private Host Enrollment input exceeds the 16,384-byte limit",
+		);
+		for (const text of [io.stdout.text, io.stderr.text]) {
+			expect(text).not.toContain(secret);
+			expect(text).not.toContain(String(multibyte.length));
+			expect(text).not.toContain(String(Buffer.byteLength(multibyte, "utf8")));
+			for (const value of Object.values(PRIVATE_VALUES)) {
+				expect(text).not.toContain(value);
+			}
+		}
 	});
 
 	test("plain user sync projects Vault Git domain status without enrollment dispatch", async () => {

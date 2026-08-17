@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { Buffer } from "node:buffer";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -300,8 +301,10 @@ async function readVaultGitHostEnrollmentInput(
 		throw new CliUsageError("Private Host Enrollment input is unavailable");
 	}
 	// Distinct oversized diagnosis names only the limit; the content, its exact
-	// size, and any derived private data stay out of every output stream.
-	if (source.length > 16_384) {
+	// size, and any derived private data stay out of every output stream. The
+	// limit measures UTF-8 bytes: string length would admit multibyte payloads
+	// nearly three times the advertised ceiling.
+	if (Buffer.byteLength(source, "utf8") > 16_384) {
 		throw new CliUsageError(
 			"Private Host Enrollment input exceeds the 16,384-byte limit",
 		);

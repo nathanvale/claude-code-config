@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import {
-	parseSetupInvocation,
-	projectSetupCommandDiscoveryTree,
-} from "../../setup/src/command-contract.ts";
 import {
 	bindVaultGitPrivateSetupInput,
 	projectVaultGitNextSafeAction,
@@ -11,6 +11,67 @@ import {
 	type VaultGitSetupResult,
 	type VaultGitSetupSpawn,
 } from "../src/next-safe-action.ts";
+
+// The one public Setup executable lane: the repository-root `setup` script.
+// Setup discovery must arrive through this real process, never a source import.
+const REPOSITORY_ROOT = join(import.meta.dir, "..", "..", "..");
+const SETUP_EXECUTABLE = join(REPOSITORY_ROOT, "setup");
+
+interface PublicSetupDiscoveryContract {
+	readonly id: string;
+	readonly action_id: string;
+	readonly action_argv: readonly string[];
+	readonly fields: readonly {
+		readonly id: string;
+		readonly input_channel: "public" | "private_stdin";
+	}[];
+}
+
+interface PublicSetupSyncDiscovery {
+	readonly mutation?: string;
+	readonly side_effects?: readonly string[];
+	readonly flags?: Record<
+		string,
+		{ readonly type?: string; readonly values?: readonly string[] }
+	>;
+	readonly input_contracts?: readonly PublicSetupDiscoveryContract[];
+}
+
+function runPublicSetup(
+	argv: readonly string[],
+	options: { stdin?: string; env?: Record<string, string> } = {},
+): { exitCode: number; stdout: string; stderr: string } {
+	const result = Bun.spawnSync([SETUP_EXECUTABLE, ...argv], {
+		cwd: REPOSITORY_ROOT,
+		stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin),
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { ...process.env, ...options.env },
+	});
+	return {
+		exitCode: result.exitCode,
+		stdout: result.stdout.toString(),
+		stderr: result.stderr.toString(),
+	};
+}
+
+// Fresh HOME and XDG roots so a public Setup run can never read or mutate the
+// real host enrollment.
+async function isolatedHostEnv(): Promise<{
+	root: string;
+	env: Record<string, string>;
+}> {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-setup-binder-"));
+	return {
+		root,
+		env: {
+			HOME: join(root, "home"),
+			XDG_CONFIG_HOME: join(root, "config"),
+			XDG_DATA_HOME: join(root, "data"),
+			XDG_STATE_HOME: join(root, "state"),
+		},
+	};
+}
 
 // Distinctive private values. A newline-delimited stdin would corrupt field
 // boundaries and a value with JSON metacharacters could break a naive envelope,
@@ -221,17 +282,30 @@ describe("vault-git private Setup binder", () => {
 		}
 	});
 
-	test("the discovered Setup contract binds the exact private-stdin invocation", async () => {
-		const sync = projectSetupCommandDiscoveryTree().commands.sync;
+	test("the public Setup process contract binds the exact private-stdin invocation", async () => {
+		const discovery = runPublicSetup(["commands", "--json"]);
+		expect(discovery.exitCode, discovery.stderr).toBe(0);
+		const envelope = JSON.parse(discovery.stdout) as {
+			status: string;
+			data?: { commands?: Record<string, PublicSetupSyncDiscovery> };
+		};
+		expect(envelope.status).toBe("ok");
+		const sync = envelope.data?.commands?.sync;
 		const contract = sync?.input_contracts?.find(
 			(candidate) => candidate.id === "setup.vault-git.host-enrollment",
 		);
 		if (!contract) {
 			throw new Error(
-				"Setup discovery does not publish the Host Enrollment input contract",
+				"public Setup discovery does not publish the Host Enrollment input contract",
 			);
 		}
 		expect(contract.action_id).toBe("provide_host_enrollment_inputs");
+		expect(sync?.mutation).toBe("write");
+		expect(sync?.side_effects).toContain("write");
+		expect(sync?.flags?.["--input-stdin"]).toMatchObject({
+			type: "enum",
+			values: ["setup.vault-git.host-enrollment"],
+		});
 
 		const { spawn, calls } = recordingSpawn();
 		const result = await bindVaultGitPrivateSetupInput(
@@ -260,20 +334,37 @@ describe("vault-git private Setup binder", () => {
 			expect(JSON.stringify(result)).not.toContain(secret);
 		}
 
-		expect(parseSetupInvocation([...calls[0].argv])).toMatchObject({
-			command: "sync",
-			domain: "vault-git",
-			inputStdin: "setup.vault-git.host-enrollment",
-		});
-		expect(sync?.mutation).toBe("write");
-		expect(sync?.side_effects).toContain("write");
-		expect(sync?.flags["--input-stdin"]).toMatchObject({
-			type: "enum",
-			values: ["setup.vault-git.host-enrollment"],
-		});
-	});
+		// Parser acceptance through the real public process. Nonexistent private
+		// fixture paths stop at the SSH prerequisite, so the isolated host state
+		// is never mutated and a usage rejection (exit 2) would fail this claim.
+		const host = await isolatedHostEnv();
+		try {
+			const accepted = runPublicSetup([...calls[0].argv, "--json"], {
+				stdin: calls[0].stdin,
+				env: host.env,
+			});
+			expect(accepted.exitCode, accepted.stderr).toBe(1);
+			const acceptedEnvelope = JSON.parse(accepted.stdout) as {
+				status: string;
+				data?: { station?: string; next_action?: string };
+			};
+			expect(acceptedEnvelope.status).toBe("ok");
+			expect(acceptedEnvelope.data?.station).toBe(
+				"sync.vault_git_ssh_prerequisite",
+			);
+			expect(acceptedEnvelope.data?.next_action).toBe(
+				"provision_repository_ssh",
+			);
+			for (const secret of [SECRET_IDENTITY, SECRET_PUBLIC, SECRET_KNOWN_HOSTS]) {
+				expect(accepted.stdout).not.toContain(secret);
+				expect(accepted.stderr).not.toContain(secret);
+			}
+		} finally {
+			await rm(host.root, { recursive: true, force: true });
+		}
+	}, 120_000);
 
-	test("the projected Setup preview invoke is parser-accepted by Setup", () => {
+	test("the projected Setup preview invoke is parser-accepted by the public Setup process", async () => {
 		const projection = projectVaultGitNextSafeAction({
 			action_id: "preview_host_enrollment_repair",
 		});
@@ -283,13 +374,23 @@ describe("vault-git private Setup binder", () => {
 			throw new Error("expected an invoke continuation");
 		}
 		expect(continuation.executable).toBe("setup");
-		expect(parseSetupInvocation([...continuation.argv])).toMatchObject({
-			command: "sync",
-			domain: "vault-git",
-			check: true,
-			json: true,
-		});
-	});
+		const host = await isolatedHostEnv();
+		try {
+			const accepted = runPublicSetup([...continuation.argv], {
+				env: host.env,
+			});
+			expect(accepted.exitCode, accepted.stderr).toBe(0);
+			const envelope = JSON.parse(accepted.stdout) as {
+				status: string;
+				data?: { station?: string; next_action?: string };
+			};
+			expect(envelope.status).toBe("ok");
+			expect(envelope.data?.station).toBe("sync.vault_git_inputs_required");
+			expect(envelope.data?.next_action).toBe("provide_host_enrollment_inputs");
+		} finally {
+			await rm(host.root, { recursive: true, force: true });
+		}
+	}, 120_000);
 
 	test("refuses a public (non-private) contract through the Setup lane before spawning", async () => {
 		const publicDiscovery: VaultGitSetupDiscoveryResult = {
