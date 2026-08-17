@@ -9,6 +9,7 @@ import {
 	assertRefsUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	publishBaselineChecker,
 	runDoctorToTerminal,
 	type SmokeFixture,
 } from "../smoke/fixture.ts";
@@ -20,9 +21,21 @@ afterEach(cleanupSmokeFixtures);
 describe("bounded PR repair re-entry", () => {
 	test("two repaired callers re-enter one task and publish once", async () => {
 		const fixture = await mkSmokeFixture();
-		await installCheck(fixture.clone, false);
+		// The committed checker derives its verdict from the frozen owned bytes;
+		// re-entry changes only the owned path, never the checker.
+		await publishBaselineChecker(
+			fixture,
+			[
+				'import { readFile } from "node:fs/promises";',
+				'const source = await readFile("notes/event.md", "utf8");',
+				'process.exit(source.includes("failing") ? 1 : 0);',
+			].join("\n"),
+		);
 		const transactionId = await fixture.begin("notes/event.md");
-		await writeFile(join(fixture.clone, "notes/event.md"), "repair re-entry bytes\n");
+		await writeFile(
+			join(fixture.clone, "notes/event.md"),
+			"repair re-entry failing bytes\n",
+		);
 		const beforeFailure = fixture.snapshot();
 
 		const accepted = await fixture.run([
@@ -77,7 +90,10 @@ describe("bounded PR repair re-entry", () => {
 			continuation: { next_action_id: "complete_transaction" },
 		});
 
-		await installCheck(fixture.clone, true);
+		await writeFile(
+			join(fixture.clone, "notes/event.md"),
+			"repair re-entry repaired bytes\n",
+		);
 		const beforeReentry = fixture.snapshot();
 		const callers = await Promise.all(
 			Array.from({ length: 2 }, () =>
@@ -159,14 +175,4 @@ async function waitForTerminalTask(
 		await Bun.sleep(25);
 	}
 	throw new Error(`task ${taskId} did not reach a terminal state`);
-}
-
-async function installCheck(clone: string, passing: boolean): Promise<void> {
-	await writeFile(
-		join(clone, "package.json"),
-		`${JSON.stringify({
-			private: true,
-			scripts: { check: `bun -e "process.exit(${passing ? 0 : 1})"` },
-		})}\n`,
-	);
 }

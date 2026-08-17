@@ -7,7 +7,6 @@ import {
 	open,
 	readdir,
 	readFile,
-	rename,
 	rm,
 	unlink,
 } from "node:fs/promises";
@@ -15,7 +14,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import {
-	findVaultGitCheckScript,
+	admitVaultGitCheckCommand,
 	findVaultGitDependencySurface,
 	isVaultGitOwnedPathLeaf,
 	parseVaultGitManifest,
@@ -23,6 +22,10 @@ import {
 } from "./model.ts";
 import { CONTROLLED_GIT_ENVIRONMENT } from "./git-adapter.ts";
 import { resolveVaultGitInstalledRuntimeRunner } from "./installed-runtime-runner.ts";
+import {
+	createNodeVaultGitDurabilityPort,
+	type VaultGitDurabilityPort,
+} from "./store.ts";
 import type {
 	VaultGitCheckPort,
 	VaultGitCheckRequest,
@@ -75,6 +78,11 @@ export interface VaultGitValidationCandidateOptions {
 	readonly monotonicNow?: () => number;
 	/** Candidate removal seam for deterministic cleanup proof. @internal */
 	readonly removeCandidate?: (candidateRoot: string) => Promise<void>;
+	/**
+	 * Load-bearing residue publication operations for failure-boundary proof.
+	 * @defaultValue node syscall port @internal
+	 */
+	readonly durability?: VaultGitDurabilityPort;
 }
 
 /** Bounded owner-private Candidate Residue record; one file per candidate. */
@@ -200,6 +208,7 @@ export function createVaultOwnedCheckPort(
 		options.removeCandidate ??
 		((candidateRoot: string) =>
 			rm(candidateRoot, { recursive: true, force: true }));
+	const durability = options.durability ?? createNodeVaultGitDurabilityPort();
 	const gitBinary = options.gitBinary ?? "git";
 	const candidatesRoot = join(options.privateStateRoot, CANDIDATES_DIRECTORY);
 
@@ -237,24 +246,30 @@ export function createVaultOwnedCheckPort(
 	): Promise<void> => {
 		const directory = dirname(metadataPath);
 		const staged = join(directory, `${record.candidateId}.staged`);
-		const handle = await open(
-			staged,
-			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
-			0o600,
-		);
+		const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
 		try {
-			await handle.writeFile(`${JSON.stringify(record)}\n`);
-			await handle.sync();
-		} finally {
-			await handle.close();
+			const handle = await open(
+				staged,
+				fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+				0o600,
+			);
+			try {
+				await durability.writeTemp(handle, bytes, "candidate_residue");
+				await durability.syncFile(handle, "candidate_residue");
+			} finally {
+				await handle.close();
+			}
+			await durability.rename(staged, metadataPath, "candidate_residue");
+		} catch (error) {
+			// Publication never happened: the staged path must not survive as
+			// unowned debris, and its removal must never mask the causal error.
+			await unlink(staged).catch(() => undefined);
+			throw error;
 		}
-		await rename(staged, metadataPath);
-		const directoryHandle = await open(directory, fsConstants.O_RDONLY);
-		try {
-			await directoryHandle.sync();
-		} finally {
-			await directoryHandle.close();
-		}
+		// The rename published the record. A directory-sync failure after this
+		// point still throws, but must never remove the published JSON — the
+		// record is what keeps an abandoned candidate owned.
+		await durability.syncDirectory(directory, "candidate_residue");
 	};
 
 	const freezeLeaf = async (
@@ -281,7 +296,9 @@ export function createVaultOwnedCheckPort(
 				if (!metadata.isFile()) {
 					throw new CandidateSetupError(`owned path is not a file: ${path}`);
 				}
-				executable = (metadata.mode & 0o111) !== 0;
+				// Git derives 100755 from the owner-execute bit alone; testing
+				// group/other bits misclassifies 0o654 and breaks the commit fence.
+				executable = (metadata.mode & 0o100) !== 0;
 				bytes = await source.readFile();
 			} finally {
 				await source.close();
@@ -581,10 +598,12 @@ function isMissingEntry(error: unknown): boolean {
 }
 
 /**
- * Read the frozen candidate's check contract through the shared manifest and
- * dependency-eligibility owner. The exec spawn needs the exact check script
- * line, so an unreadable or unparseable manifest and a missing check script
- * are candidate-composition defects, never a vault-content verdict.
+ * Read the frozen candidate's check contract through the shared manifest,
+ * single-command admission, and dependency-eligibility owner. The exec spawn
+ * receives only the admitted command line rebuilt from admission tokens, so
+ * an unreadable manifest, a missing check script, or a script broader than
+ * one admitted command is a candidate-composition defect, never a
+ * vault-content verdict.
  */
 async function readFrozenCheckContract(candidateRoot: string): Promise<{
 	readonly checkScript: string;
@@ -601,12 +620,14 @@ async function readFrozenCheckContract(candidateRoot: string): Promise<{
 	} catch {
 		throw new CandidateSetupError("invalid candidate manifest");
 	}
-	const checkScript = findVaultGitCheckScript(manifest);
-	if (checkScript === undefined) {
-		throw new CandidateSetupError("candidate check script unavailable");
+	const admission = admitVaultGitCheckCommand(manifest);
+	if (admission.status !== "admitted") {
+		throw new CandidateSetupError(
+			`candidate check script refused: ${admission.reason}`,
+		);
 	}
 	return {
-		checkScript,
+		checkScript: admission.commandLine,
 		dependencySurface: findVaultGitDependencySurface(manifest),
 	};
 }

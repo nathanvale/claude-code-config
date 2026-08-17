@@ -629,6 +629,89 @@ export function findVaultGitCheckScript(
 		: undefined;
 }
 
+/** Closed refusal vocabulary for an unadmittable manifest check script. */
+export type VaultGitCheckCommandRefusal =
+	| "script_unavailable"
+	| "shell_grammar_rejected"
+	| "entrypoint_unresolved";
+
+/**
+ * One admission result owning both the fingerprinted entrypoint and the
+ * executed command line; refusal keeps every consumer fail-closed.
+ */
+export type VaultGitCheckCommandAdmission =
+	| {
+			readonly status: "admitted";
+			/** Argv-shaped tokens of the one admitted command. */
+			readonly tokens: readonly string[];
+			/** The one repository-relative entrypoint file the command names. */
+			readonly entrypoint: string;
+			/** The exact executable line rebuilt from the admitted tokens only. */
+			readonly commandLine: string;
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason: VaultGitCheckCommandRefusal;
+	  };
+
+// The closed token alphabet is the whole shell grammar: any byte outside it
+// (operators, redirection, pipelines, substitution, quoting, escapes,
+// newlines) refuses, so an admitted line can only parse as one command plus
+// arguments. Widening this class widens what the checker fingerprint must
+// bind — never add a shell-significant character.
+const CHECK_COMMAND_LINE_PATTERN = /^[A-Za-z0-9_@=:,./ -]+$/;
+const CHECK_COMMAND_ENTRYPOINT_PATTERN =
+	/^[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:ts|mts|cts|js|mjs|cjs)$/;
+
+/**
+ * Admit the manifest's check script as exactly one executable command.
+ *
+ * One parse owns both lanes: checker admission fingerprints the returned
+ * entrypoint, and every executor spawns the returned command line rebuilt
+ * from the same admitted tokens, so the hashed surface and the executed
+ * surface cannot diverge. A script broader than one single command — shell
+ * operators, redirection, pipelines, command substitution, quoting, or a
+ * second command — refuses before any spawn.
+ */
+export function admitVaultGitCheckCommand(
+	manifest: Readonly<Record<string, unknown>>,
+): VaultGitCheckCommandAdmission {
+	const script = findVaultGitCheckScript(manifest);
+	if (script === undefined) {
+		return { status: "refused", reason: "script_unavailable" };
+	}
+	if (!CHECK_COMMAND_LINE_PATTERN.test(script)) {
+		return { status: "refused", reason: "shell_grammar_rejected" };
+	}
+	const tokens = script.split(" ").filter((token) => token.length > 0);
+	const entrypoints = [...new Set(tokens.filter(isCheckCommandEntrypointToken))];
+	const entrypoint = entrypoints[0];
+	if (entrypoints.length !== 1 || entrypoint === undefined) {
+		return { status: "refused", reason: "entrypoint_unresolved" };
+	}
+	return {
+		status: "admitted",
+		tokens,
+		entrypoint,
+		commandLine: tokens.join(" "),
+	};
+}
+
+function isCheckCommandEntrypointToken(token: string): boolean {
+	return (
+		CHECK_COMMAND_ENTRYPOINT_PATTERN.test(token) &&
+		token
+			.split("/")
+			.every(
+				(segment) =>
+					segment.length > 0 &&
+					segment !== "." &&
+					segment !== ".." &&
+					segment.toLowerCase() !== ".git",
+			)
+	);
+}
+
 /** Bounded engine result retained by a terminal task revision. */
 export interface VaultGitTaskTerminalResult {
 	readonly outcome: VaultGitResultOutcome;

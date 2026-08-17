@@ -94,7 +94,8 @@ export type VaultGitDurabilityTarget =
 	| "activation_invalidation"
 	| "activation_revocation"
 	| "janitor_report"
-	| "quarantine";
+	| "quarantine"
+	| "candidate_residue";
 
 /** One observable load-bearing filesystem operation. */
 export interface VaultGitDurabilityOperation {

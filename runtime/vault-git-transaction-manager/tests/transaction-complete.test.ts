@@ -172,6 +172,38 @@ describe("exact owned-path commit", () => {
 		expect(await readFile(join(repository.root, "untracked.md"))).toEqual(beforeUntracked);
 	});
 
+	test("fences group/other-only execute bits as 100644 and commits instead of refusing checked_content_changed", async () => {
+		const repository = await repositoryFixture();
+		const admission = await repository.adapter.inspectOwnedPaths(["owned.md"]);
+		if (admission.status !== "admitted") throw new Error(`admission failed: ${admission.reason}`);
+		await writeFile(join(repository.root, "owned.md"), "owned after\n");
+		await chmod(join(repository.root, "owned.md"), 0o654);
+		const fence = await fenceFor(repository.adapter, ["owned.md"]);
+		expect(fence).toMatchObject([{ path: "owned.md", fileMode: "100644" }]);
+		if (!repository.adapter.commitExact) throw new Error("exact commit unavailable");
+		const committed = await repository.adapter.commitExact({
+			baselineHead: repository.head,
+			ownedPaths: admission.paths,
+			unrelatedState: admission.unrelatedState,
+			expectedContentHashes: fence,
+			message: `docs(vault): update owned note\n\nVault-Event: note_created\nVault-Transaction: txn_${"6".repeat(32)}\nVault-Actor: agent-a\n`,
+			author: "agent-a",
+			timestamp: "2026-08-09T00:00:00.000Z",
+		});
+		expect(committed).toMatchObject({ status: "committed" });
+		expect(git(repository.root, "ls-tree", "HEAD", "--", "owned.md")).toStartWith(
+			"100644 ",
+		);
+	});
+
+	test("fences an owner-execute bit as 100755", async () => {
+		const repository = await repositoryFixture();
+		await chmod(join(repository.root, "owned.md"), 0o744);
+		expect(await fenceFor(repository.adapter, ["owned.md"])).toMatchObject([
+			{ path: "owned.md", fileMode: "100755" },
+		]);
+	});
+
 	test("treats leading dashes and pathspec magic characters as literal paths", async () => {
 		const repository = await repositoryFixture(["-owned.md", ":magic*[x]\n.md"]);
 		const admission = await repository.adapter.inspectOwnedPaths([

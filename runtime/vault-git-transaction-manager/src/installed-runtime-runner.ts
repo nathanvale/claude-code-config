@@ -47,9 +47,10 @@ export type VaultGitInstalledRuntimeRunner =
  *
  * @example
  * ```typescript
+ * const admission = admitVaultGitCheckCommand(manifest)
  * const runner = await resolveVaultGitInstalledRuntimeRunner(runtimePath)
- * if (runner.status === "resolved") {
- *   await processPort.run({ command: runner.command, args: ["run", "check"], env: runner.environment, ... })
+ * if (runner.status === "resolved" && admission.status === "admitted") {
+ *   await processPort.run({ command: runner.command, args: ["exec", admission.commandLine], env: runner.environment, ... })
  * }
  * ```
  */

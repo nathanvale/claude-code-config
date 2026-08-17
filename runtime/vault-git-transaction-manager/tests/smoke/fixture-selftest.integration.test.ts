@@ -12,6 +12,7 @@ import {
 	assertStructuredCode,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	publishBaselineChecker,
 	readSmokeWorkerProcess,
 	readLedgerDocument,
 } from "./fixture.ts";
@@ -35,6 +36,26 @@ describe("smoke fixture primitives", () => {
 		expect(snapshot.remoteMain).toBe(snapshot.localMain);
 		expect(snapshot.ledgerTip).toBe("absent");
 		assertLedgerState(fixture, "released");
+	});
+
+	test("publishing a baseline checker commits it while unrelated state survives byte-identically", async () => {
+		const fixture = await mkSmokeFixture();
+		expect(fixture.git("show", "HEAD:scripts/vault-check.ts")).toBe(
+			"process.exit(0);",
+		);
+		const before = fixture.snapshot();
+
+		await publishBaselineChecker(fixture, "process.exit(7);\n");
+
+		expect(fixture.git("show", "HEAD:scripts/vault-check.ts")).toBe(
+			"process.exit(7);",
+		);
+		expect(fixture.git("show", "HEAD:package.json")).toContain(
+			"bun run scripts/vault-check.ts",
+		);
+		const after = fixture.snapshot();
+		expect(after.remoteMain).toBe(after.localMain);
+		expect(after.worktree).toBe(before.worktree);
 	});
 
 	test("begin acquires a real remote lease the ledger records", async () => {
@@ -126,12 +147,9 @@ describe("smoke fixture primitives", () => {
 
 	test("cleanup terminates the exact acknowledged detached worker", async () => {
 		const fixture = await mkSmokeFixture();
-		await writeFile(
-			join(fixture.clone, "package.json"),
-			`${JSON.stringify({
-				private: true,
-				scripts: { check: 'bun -e "while (true) await Bun.sleep(1000)"' },
-			})}\n`,
+		await publishBaselineChecker(
+			fixture,
+			"while (true) await Bun.sleep(1000);\n",
 		);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "blocked cleanup worker\n");

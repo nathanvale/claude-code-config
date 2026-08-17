@@ -57,8 +57,8 @@ import { resolveVaultGitInstalledRuntimeRunner } from "./installed-runtime-runne
 import {
 	VAULT_GIT_REPAIR_ACTIONS,
 	VAULT_GIT_ACTIVATION_CONFIGURATION_FIELDS,
+	admitVaultGitCheckCommand,
 	createVaultGitActivationRestriction,
-	findVaultGitCheckScript,
 	findVaultGitDependencySurface,
 	isVaultGitNextActionId,
 	parseVaultGitManifest,
@@ -1570,11 +1570,10 @@ export function createVaultCheckerPort(
 			const manifest = parseVaultGitManifest(
 				await readFile(join(repositoryPath, "package.json")),
 			);
-			const script = findVaultGitCheckScript(manifest);
-			if (script === undefined) {
-				throw new Error("vault check script is unavailable");
-			}
-			return run(["exec", `${script} --json`]);
+			// The spawned line is rebuilt from the same admission the fingerprint
+			// entrypoint comes from; the raw manifest string never reaches exec.
+			const admission = admitCheckCommand(manifest);
+			return run(["exec", `${admission.commandLine} --json`]);
 		},
 		readRepairRegistry() {
 			return run(["run", "scripts/vault-repair-registry.ts"]);
@@ -1720,41 +1719,35 @@ function assertDeclaredDependencyResolutions(
 }
 
 /**
+ * Admit the manifest check script through the shared single-command owner or
+ * fail closed with the exact checker-lane refusal. Fingerprint and execution
+ * both consume this one admission, so the hashed entrypoint and the spawned
+ * command line cannot diverge.
+ */
+function admitCheckCommand(manifest: Readonly<Record<string, unknown>>) {
+	const admission = admitVaultGitCheckCommand(manifest);
+	if (admission.status === "admitted") return admission;
+	switch (admission.reason) {
+		case "script_unavailable":
+			throw new Error("vault check script is unavailable");
+		case "shell_grammar_rejected":
+			throw new Error(
+				"vault check script is broader than one admitted command",
+			);
+		case "entrypoint_unresolved":
+			throw new Error(
+				"vault check script does not resolve to one repository-relative entrypoint",
+			);
+	}
+}
+
+/**
  * Resolve the one repository-relative script file the package.json check
  * script executes. Admission fails closed when zero or multiple candidate
  * files appear, so an unresolvable checker surface can never be admitted.
  */
 function resolveCheckEntrypoint(manifestBytes: Uint8Array): string {
-	const script = findVaultGitCheckScript(parseVaultGitManifest(manifestBytes));
-	if (script === undefined) {
-		throw new Error("vault check script is unavailable");
-	}
-	const candidates = [
-		...new Set(
-			script
-				.split(/\s+/)
-				.filter(
-					(token) =>
-						/^[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:ts|mts|cts|js|mjs|cjs)$/.test(token) &&
-						token
-							.split("/")
-							.every(
-								(segment) =>
-									segment.length > 0 &&
-									segment !== "." &&
-									segment !== ".." &&
-									segment.toLowerCase() !== ".git",
-							),
-				),
-		),
-	];
-	const entrypoint = candidates[0];
-	if (candidates.length !== 1 || !entrypoint) {
-		throw new Error(
-			"vault check script does not resolve to one repository-relative entrypoint",
-		);
-	}
-	return entrypoint;
+	return admitCheckCommand(parseVaultGitManifest(manifestBytes)).entrypoint;
 }
 
 async function resolveConfiguredVaultRoot(

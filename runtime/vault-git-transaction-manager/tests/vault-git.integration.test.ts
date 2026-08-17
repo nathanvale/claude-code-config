@@ -1058,8 +1058,16 @@ async function createFixture(
 		join(clone, "notes", "a.md"),
 		options.checkerRepair ? "baseline\nowner:\n" : "baseline\n",
 	);
+	await mkdir(join(clone, "scripts"), { recursive: true });
+	if (!options.checkerRepair) {
+		// The check script must admit as one exact command naming one
+		// entrypoint file; an inline `bun -e` line is not admissible.
+		await writeFile(
+			join(clone, "scripts", "vault-check.ts"),
+			`process.exit(${options.checkPasses === false ? 1 : 0});\n`,
+		);
+	}
 	if (options.checkerRepair) {
-		await mkdir(join(clone, "scripts"), { recursive: true });
 		await writeFile(
 			join(clone, "scripts", "vault-check.ts"),
 			[
@@ -1094,9 +1102,7 @@ async function createFixture(
 			{
 				private: true,
 				scripts: {
-					check: options.checkerRepair
-						? "bun run scripts/vault-check.ts"
-						: `bun -e 'process.exit(${options.checkPasses === false ? 1 : 0})'`,
+					check: "bun run scripts/vault-check.ts",
 				},
 			},
 			null,
@@ -1119,9 +1125,8 @@ async function createFixture(
 		"bun.lock",
 		"notes/a.md",
 		"schemas/frontmatter-contract.json",
-		...(options.checkerRepair
-			? ["scripts/vault-check.ts", "scripts/vault-repair-registry.ts"]
-			: []),
+		"scripts/vault-check.ts",
+		...(options.checkerRepair ? ["scripts/vault-repair-registry.ts"] : []),
 	]);
 	git(clone, ["commit", "-m", "chore: initialize vault fixture"]);
 	git(clone, ["push", "-u", "origin", "main"]);

@@ -207,6 +207,35 @@ export async function mkSmokeSibling(
 	return mkSmokeClone(fixture.root, fixture.bare, name, {});
 }
 
+/**
+ * Publish one special checker to the committed fixture baseline before `begin`.
+ *
+ * The Validation Candidate is composed from the committed Admitted Baseline
+ * plus frozen Owned Paths, so a checker written only into the dirty worktree
+ * never reaches it. The commit stages exactly the checker entrypoint and is
+ * pushed so `begin` still observes aligned local and remote main; unrelated
+ * staged, unstaged, and untracked fixture bytes survive untouched.
+ *
+ * @param fixture - The fixture whose baseline receives the checker
+ * @param checkerSource - Exact `scripts/vault-check.ts` source
+ */
+export async function publishBaselineChecker(
+	fixture: Pick<SmokeFixture, "clone" | "git">,
+	checkerSource: string,
+): Promise<void> {
+	await mkdir(join(fixture.clone, "scripts"), { recursive: true });
+	await writeFile(join(fixture.clone, "scripts", "vault-check.ts"), checkerSource);
+	fixture.git("add", "--", "scripts/vault-check.ts");
+	fixture.git(
+		"commit",
+		"-m",
+		"test: publish baseline checker",
+		"--",
+		"scripts/vault-check.ts",
+	);
+	fixture.git("push", "origin", "HEAD:refs/heads/main");
+}
+
 async function mkSmokeClone(
 	root: string,
 	bare: string,
@@ -232,7 +261,28 @@ async function mkSmokeClone(
 		await writeFile(join(clone, "notes/event.md"), "baseline event\n");
 		await writeFile(join(clone, "staged.md"), "staged baseline\n");
 		await writeFile(join(clone, "unstaged.md"), "unstaged baseline\n");
-		git(clone, "add", "--", "notes/event.md", "staged.md", "unstaged.md");
+		// The Validation Candidate is composed from the committed Admitted
+		// Baseline, so a worktree-only checker never reaches it; the default
+		// passing checker and its manifest must ship in the seed commit.
+		await mkdir(join(clone, "scripts"), { recursive: true });
+		await writeFile(join(clone, "scripts/vault-check.ts"), "process.exit(0);\n");
+		await writeFile(
+			join(clone, "package.json"),
+			`${JSON.stringify({
+				private: true,
+				scripts: { check: "bun run scripts/vault-check.ts" },
+			})}\n`,
+		);
+		git(
+			clone,
+			"add",
+			"--",
+			"notes/event.md",
+			"staged.md",
+			"unstaged.md",
+			"scripts/vault-check.ts",
+			"package.json",
+		);
 		git(clone, "commit", "-m", "test: seed smoke vault");
 		git(clone, "push", "-u", "origin", "HEAD:refs/heads/main");
 		git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
@@ -251,6 +301,17 @@ async function mkSmokeClone(
 	await writeFile(join(shimDirectory, "git"), gitShimSource());
 	await chmod(join(shimDirectory, "git"), 0o755);
 
+	// The process wrapper resolves the admitted activation identity through the
+	// legacy fixture env lane, which validates these exact owner-only files.
+	const publicKeyPath = join(root, `${name}-writer.pub`);
+	const privateKeyPath = join(root, `${name}-writer`);
+	const knownHostsPath = join(root, `${name}-known_hosts`);
+	await writeFile(publicKeyPath, "ssh-ed25519 fixture-public-key\n");
+	await writeFile(privateKeyPath, "fixture-private-key\n", { mode: 0o600 });
+	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n", {
+		mode: 0o600,
+	});
+
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		HOME: profileRoot,
@@ -264,6 +325,12 @@ async function mkSmokeClone(
 		VAULT_GIT_ACTOR: `agent-${name}`,
 		VAULT_GIT_HOST: `host-${name}`,
 		VAULT_GIT_REMOTE: "origin",
+		VAULT_GIT_SSH_IDENTITY_FILE_PATH: privateKeyPath,
+		VAULT_GIT_SSH_PUBLIC_KEY_PATH: publicKeyPath,
+		VAULT_GIT_SSH_KNOWN_HOSTS_PATH: knownHostsPath,
+		// The configured activation identity owns the git binary, so it must
+		// name the recording shim or every shim-mode row silently runs real git.
+		VAULT_GIT_GIT_BINARY_PATH: join(shimDirectory, "git"),
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
 		VAULT_GIT_TEST_HARNESS: "1",

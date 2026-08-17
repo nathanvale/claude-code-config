@@ -16,6 +16,7 @@ import {
 	type VaultGitCandidateResidueOwnership,
 } from "../src/validation-candidate.ts";
 import { createNodeProcessPort } from "../src/git-adapter.ts";
+import { createNodeVaultGitDurabilityPort } from "../src/store.ts";
 import type {
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
@@ -207,6 +208,10 @@ function plantedRecordText(
 
 const AGED_RESIDUE_NOW = () => new Date("2026-08-18T00:00:00.000Z");
 
+// Root bypasses filesystem mode bits, so chmod-denial assertions prove
+// nothing there; ordinary-host coverage keeps running them.
+const runningAsRoot = process.getuid?.() === 0;
+
 describe("validation candidate composition", () => {
 	test("runs the vault check against baseline plus frozen owned bytes only and removes the candidate", async () => {
 		const fixture = await candidateFixture({
@@ -288,6 +293,36 @@ describe("validation candidate composition", () => {
 			ownedPaths: [owned],
 		});
 		expect(result).toMatchObject({
+			status: "passed",
+			checkedPaths: [{ path: "owned.md", fileMode: "100755" }],
+		});
+	});
+
+	test("normalizes group/other-only execute bits to 100644 and owner execute to 100755", async () => {
+		const fixture = await candidateFixture();
+		const owned = fixture.ownedReceipt("owned.md");
+		await writeFile(join(fixture.vault, "owned.md"), "owned frozen\n");
+		await chmod(join(fixture.vault, "owned.md"), 0o654);
+		const port = createVaultOwnedCheckPort({
+			repositoryPath: fixture.vault,
+			privateStateRoot: fixture.privateRoot,
+			process: capturingPort(),
+			runtimeBinaryPath: process.execPath,
+		});
+		const groupExecutable = await port.run({
+			baselineHead: fixture.head,
+			ownedPaths: [owned],
+		});
+		expect(groupExecutable).toMatchObject({
+			status: "passed",
+			checkedPaths: [{ path: "owned.md", fileMode: "100644" }],
+		});
+		await chmod(join(fixture.vault, "owned.md"), 0o744);
+		const ownerExecutable = await port.run({
+			baselineHead: fixture.head,
+			ownedPaths: [owned],
+		});
+		expect(ownerExecutable).toMatchObject({
 			status: "passed",
 			checkedPaths: [{ path: "owned.md", fileMode: "100755" }],
 		});
@@ -599,6 +634,42 @@ describe("validation failure classes", () => {
 			stage: "candidate_setup",
 		});
 		expect(port.requests.filter(isCheckInvocation)).toHaveLength(0);
+		expect(await candidateDirectories(fixture.candidatesRoot)).toEqual([]);
+		expect(await residueFiles(fixture.candidatesRoot)).toEqual([]);
+	});
+
+	test("a check script appending a second command after the admitted entrypoint refuses as candidate_setup before the check spawns", async () => {
+		const escapeMarker = join(
+			await mkdtemp(join(tmpdir(), "vault-git-admission-escape-")),
+			"marker",
+		);
+		roots.push(dirname(escapeMarker));
+		const fixture = await candidateFixture({
+			manifest: {
+				name: "fixture-vault",
+				scripts: { check: `bun scripts/check.ts && /usr/bin/touch ${escapeMarker}` },
+			},
+		});
+		const owned = fixture.ownedReceipt("owned.md");
+		const port = capturingPort();
+		const check = createVaultOwnedCheckPort({
+			repositoryPath: fixture.vault,
+			privateStateRoot: fixture.privateRoot,
+			process: port,
+			runtimeBinaryPath: process.execPath,
+		});
+		const result = await check.run({
+			baselineHead: fixture.head,
+			ownedPaths: [owned],
+			transactionId: "txn_admission",
+		});
+		expect(result).toEqual({
+			status: "failed",
+			failureClass: "candidate_setup",
+			stage: "candidate_setup",
+		});
+		expect(port.requests.filter(isCheckInvocation)).toHaveLength(0);
+		expect(existsSync(escapeMarker)).toBe(false);
 		expect(await candidateDirectories(fixture.candidatesRoot)).toEqual([]);
 		expect(await residueFiles(fixture.candidatesRoot)).toEqual([]);
 	});
@@ -983,15 +1054,17 @@ describe("candidate residue", () => {
 		expect(await candidateDirectories(fixture.candidatesRoot)).toEqual(
 			[extraId, unrecordedId].sort(),
 		);
-		await chmod(fixture.candidatesRoot, 0o000);
-		try {
-			expect(await store.observe()).toEqual({
-				status: "failed",
-				reason: "residue_root_unreadable",
-			});
-			expect(await store.remove(extraId)).toBe("refused_unknown_evidence");
-		} finally {
-			await chmod(fixture.candidatesRoot, 0o700);
+		if (!runningAsRoot) {
+			await chmod(fixture.candidatesRoot, 0o000);
+			try {
+				expect(await store.observe()).toEqual({
+					status: "failed",
+					reason: "residue_root_unreadable",
+				});
+				expect(await store.remove(extraId)).toBe("refused_unknown_evidence");
+			} finally {
+				await chmod(fixture.candidatesRoot, 0o700);
+			}
 		}
 	});
 
@@ -1060,7 +1133,7 @@ describe("candidate residue", () => {
 		});
 	});
 
-	test("a residue record that cannot be removed classifies candidate_cleanup instead of clean completion", async () => {
+	test.skipIf(runningAsRoot)("a residue record that cannot be removed classifies candidate_cleanup instead of clean completion", async () => {
 		const fixture = await candidateFixture();
 		const owned = fixture.ownedReceipt("owned.md");
 		const port = createVaultOwnedCheckPort({
@@ -1096,6 +1169,84 @@ describe("candidate residue", () => {
 			schemaVersion: 1,
 			transactionId: "txn_record_stuck",
 		});
+	});
+
+	for (const boundary of ["writeTemp", "syncFile", "rename"] as const) {
+		test(`a residue publication ${boundary} failure leaves no staged entry and classifies candidate_setup`, async () => {
+			const fixture = await candidateFixture();
+			const owned = fixture.ownedReceipt("owned.md");
+			const port = capturingPort();
+			const check = createVaultOwnedCheckPort({
+				repositoryPath: fixture.vault,
+				privateStateRoot: fixture.privateRoot,
+				process: port,
+				runtimeBinaryPath: process.execPath,
+				durability: {
+					...createNodeVaultGitDurabilityPort(),
+					[boundary]: async () => {
+						throw new Error(`${boundary} failure injected`);
+					},
+				},
+			});
+			const result = await check.run({
+				baselineHead: fixture.head,
+				ownedPaths: [owned],
+				transactionId: "txn_residue_boundary",
+			});
+			expect(result).toEqual({
+				status: "failed",
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+			});
+			const entries = await readdir(fixture.candidatesRoot).catch(
+				() => [] as string[],
+			);
+			expect(entries.filter((entry) => entry.endsWith(".staged"))).toEqual([]);
+			expect(port.requests).toHaveLength(0);
+		});
+	}
+
+	test("a directory-sync failure after rename publication reports the failure without the writer removing the published record", async () => {
+		const fixture = await candidateFixture();
+		const owned = fixture.ownedReceipt("owned.md");
+		const atCleanup: { published?: boolean; staged?: string[] } = {};
+		const check = createVaultOwnedCheckPort({
+			repositoryPath: fixture.vault,
+			privateStateRoot: fixture.privateRoot,
+			process: capturingPort(),
+			runtimeBinaryPath: process.execPath,
+			durability: {
+				...createNodeVaultGitDurabilityPort(),
+				syncDirectory: async () => {
+					throw new Error("directory sync failure injected");
+				},
+			},
+			// Cleanup runs after the writer's own failure handling and before the
+			// record unlink, so this is the instant that separates writer-preserved
+			// publication from a writer that wrongly removed it.
+			removeCandidate: async (candidateRoot) => {
+				const entries = readdirSync(fixture.candidatesRoot);
+				atCleanup.published = entries.some((entry) => entry.endsWith(".json"));
+				atCleanup.staged = entries.filter((entry) => entry.endsWith(".staged"));
+				await rm(candidateRoot, { recursive: true, force: true });
+			},
+		});
+		const result = await check.run({
+			baselineHead: fixture.head,
+			ownedPaths: [owned],
+			transactionId: "txn_residue_sync",
+		});
+		expect(result).toEqual({
+			status: "failed",
+			failureClass: "candidate_setup",
+			stage: "candidate_setup",
+		});
+		expect(atCleanup.published).toBe(true);
+		expect(atCleanup.staged).toEqual([]);
+		const remaining = await readdir(fixture.candidatesRoot).catch(
+			() => [] as string[],
+		);
+		expect(remaining.filter((entry) => entry.endsWith(".staged"))).toEqual([]);
 	});
 
 	test("writes owner-bound residue metadata before the candidate is built so a crash leaves an owned record", async () => {
@@ -1286,5 +1437,8 @@ describe("candidate residue", () => {
 			status: "observed",
 			observations: [{ kind: "record", candidateId, eligibility: "already_removed" }],
 		});
-	});
+		// The harness bound must stay above the 20s child-start diagnostic
+		// deadline inside this test; the file-default 5s would kill the test
+		// before its own diagnostic can name a slow child.
+	}, 30_000);
 });

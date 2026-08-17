@@ -821,7 +821,9 @@ export function createGitRepositoryAdapter(
 			hashes.push({
 				path,
 				contentHash: requireObjectId(hashed.stdout, "owned path content"),
-				fileMode: (metadata.mode & 0o111) !== 0 ? "100755" : "100644",
+				// Git derives 100755 from the owner-execute bit alone; testing
+				// group/other bits misclassifies 0o654 and breaks the commit fence.
+				fileMode: (metadata.mode & 0o100) !== 0 ? "100755" : "100644",
 			});
 		}
 		return hashes;

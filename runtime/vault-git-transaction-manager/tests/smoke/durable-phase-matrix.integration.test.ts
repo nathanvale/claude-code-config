@@ -13,6 +13,7 @@ import {
 	assertWorktreeUnchanged,
 	cleanupSmokeFixtures,
 	mkSmokeFixture,
+	publishBaselineChecker,
 	runDoctorToTerminal,
 } from "./fixture.ts";
 
@@ -185,21 +186,13 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 	test("checking resumes after the checker process is killed", async () => {
 		const fixture = await mkSmokeFixture();
 		const marker = join(fixture.root, "checking-ready");
-		fixture.env.VAULT_GIT_TEST_PHASE_MARKER = marker;
-		await writeFile(
-			join(fixture.clone, "package.json"),
-			`${JSON.stringify({
-				private: true,
-				scripts: { check: "bun run phase-check.ts" },
-			})}\n`,
-		);
-		await writeFile(
-			join(fixture.clone, "phase-check.ts"),
+		// The candidate environment is scrubbed, so the marker path must ride in
+		// the committed checker source; an env-delivered marker never arrives.
+		await publishBaselineChecker(
+			fixture,
 			[
 				'import { writeFile } from "node:fs/promises";',
-				"const marker = process.env.VAULT_GIT_TEST_PHASE_MARKER;",
-				'if (!marker) throw new Error("missing phase marker");',
-				'await writeFile(marker, "checking\\n");',
+				`await writeFile(${JSON.stringify(marker)}, "checking\\n");`,
 				"while (true) await Bun.sleep(10);",
 			].join("\n"),
 		);
@@ -254,7 +247,6 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 
 	test("committing resumes after the local commit process is killed", async () => {
 		const fixture = await mkSmokeFixture({ shimMode: "block_commit" });
-		await installPassingCheck(fixture.clone);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "committing bytes\n");
 		const before = fixture.snapshot();
@@ -306,7 +298,6 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 
 	test("push_pending retries the preserved commit after atomic close is killed", async () => {
 		const fixture = await mkSmokeFixture({ shimMode: "block_close" });
-		await installPassingCheck(fixture.clone);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "push pending bytes\n");
 		const before = fixture.snapshot();
@@ -366,15 +357,21 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 
 	test("repairable re-enters completion under the same task after a real checker failure", async () => {
 		const fixture = await mkSmokeFixture();
-		await writeFile(
-			join(fixture.clone, "package.json"),
-			`${JSON.stringify({
-				private: true,
-				scripts: { check: 'bun -e "process.exit(1)"' },
-			})}\n`,
+		// The committed checker derives its verdict from the frozen owned bytes;
+		// re-entry changes only the owned path, never the checker.
+		await publishBaselineChecker(
+			fixture,
+			[
+				'import { readFile } from "node:fs/promises";',
+				'const source = await readFile("notes/event.md", "utf8");',
+				'process.exit(source.includes("failing") ? 1 : 0);',
+			].join("\n"),
 		);
 		const transactionId = await fixture.begin("notes/event.md");
-		await writeFile(join(fixture.clone, "notes/event.md"), "repairable bytes\n");
+		await writeFile(
+			join(fixture.clone, "notes/event.md"),
+			"repairable failing bytes\n",
+		);
 		const before = fixture.snapshot();
 
 		const accepted = await fixture.run([
@@ -465,7 +462,10 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		assertLedgerState(fixture, "held");
 		assertWorktreeUnchanged(before, fixture.snapshot());
 
-		await installPassingCheck(fixture.clone);
+		await writeFile(
+			join(fixture.clone, "notes/event.md"),
+			"repairable repaired bytes\n",
+		);
 		const beforeReentry = fixture.snapshot();
 		const repairedCallers = await Promise.all(
 			Array.from({ length: 20 }, () =>
@@ -523,7 +523,6 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 
 	test("human_required preserves a one-ref publication for operator review", async () => {
 		const fixture = await mkSmokeFixture({ shimMode: "partial_close" });
-		await installPassingCheck(fixture.clone);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "partial close bytes\n");
 		const before = fixture.snapshot();
@@ -629,7 +628,6 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 
 	test("closed returns no continuation after verified atomic publication", async () => {
 		const fixture = await mkSmokeFixture();
-		await installPassingCheck(fixture.clone);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "closed bytes\n");
 		const before = fixture.snapshot();
@@ -710,7 +708,6 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 	] as const) {
 		test(`a detached worker killed ${workerCase.name} leaves one safe continuation`, async () => {
 			const fixture = await mkSmokeFixture();
-			await installPassingCheck(fixture.clone);
 			const transactionId = await fixture.begin("notes/event.md");
 			await writeFile(
 				join(fixture.clone, "notes/event.md"),
@@ -762,13 +759,3 @@ describe("AE5: every persisted phase has one safe continuation", () => {
 		});
 	}
 });
-
-async function installPassingCheck(clone: string): Promise<void> {
-	await writeFile(
-		join(clone, "package.json"),
-		`${JSON.stringify({
-			private: true,
-			scripts: { check: 'bun -e "process.exit(0)"' },
-		})}\n`,
-	);
-}

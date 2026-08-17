@@ -92,6 +92,65 @@ describe("vault checker process boundary", () => {
 		expect(requests).toHaveLength(0);
 	});
 
+	test("refuses a check script broader than one admitted command in both fingerprint and execution before any spawn", async () => {
+		const hostileScripts = [
+			"bun scripts/check.ts && touch pwned",
+			"bun scripts/check.ts ; touch pwned",
+			"bun scripts/check.ts | tee capture",
+			"bun scripts/check.ts > capture",
+			"bun scripts/check.ts $(touch pwned)",
+			"bun scripts/check.ts `touch pwned`",
+		];
+		for (const script of hostileScripts) {
+			const root = await checkerFixture({
+				name: "hostile-check-script",
+				private: true,
+				scripts: { check: script },
+			});
+			const requests: VaultGitProcessRequest[] = [];
+			const processPort: VaultGitProcessPort = {
+				async run(request) {
+					requests.push(request);
+					return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+				},
+			};
+			const checker = createVaultCheckerPort(root, processPort);
+			await expect(checker.fingerprint()).rejects.toThrow(
+				"vault check script is broader than one admitted command",
+			);
+			await expect(checker.runCheck()).rejects.toThrow(
+				"vault check script is broader than one admitted command",
+			);
+			expect(requests).toHaveLength(0);
+		}
+	});
+
+	test("executes exactly the admitted command line rebuilt from admission tokens", async () => {
+		const root = await checkerFixture({
+			name: "admitted-check-script",
+			private: true,
+			scripts: { check: "bun  scripts/check.ts" },
+		});
+		const requests: VaultGitProcessRequest[] = [];
+		const processPort: VaultGitProcessPort = {
+			async run(request) {
+				requests.push(request);
+				return {
+					exitCode: 0,
+					stdout: '{"status":"ok","findings":[]}',
+					stderr: "",
+					timedOut: false,
+				};
+			},
+		};
+		const checker = createVaultCheckerPort(root, processPort);
+
+		await checker.runCheck();
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.args).toEqual(["exec", "bun scripts/check.ts --json"]);
+	});
+
 	test("binds the deterministic frontmatter schema read by the checker", async () => {
 		const root = await mkdtemp(join(tmpdir(), "vault-checker-closure-"));
 		roots.push(root);

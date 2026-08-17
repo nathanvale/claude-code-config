@@ -2,8 +2,13 @@
 
 import { existsSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 
-import { createVaultGitCliComposition, main } from "../../src/cli.ts";
+import {
+	createVaultGitCliComposition,
+	main,
+	resolveDefaultActivationIdentity,
+} from "../../src/cli.ts";
 import { createNodeVaultGitRuntime } from "../../src/clock.ts";
 import { persistedActivationAuthorityForTest } from "../activation-fixture.ts";
 
@@ -41,6 +46,13 @@ const runtime =
 				},
 			}
 		: baseRuntime;
+// This wrapper builds composition input directly, so it must also resolve the
+// admitted activation identity the production default composition would have
+// resolved; the vault check fails closed without that single runtime binding.
+const activationIdentity = await resolveDefaultActivationIdentity(
+	process.env,
+	homedir(),
+);
 const baseInput = {
 	repositoryPath: required("VAULT_GIT_REPOSITORY_PATH"),
 	checkRepositoryPath: required("VAULT_GIT_CHECK_REPOSITORY_PATH"),
@@ -51,6 +63,9 @@ const baseInput = {
 	remote: process.env.VAULT_GIT_REMOTE ?? "origin",
 	leaseDurationMs,
 	runtime,
+	...(activationIdentity.status === "configured"
+		? { activationIdentity: activationIdentity.value }
+		: {}),
 	privateEntrypointPath: import.meta.path,
 } as const;
 const storeComposition = await createVaultGitCliComposition(baseInput);
