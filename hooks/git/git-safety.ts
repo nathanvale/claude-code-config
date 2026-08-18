@@ -12,8 +12,9 @@
  * timed-out safety check must deny (exit 2), not silently allow (exit 1).
  */
 
-import { existsSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, resolve, sep } from 'node:path'
 import { postEvent } from './event-bus-client'
 import { PROTECTED_BRANCHES } from './git-policy'
 import { getCurrentBranch, runGit } from './git-utils'
@@ -199,6 +200,72 @@ const PROTECTED_FILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 		reason: 'Direct .git directory modifications are dangerous.',
 	},
 ]
+
+/** Resolves the Claude config dir, honouring CLAUDE_CONFIG_DIR when set. */
+function getClaudeConfigDir(
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const raw = env.CLAUDE_CONFIG_DIR?.trim()
+	return raw ? resolve(raw) : resolve(homedir(), '.claude')
+}
+
+/**
+ * Resolves a path through symlinked ancestors. realpathSync throws when the
+ * leaf does not exist, and memory writes routinely create new files, so walk
+ * up to the nearest real directory and re-attach the remainder.
+ */
+function resolveThroughSymlinks(absPath: string): string | null {
+	let dir = dirname(absPath)
+	while (dir !== dirname(dir)) {
+		try {
+			return resolve(realpathSync(dir), absPath.slice(dir.length + 1))
+		} catch {
+			dir = dirname(dir)
+		}
+	}
+	return null
+}
+
+/**
+ * True for Claude's own auto-memory store: `<config>/projects/<slug>/memory/**`.
+ *
+ * This store is session state the running agent writes to by design, and on
+ * this machine `<config>/projects` is a symlink into a real repo's main
+ * checkout — so every memory write otherwise trips worktree isolation. A
+ * worktree cannot isolate it: the writes would land in the worktree and never
+ * reach the real store, silently breaking memory instead of protecting it.
+ *
+ * Deliberately narrow. Only the `memory/` subtree is exempt; sibling session
+ * transcripts and every other file in the backing repo stay protected.
+ */
+export function isAgentMemoryPath(
+	filePath: string,
+	env: Record<string, string | undefined> = process.env,
+): boolean {
+	const projectsRoot = resolve(getClaudeConfigDir(env), 'projects')
+	const roots = new Set<string>([projectsRoot])
+	// The tool may pass either the symlink path or the resolved path.
+	try {
+		roots.add(realpathSync(projectsRoot))
+	} catch {
+		// Store not present on this machine; the symlink form still matches.
+	}
+
+	const abs = resolve(filePath)
+	const candidates = new Set<string>([abs])
+	const resolved = resolveThroughSymlinks(abs)
+	if (resolved) candidates.add(resolved)
+
+	for (const candidate of candidates) {
+		for (const root of roots) {
+			if (!candidate.startsWith(root + sep)) continue
+			const rest = candidate.slice(root.length + 1).split(sep)
+			// <slug>/memory/<at least one segment>
+			if (rest.length >= 3 && rest[1] === 'memory') return true
+		}
+	}
+	return false
+}
 
 function collectShortFlags(args: string[]): string {
 	return args
@@ -858,12 +925,18 @@ export function checkFileEdit(filePath: string): {
  * Isolated when the repo's git-common-dir differs from its git-dir (the
  * signature of a linked worktree). Non-repos and unreadable paths return
  * blocked: false — this hook guards worktree isolation, not file access.
+ *
+ * Claude's auto-memory store is exempt; see isAgentMemoryPath.
  */
 export async function checkWorktreeIsolation(filePath: string): Promise<{
 	blocked: boolean
 	reason?: string
 	branch?: string
 }> {
+	// Claude's own memory store is session state it writes to by design; a
+	// worktree would divert those writes away from the real store.
+	if (isAgentMemoryPath(filePath)) return { blocked: false }
+
 	// Walk up to the nearest existing ancestor: the target may be a new file in
 	// a directory that does not exist yet, and spawning git with a missing cwd
 	// throws ENOENT rather than returning a non-zero exit code.

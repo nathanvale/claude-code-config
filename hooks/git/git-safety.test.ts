@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PROTECTED_BRANCHES } from './git-policy.ts'
@@ -8,6 +8,7 @@ import {
 	checkFileEdit,
 	checkWorktreeIsolation,
 	getGitSafetyMode,
+	isAgentMemoryPath,
 	hasImplicitProtectedBranchForceLeasePush,
 	hasProtectedBranchCommitAction,
 	isCommitCommand,
@@ -1229,5 +1230,94 @@ describe('checkWorktreeIsolation', () => {
 		const result = await checkWorktreeIsolation(join(mainRepo, 'seed.txt'))
 		expect(result.reason).toContain('MAIN CHECKOUT')
 		expect(result.reason).toContain('worktree')
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Agent memory store: exempt from isolation, even inside a main checkout
+// ---------------------------------------------------------------------------
+
+describe('agent memory store exemption', () => {
+	let root: string
+	let repo: string
+	let configDir: string
+	let slug: string
+	let previousConfigDir: string | undefined
+
+	beforeAll(async () => {
+		root = mkdtempSync(join(tmpdir(), 'memory-exempt-'))
+		repo = join(root, 'dotfiles')
+		configDir = join(root, 'config')
+		slug = '-Users-test-code-example'
+
+		const git = async (args: string[], cwd: string) => {
+			const proc = Bun.spawn(['git', ...args], {
+				cwd,
+				stdout: 'ignore',
+				stderr: 'ignore',
+			})
+			await proc.exited
+		}
+
+		// Mirror the real topology: the memory store lives inside a repo's main
+		// checkout, reached through a symlinked `projects` root.
+		mkdirSync(join(repo, 'claude', 'projects', slug, 'memory'), {
+			recursive: true,
+		})
+		await git(['init', '-b', 'main', '.'], repo)
+		await git(['config', 'user.email', 'test@example.com'], repo)
+		await git(['config', 'user.name', 'Test'], repo)
+		writeFileSync(join(repo, 'README.md'), 'readme\n')
+		await git(['add', '.'], repo)
+		await git(['commit', '-m', 'seed'], repo)
+
+		mkdirSync(configDir, { recursive: true })
+		symlinkSync(join(repo, 'claude', 'projects'), join(configDir, 'projects'))
+
+		previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+		process.env.CLAUDE_CONFIG_DIR = configDir
+	})
+
+	afterAll(() => {
+		if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+		else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+		rmSync(root, { recursive: true, force: true })
+	})
+
+	test('allows a memory file reached through the symlinked projects root', async () => {
+		const result = await checkWorktreeIsolation(
+			join(configDir, 'projects', slug, 'memory', 'MEMORY.md'),
+		)
+		expect(result.blocked).toBe(false)
+	})
+
+	test('allows a not-yet-existing memory file', async () => {
+		const result = await checkWorktreeIsolation(
+			join(configDir, 'projects', slug, 'memory', 'brand-new-note.md'),
+		)
+		expect(result.blocked).toBe(false)
+	})
+
+	test('allows a memory file addressed by its real in-repo path', async () => {
+		const result = await checkWorktreeIsolation(
+			join(repo, 'claude', 'projects', slug, 'memory', 'note.md'),
+		)
+		expect(result.blocked).toBe(false)
+	})
+
+	test('still blocks a sibling transcript in the same slug directory', async () => {
+		const result = await checkWorktreeIsolation(
+			join(configDir, 'projects', slug, 'session.jsonl'),
+		)
+		expect(result.blocked).toBe(true)
+	})
+
+	test('still blocks ordinary source in the backing main checkout', async () => {
+		const result = await checkWorktreeIsolation(join(repo, 'README.md'))
+		expect(result.blocked).toBe(true)
+	})
+
+	test('does not exempt a directory merely named memory elsewhere', () => {
+		expect(isAgentMemoryPath(join(repo, 'memory', 'note.md'))).toBe(false)
 	})
 })
