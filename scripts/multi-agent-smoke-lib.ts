@@ -193,29 +193,13 @@ function createBooleanSmokeTest(input: {
 	};
 }
 
-function prepareCodexSmokeCwd(tempRoot: string, sourceCwd: string): string {
-	const sourceAgents = join(sourceCwd, "AGENTS.md");
-	const targetAgents = join(tempRoot, "AGENTS.md");
-	if (existsSync(sourceAgents)) {
-		copyFileSync(sourceAgents, targetAgents);
-	} else {
-		writeFileSync(targetAgents, "# Agent Instructions\n");
-	}
-	return tempRoot;
-}
-
-function prepareCodexSmokeHome(tempRoot: string, sourceCwd: string): string {
+function prepareCodexSmokeHome(tempRoot: string): string {
 	const codexHome = join(tempRoot, "codex-home");
 	mkdirSync(codexHome, { recursive: true });
 
 	const sourceAuth = join(process.env.HOME ?? "", ".codex", "auth.json");
 	if (existsSync(sourceAuth)) {
 		copyFileSync(sourceAuth, join(codexHome, "auth.json"));
-	}
-
-	const sourceAgents = join(sourceCwd, "AGENTS.md");
-	if (existsSync(sourceAgents)) {
-		copyFileSync(sourceAgents, join(codexHome, "AGENTS.md"));
 	}
 
 	return codexHome;
@@ -375,9 +359,7 @@ function prepareSmokeCommandCwd(input: {
 			input.omitProjectSkills,
 		);
 	}
-	return input.harness === "codex"
-		? prepareCodexSmokeCwd(input.tempRoot, input.sourceCwd)
-		: input.sourceCwd;
+	return input.sourceCwd;
 }
 
 export const SMOKE_TESTS: readonly SmokeTestDefinition[] = [
@@ -419,15 +401,15 @@ Return a JSON object with these meanings:
 				autoAppliesClaudeOnlyRules: true,
 				sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 				assumesClaudeOnlyToolsLikeKitOrAtuin: true,
-				commitsDirectlyToMain: false,
+				commitsDirectlyToMain: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				usesContext7ForLibraryDocs: true,
+				usesContext7ForLibraryDocs: false,
 				autoAppliesClaudeOnlyRules: false,
 				sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 				assumesClaudeOnlyToolsLikeKitOrAtuin: false,
-				commitsDirectlyToMain: false,
+				commitsDirectlyToMain: true,
 			},
 		},
 	},
@@ -1290,9 +1272,8 @@ const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 			...(test.runtime?.projectSkills
 				? ["--setting-sources", "project"]
 				: []),
-			...(test.runtime?.claudeEffort
-				? ["--effort", test.runtime.claudeEffort]
-				: []),
+			"--effort",
+			test.runtime?.claudeEffort ?? "high",
 			...(test.runtime?.claudePermissionMode
 				? ["--permission-mode", test.runtime.claudePermissionMode]
 				: []),
@@ -1675,7 +1656,7 @@ export async function runSmokeTest(input: {
 	});
 	const env =
 		input.harness === "codex"
-			? { ...process.env, CODEX_HOME: prepareCodexSmokeHome(tempRoot, input.cwd) }
+			? { ...process.env, CODEX_HOME: prepareCodexSmokeHome(tempRoot) }
 			: process.env;
 
 	if (input.dryRun) {

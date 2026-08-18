@@ -236,17 +236,17 @@ describe("multi-agent smoke library", () => {
 			autoAppliesClaudeOnlyRules: true,
 			sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 			assumesClaudeOnlyToolsLikeKitOrAtuin: true,
-			commitsDirectlyToMain: false,
+			commitsDirectlyToMain: true,
 		});
 		expect(claudeAssertions.every((assertion) => assertion.ok)).toBe(true);
 
 		const codexAssertions = evaluateOutput(testDef, "codex", {
 			whoAmI: "codex",
-			usesContext7ForLibraryDocs: true,
+			usesContext7ForLibraryDocs: false,
 			autoAppliesClaudeOnlyRules: false,
 			sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 			assumesClaudeOnlyToolsLikeKitOrAtuin: false,
-			commitsDirectlyToMain: false,
+			commitsDirectlyToMain: true,
 		});
 		expect(codexAssertions.every((assertion) => assertion.ok)).toBe(true);
 	});
@@ -313,7 +313,7 @@ describe("multi-agent smoke library", () => {
 	});
 
 	test("command builders encode the live CLI contract", () => {
-		const cwd = "/tmp/repo";
+		const cwd = repositoryRoot;
 
 		const { command: claudeCommand, cleanup: cleanupClaude } =
 			buildSmokeCommand({
@@ -329,7 +329,9 @@ describe("multi-agent smoke library", () => {
 		try {
 			expect(claudeCommand).toContain("--");
 			expect(claudeCommand[0]).toBe("claude");
-			expect(claudeCommand).not.toContain("--effort");
+			const effortIndex = claudeCommand.indexOf("--effort");
+			expect(effortIndex).toBeGreaterThan(0);
+			expect(claudeCommand[effortIndex + 1]).toBe("high");
 
 			expect(codexCommand.slice(0, 4)).toEqual([
 				"codex",
@@ -346,7 +348,7 @@ describe("multi-agent smoke library", () => {
 			const schemaIndex = codexCommand.indexOf("--output-schema") + 1;
 			const cwdIndex = codexCommand.indexOf("-C") + 1;
 			expect(existsSync(codexCommand[schemaIndex])).toBe(true);
-			expect(existsSync(codexCommand[cwdIndex])).toBe(true);
+			expect(codexCommand[cwdIndex]).toBe(repositoryRoot);
 		} finally {
 			cleanupClaude();
 			cleanupCodex();
@@ -624,7 +626,7 @@ describe("multi-agent smoke library", () => {
 		const result = await runSmokeTest({
 			testId: "boundary",
 			harness: "codex",
-			cwd: "/tmp/repo",
+			cwd: repositoryRoot,
 			dryRun: true,
 			timeoutMs: 12_345,
 		});
@@ -638,7 +640,8 @@ describe("multi-agent smoke library", () => {
 		const schemaPath = result.command[result.command.indexOf("--output-schema") + 1];
 		const commandCwd = result.command[result.command.indexOf("-C") + 1];
 		expect(existsSync(schemaPath)).toBe(false);
-		expect(existsSync(commandCwd)).toBe(false);
+		expect(commandCwd).toBe(repositoryRoot);
+		expect(existsSync(commandCwd)).toBe(true);
 	});
 
 	test("missing-skill negative uses the bounded unavailable prompt", async () => {
