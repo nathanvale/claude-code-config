@@ -1,46 +1,40 @@
 ---
 name: gh-account-switch
-description: "Switch authenticated GitHub CLI accounts and select the matching SSH identity."
+description: "Select the right GitHub account. Use on push or fetch denied, wrong-account commits, \"Repository not found\" on a private repository, or cloning a second account's repository."
 argument-hint: "<account>"
-disable-model-invocation: true
 ---
 
 # GitHub Account Switch
 
-Switch the active `gh` account only when this skill is explicitly invoked.
-
 ## Route
 
-1. Run `gh auth status`; never infer the active account.
-2. Require an exact authenticated target. If missing, list the accounts and ask which one.
-3. Run `gh auth switch --hostname github.com --user <account>`.
-4. Verify `gh api user --jq .login` exactly matches the target.
+1. `ghh check --account <login>` → exit `0`. Never infer the active account.
+2. `ghh exec --account <login> -- <gh arguments...>` for GitHub API work.
+3. Before clone, fetch, push, or remote change: `ssh -T -o BatchMode=yes git@<host>`
+   → require `Hi <login>!`. Exit `1` is success; GitHub provides no shell.
 
-For Git over SSH, keep token identity and SSH identity separate:
+Target account not supplied: list the accounts and ask which one.
 
-| Account | SSH host |
-|---|---|
-| `nathanvale` | `github.com` |
-| `myagentdojo` | `github-myagentdojo` |
+| Account | Owns | API layer (`ghh --account`) | Transport layer (SSH host) |
+|---|---|---|---|
+| `nathanvale` | personal repositories | `nathanvale` | `github.com` |
+| `myagentdojo` | `my-second-brain-*`, `agent-plugin-*`, `agent-attention*` | `myagentdojo` | `github-myagentdojo` |
 
-Before clone, fetch, push, or remote changes, run
-`ssh -T -o BatchMode=yes git@<host>` and require `Hi <account>!`. GitHub returns
-exit `1` after successful authentication because it provides no shell.
+Two layers, set independently. A push or fetch failure is a transport fault.
 
-Use the explicit host when cloning:
+"Repository not found" under one account: re-probe under the other before concluding
+the repository is missing.
+
+Clone with the explicit host:
 
 ```sh
-gh repo clone git@<host>:<owner>/<repo>.git
+git clone git@<host>:<owner>/<repo>.git
 ```
+
+`ghh --help` owns flags, exit codes, and behavior.
 
 ## Safety
 
-- Stop when the `gh` identity or SSH greeting does not match the target.
-- Never print tokens or private keys.
-- Switching accounts does not authorize SSH key, SSH config, Git remote, or repository changes.
-
-`gh auth switch --help` owns switch flags and behavior.
-
-## Next Safe Action
-
-Run `gh auth status`, then switch only when an exact target account was supplied.
+- Stop when `ghh check` fails or the SSH greeting does not match the target.
+- Selecting an account does not authorize SSH key, SSH config, Git remote, or
+  repository changes.
