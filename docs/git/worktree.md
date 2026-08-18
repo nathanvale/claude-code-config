@@ -20,6 +20,8 @@ These do NOT override the rule: a handoff saying "start a fresh branch" (start i
 
 Allowed in the main checkout: read-only work (analysis, review, search, tests without edits) and operations that target it by design (`setup sync` from main, worktree management itself, pull/fetch).
 
+The agent memory store, `~/.claude/projects/<slug>/memory/**`, is exempt for the same reason: the running agent writes it as session state, so a worktree would divert those writes away from the real store and silently break memory. `~/.claude/projects` may symlink into a repo's main checkout; the exemption is enforced in `hooks/git/git-safety.ts` (`isAgentMemoryPath`) and covers only the `memory/` subtree, so sibling transcripts and ordinary source in the backing repo stay blocked.
+
 ## Verbs
 
 | Verb | What it does | Side effects |
