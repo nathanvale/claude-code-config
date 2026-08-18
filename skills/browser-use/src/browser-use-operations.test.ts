@@ -618,7 +618,7 @@ describe("U7 operation success and transport", () => {
 	test("agent-browser releases its owned session after a successful operation", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
-			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 			nativeResults: [
 				okCommand(JSON.stringify({ success: true, data: {} })),
 				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
@@ -649,7 +649,7 @@ describe("U7 operation success and transport", () => {
 	test("agent-browser releases its owned session after a typed operation failure", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
-			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 			nativeResults: [
 				okCommand(
 					JSON.stringify({ success: false, error: "tab t1 unavailable" }),
@@ -677,7 +677,7 @@ describe("U7 operation success and transport", () => {
 	test("blocks successful operation truth when terminal release fails", async () => {
 		const { runtime } = operationRuntime({
 			adapter: "agent-browser",
-			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 			nativeResults: [
 				okCommand(JSON.stringify({ success: true, data: {} })),
 				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
@@ -703,7 +703,7 @@ describe("U7 operation success and transport", () => {
 	test("a discovered agent-browser t1 tab survives target resolution and executes", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
-			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 			nativeResults: [
 				okCommand(JSON.stringify({ success: true, data: {} })),
 				// Real adapter snapshot payload shape: {snapshot, refs}. The lane
@@ -753,7 +753,7 @@ describe("U7 operation success and transport", () => {
 				"--session",
 				`browser-use-${FIXTURE_RUN_ID}`,
 				"tab",
-				"cdp-target-t1",
+				"cdp-9f3c",
 				"--json",
 			],
 			[
@@ -780,7 +780,7 @@ describe("U7 operation success and transport", () => {
 		]);
 		expect(operationCalls[0]?.timeoutMs).toBe(30_000);
 		expect(operationCalls[1]?.timeoutMs).toBe(30_000);
-		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+		expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
 		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 	});
 
@@ -831,7 +831,7 @@ describe("U7 operation success and transport", () => {
 		]) {
 			const { runtime, calls } = operationRuntime({
 				adapter: "agent-browser",
-				pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+				pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 				nativeResults: [operationResult],
 			});
 			const result = await runForTest(
@@ -847,7 +847,7 @@ describe("U7 operation success and transport", () => {
 			// Discovery list + release verification, failed activation, then the
 			// operation lane's terminal release verification.
 			expect(calls).toHaveLength(6);
-			expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+			expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
 			expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 		}
 	});
@@ -881,7 +881,7 @@ describe("U7 operation success and transport", () => {
 		]) {
 			const { runtime, calls } = operationRuntime({
 				adapter: "agent-browser",
-				pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+				pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 				nativeResults: [
 					okCommand(JSON.stringify({ success: true, data: {} })),
 					snapshotResult,
@@ -902,7 +902,7 @@ describe("U7 operation success and transport", () => {
 			// Activation succeeded, so the failure envelope truthfully reports the
 			// window-focus side effect.
 			expect(json.data).toMatchObject({ side_effects: { focus: true } });
-			expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+			expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
 		}
 	});
 
@@ -934,8 +934,8 @@ describe("U7 operation success and transport", () => {
 							data: {
 								tabs: [
 									{
-										tabId: "t1",
-										targetId: "cdp-target-t1",
+										tabId: "tab-alpha",
+										targetId: "cdp-9f3c",
 										url: "https://example.com/app",
 										title: "App",
 									},
@@ -957,13 +957,13 @@ describe("U7 operation success and transport", () => {
 		});
 		// Discovery list + its failed exact release. No custody or operation call.
 		expect(calls).toHaveLength(2);
-		expect(calls.some((call) => call.args.includes("cdp-target-t1"))).toBe(false);
-		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+		expect(calls.some((call) => call.args.includes("cdp-9f3c"))).toBe(false);
+		expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
 	});
 
 	test("a malformed chrome page ref fails as a lane-honest transport failure", async () => {
 		const { runtime, calls } = operationRuntime({
-			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			pages: [{ id: "tab-alpha", targetId: "cdp-9f3c", url: "https://example.com/app", title: "App" }],
 		});
 		const result = await runForTest(
 			["operate", "snapshot", "--handoff", "/h.json", "--json"],
@@ -1226,5 +1226,90 @@ describe("U7 operation success and transport", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).not.toContain("ws://");
 		expect(result.stdout).not.toContain("devtools/browser");
+	});
+
+	test("a chrome-devtools-mcp operation publishes the CDP-resolved target id and http endpoint", async () => {
+		const { runtime } = operationRuntime();
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+			adapter: "chrome-devtools-mcp",
+			target: {
+				target_id: "cdp-target-test",
+				cdp_endpoint: FIXTURE_ENVELOPE.data.endpoint.http,
+			},
+		});
+	});
+
+	test("an agent-browser operation publishes the adapter-reported canonical target id", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-alpha",
+					targetId: "cdp-9f3c",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root\nButton", refs: {} },
+					}),
+				),
+			],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			adapter: "agent-browser",
+			target: {
+				target_id: "cdp-9f3c",
+				cdp_endpoint: FIXTURE_ENVELOPE.data.endpoint.http,
+			},
+		});
+	});
+
+	test("the published target id addresses a tab without exposing the session-local tab id", async () => {
+		// The canonical CDP target id is portable across adapter sessions; the
+		// `tN` tab id is not, so publishing one must never leak the other.
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-alpha",
+					targetId: "cdp-9f3c",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root\nButton", refs: {} },
+					}),
+				),
+			],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("cdp-9f3c");
+		expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
+		expect(result.stdout).not.toContain("ws://");
 	});
 });
