@@ -335,7 +335,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			respond: (input) =>
 				agentBrowserReleaseResult(RESOLVED_PATH, input) ?? {
 					exitCode: 0,
-					stdout: "snapshot",
+					stdout: "cdp-url",
 					stderr: "",
 				},
 		});
@@ -366,7 +366,8 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			ENDPOINT.ws,
 			"--session",
 			probeSessionName,
-			"snapshot",
+			"get",
+			"cdp-url",
 		]);
 		expect(log.commands[1]?.args).toEqual([
 			"--session",
@@ -397,7 +398,7 @@ describe("agent-browser definition (non-MCP seam)", () => {
 			expect(result.failureClass).toBe("attachment-failed");
 		}
 		const probeCall = log.commands.find((command) =>
-			command.args.includes("snapshot"),
+			command.args.includes("cdp-url"),
 		);
 		const sessionFlag = probeCall?.args.indexOf("--session") ?? -1;
 		const probeSessionName = probeCall?.args[sessionFlag + 1];
@@ -508,7 +509,7 @@ describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
 
 	test("chrome-devtools-mcp is lifecycle-script free; agent-browser and playwright-cdp require lifecycle scripts (R29)", () => {
 		expect(policyOf("chrome-devtools-mcp").lifecycleScriptsRequired).toBe(false);
-		// agent-browser 0.31.2 ships a postinstall native-binary step
+		// agent-browser 0.34.0 ships a postinstall native-binary step
 		// (hasInstallScript in its genuine lock entry): operator-owned.
 		expect(policyOf("agent-browser").lifecycleScriptsRequired).toBe(true);
 		// playwright-cdp's exact lock carries optional fsevents with an install
@@ -523,7 +524,7 @@ describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
 			{ from: "1.4.0", to: CHROME_DEVTOOLS_MCP_PINNED_VERSION },
 		]);
 		expect(policyOf("agent-browser").safeUpgradeTransitions).toEqual([
-			{ from: "0.26.0", to: AGENT_BROWSER_PINNED_VERSION },
+			{ from: "0.31.2", to: AGENT_BROWSER_PINNED_VERSION },
 		]);
 		// playwright-cdp has no prior proven release, so no observed version may
 		// auto-move to the pin: an empty allowlist, never semver inference.

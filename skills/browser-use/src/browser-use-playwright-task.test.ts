@@ -52,6 +52,22 @@ function result(
 }
 
 describe("Playwright task lane", () => {
+	test("refuses when a numeric tab index reorders to a different same-origin URL", async () => {
+		const outcome = await executePlaywrightTask(
+			{
+				runCommand: async (input) =>
+					input.args.at(-1) === "snapshot"
+						? result("- Page URL: https://example.com/other\n")
+						: result(),
+			},
+			task({ expected_target_url: "https://example.com/account" }),
+		);
+		expect(outcome).toMatchObject({
+			ok: false,
+			code: "playwright_task_origin_refused",
+		});
+	});
+
 	test("attaches, selects the intended tab, snapshots its allowed origin, and detaches", async () => {
 		const commands: McporterCommandInput[] = [];
 		const outcome = await executePlaywrightTask(

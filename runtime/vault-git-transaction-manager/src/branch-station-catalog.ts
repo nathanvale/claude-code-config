@@ -4,6 +4,7 @@ import {
 	findBranchStationCatalogDrift,
 	projectStationMap,
 } from "@side-quest/cli-command-facade";
+import { VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID } from "./activation-contract.ts";
 import { projectVaultGitCommandDiscoveryTree } from "./command-contract.ts";
 import {
 	VAULT_GIT_COMMANDS_CONTRACT_ID,
@@ -18,8 +19,15 @@ export const VAULT_GIT_STATION_IDS = [
 	"status.dashboard",
 	"status.read_only",
 	"status.invalid_usage",
+	"activation.inspect",
+	"activation.prepare",
+	"activation.review_noninteractive",
+	"activation.review_activate",
+	"activation.defer",
+	"activation.revoke",
+	"activation.invalid_usage",
 	"preview.read_only",
-	"doctor.read_only",
+	"doctor.private_task_reconciliation",
 	"commands.discovery",
 	"begin.admitted",
 	"join.joined",
@@ -37,18 +45,25 @@ export const VAULT_GIT_STATION_IDS = [
 export const vaultGitBranchStationCatalog = [
 	station("status.dashboard", "status", "success", "bare invocation renders one bounded configured dashboard action", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
 	station("status.read_only", "status", "success", "explicit status inspects manager state without mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
-	station("status.invalid_usage", "status", "usage_failure", "unknown command or foreign flag fails before composition", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("status.invalid_usage", "status", "usage_failure", "unknown command or foreign flag fails before composition", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input", null),
+	station("activation.inspect", "activation", "success", "activation home reads sanitized private state without live admission", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "read_only_projection", undefined, "begin_transaction"),
+	station("activation.prepare", "activation", "success", "prepare publishes evidence-only private state without write authority", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_evidence_only", undefined, "review_prepared"),
+	station("activation.review_noninteractive", "activation", "refusal", "non-interactive review cannot make the final human choice", 1, "error", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "no_activation_state_change", "human_capability_required", "return_to_human_review", null),
+	station("activation.review_activate", "activation", "success", "human review admits only the exact freshly revalidated evidence", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_activation_admission", undefined, "begin_transaction"),
+	station("activation.defer", "activation", "success", "human defer leaves prepared evidence non-authoritative and changes no state", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "no_activation_state_change", undefined, "review_prepared"),
+	station("activation.revoke", "activation", "success", "human revocation records one exact append-only private marker", 0, "ok", VAULT_GIT_ACTIVATION_RESULT_CONTRACT_ID, "private_activation_revocation", undefined, "prepare_fresh"),
+	station("activation.invalid_usage", "activation", "usage_failure", "public admit spelling is absent from the activation action vocabulary", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input", null),
 	station("preview.read_only", "preview", "success", "preview uses the same read-only engine inspection", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
-	station("doctor.read_only", "doctor", "success", "doctor classifies evidence without canonical mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "read_only_projection"),
+	station("doctor.private_task_reconciliation", "doctor", "success", "doctor classifies recovery and may reconcile owner-private task evidence without canonical, vault, or remote mutation", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "owner_private_task_evidence_only"),
 	station("commands.discovery", "commands", "success", "machine discovery projects the live command contracts", 0, "ok", VAULT_GIT_COMMANDS_CONTRACT_ID, "read_only_projection"),
 	station("begin.admitted", "begin", "success", "aligned main and absent ledger admit one owner transaction", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "remote_lease_and_local_receipt", undefined, "complete_transaction"),
-	station("join.joined", "join", "success", "join capability extends owned paths without owner authority", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "local_receipt_only", undefined, "continue_outer_transaction"),
-	station("complete.completed", "complete", "success", "owner capability checks commits and atomically closes", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "atomic_remote_close", undefined, "none"),
+	station("join.joined", "join", "success", "join capability extends owned paths without owner authority", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "local_receipt_only", undefined, "continue_outer_transaction", null),
+	station("complete.completed", "complete", "success", "owner capability admits one background close and returns its task", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "acknowledged_background_close", undefined, "inspect_status"),
 	station("complete.join_role_refused", "complete", "refusal", "join capability cannot complete or release", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_completion", "capability_role_mismatch", "use_owner_capability"),
-	station("repair.action_required", "repair", "usage_failure", "repair without an engine-owned action fails usage", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("repair.action_required", "repair", "usage_failure", "repair without an engine-owned action fails usage", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input", null),
 	station("repair.join_role_refused", "repair", "refusal", "join capability cannot execute an admitted repair", 1, "error", VAULT_GIT_RESULT_CONTRACT_ID, "refuses_before_repair", "capability_role_mismatch", "use_owner_capability"),
-	station("repair.stale_takeover_usage", "repair", "usage_failure", "stale takeover requires explicit prior-writer attestation", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
-	station("tidy.invalid_usage", "tidy", "usage_failure", "tidy omits the exact now subcommand", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input"),
+	station("repair.stale_takeover_usage", "repair", "usage_failure", "stale takeover requires explicit prior-writer attestation", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input", null),
+	station("tidy.invalid_usage", "tidy", "usage_failure", "tidy omits the exact now subcommand", 2, "error", VAULT_GIT_RESULT_CONTRACT_ID, "no_runtime_state_read", "invalid_usage", "change_input", null),
 	station("tidy.preview", "tidy", "success", "explicit worker emits a bounded preview when checker admission is absent", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "preview_only_private_hygiene", undefined, "request_operator_review"),
 	station("janitor.preview", "janitor", "success", "scheduled Janitor emits a bounded preview when checker admission is absent", 0, "ok", VAULT_GIT_RESULT_CONTRACT_ID, "preview_only_private_hygiene", undefined, "request_operator_review"),
 ] as const satisfies readonly BranchStation[];
@@ -88,7 +103,17 @@ function station(
 	mutationExpectation: string,
 	expectedErrorCode?: string,
 	expectedActionId?: string,
+	// Continuation expectation. Default (undefined) = same as the action id, for a
+	// fully projected station. Pass `null` to declare that the station's action has
+	// no runnable continuation (a fail-closed unavailable projection, e.g. a generic
+	// usage failure whose change_input has no selector/context), so no
+	// expectedContinuationId is published.
+	continuationExpectation?: string | null,
 ): BranchStation {
+	const expectedContinuationId =
+		continuationExpectation === null
+			? undefined
+			: (continuationExpectation ?? expectedActionId);
 	return {
 		id,
 		command,
@@ -101,8 +126,6 @@ function station(
 		mutationExpectation,
 		...(expectedErrorCode === undefined ? {} : { expectedErrorCode }),
 		...(expectedActionId === undefined ? {} : { expectedActionId }),
-		...(expectedActionId === undefined
-			? {}
-			: { expectedContinuationId: expectedActionId }),
+		...(expectedContinuationId === undefined ? {} : { expectedContinuationId }),
 	};
 }

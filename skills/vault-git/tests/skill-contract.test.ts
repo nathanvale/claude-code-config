@@ -35,7 +35,7 @@ describe("vault-git skill contract", () => {
 
 	test("body binds the begin, mutate-admitted-paths, complete workflow in order", () => {
 		const workflow = body.match(
-			/## Write Workflow\n(?<guidance>[\s\S]*?)(?=\n## |$)/u,
+			/## Transaction Manager Workflow\n(?<guidance>[\s\S]*?)(?=\n## |$)/u,
 		)?.groups?.guidance;
 
 		expect(workflow).toBeDefined();
@@ -49,19 +49,28 @@ describe("vault-git skill contract", () => {
 		expect(completeIndex).toBeGreaterThan(mutateIndex);
 	});
 
-	test("fallback stays bound to the literal activation_blocked blocker", () => {
-		// An edit that turns the fallback into an unconditional raw-Git escape
-		// fails here: the clause must name the runtime's literal blocker and
-		// keep other refusals out of fallback territory.
+	test("direct mode requires the explicit owner pause marker", () => {
 		expect(body).toContain(
-			"only when the CLI's JSON reports blocker `activation_blocked`",
+			"Check `${XDG_CONFIG_HOME:-$HOME/.config}/context/vault-git-paused` before invoking the transaction manager.",
 		);
-		expect(body).toContain("Never run raw Git against the vault");
-		expect(body).toContain("every other refusal is not a fallback trigger");
+		expect(body).toContain(
+			"Marker present: use Direct Git Mode. Do not invoke `vault-git`, delete private receipts, or alter the Remote Ledger.",
+		);
+		expect(body).toContain(
+			"Never create or remove the marker without an explicit owner request.",
+		);
+		expect(body).toContain(
+			"every other refusal are not pause triggers",
+		);
 	});
 
 	test("body delegates deterministic contract details to the runtime", () => {
-		expect(body.match(/--[a-z][a-z-]*/gu)).toEqual(["--silent"]);
+		const workflow = body.match(
+			/## Transaction Manager Workflow\n(?<guidance>[\s\S]*?)(?=\n## |$)/u,
+		)?.groups?.guidance;
+
+		expect(workflow).toBeDefined();
+		expect(workflow?.match(/--[a-z][a-z-]*/gu)).toEqual(["--silent"]);
 		expect(body).not.toContain("--capability-fd");
 		expect(body).not.toMatch(/schema_version/u);
 		expect(body).not.toMatch(/exit codes?/iu);

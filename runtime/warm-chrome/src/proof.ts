@@ -74,6 +74,7 @@ export type WarmChromeCdpResult = Record<string, unknown>;
 export type WarmChromeCdpRoundTrip = (
 	wsUrl: string,
 	method: string,
+	params?: Record<string, unknown>,
 ) => Promise<WarmChromeCdpResult>;
 
 /**
@@ -112,6 +113,7 @@ export function createDefaultProofDeps(): WarmChromeProofDeps {
 function defaultCdpRoundTrip(
 	wsUrl: string,
 	method: string,
+	params?: Record<string, unknown>,
 ): Promise<WarmChromeCdpResult> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
@@ -139,7 +141,9 @@ function defaultCdpRoundTrip(
 			return;
 		}
 		socket.addEventListener("open", () => {
-			socket.send(JSON.stringify({ id: 1, method }));
+			socket.send(
+				JSON.stringify({ id: 1, method, ...(params ? { params } : {}) }),
+			);
 		});
 		socket.addEventListener("error", () => {
 			finish(() => reject(new Error(`CDP ${method} round-trip failed.`)));
@@ -158,6 +162,10 @@ function defaultCdpRoundTrip(
 			}
 			if (!isRecord(payload) || payload.id !== 1) return;
 			finish(() => {
+				if (isRecord(payload.error)) {
+					reject(new Error(`CDP ${method} returned an error.`));
+					return;
+				}
 				const result = payload.result;
 				if (isRecord(result)) {
 					resolve(result);

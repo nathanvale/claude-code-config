@@ -86,7 +86,32 @@ const AGENT_BROWSER_HANDOFF = {
 } as const;
 
 function adapterSuccess(data: unknown): string {
-	return JSON.stringify({ success: true, data, error: null });
+	const normalized =
+		typeof data === "object" &&
+		data !== null &&
+		"tabs" in data &&
+		Array.isArray(data.tabs)
+			? {
+					...data,
+					tabs: data.tabs.map((tab) =>
+						typeof tab === "object" && tab !== null && !("targetId" in tab)
+							? { ...tab, targetId: `cdp-target-${String("tabId" in tab ? tab.tabId : "test")}` }
+							: tab,
+					),
+				}
+			: data;
+	return JSON.stringify({ success: true, data: normalized, error: null });
+}
+
+function isTypedTabListResponse(response: { stdout?: string }): boolean {
+	try {
+		const envelope = JSON.parse(response.stdout ?? "") as {
+			data?: { tabs?: unknown };
+		};
+		return Array.isArray(envelope.data?.tabs);
+	} catch {
+		return false;
+	}
 }
 
 async function makeStore(): Promise<{
@@ -120,14 +145,54 @@ function taskRunRuntime(
 	}[],
 ) {
 	let index = 0;
+	let stableTabList:
+		| { stdout?: string; exitCode?: number; timedOut?: boolean }
+		| undefined;
+	let stableTabListReproved = false;
 	return makeRuntime({
 		env,
 		now: () => 1_000,
 		platformFs: createDefaultPlatformFs(),
 		readTextFile: (path: string) =>
 			import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
-		runCommand: async () => {
-			const response = responses[index++] ?? {};
+		runCommand: async (input) => {
+			if (input.args.includes("close")) {
+				return {
+					exitCode: 0,
+					stdout: adapterSuccess({ closed: true }),
+					stderr: "",
+				};
+			}
+			if (input.args[0] === "session" && input.args[1] === "list") {
+				return {
+					exitCode: 0,
+					stdout: adapterSuccess({ sessions: [] }),
+					stderr: "",
+				};
+			}
+			const pinIndex = input.args.indexOf("--pin-tab");
+			const semantic =
+				pinIndex >= 0 ? input.args.slice(pinIndex + 1) : input.args.slice(4);
+			const isTabList = semantic[0] === "tab" && semantic[1] === "list";
+			let response: {
+				stdout?: string;
+				exitCode?: number;
+				timedOut?: boolean;
+			};
+			if (
+				isTabList &&
+				stableTabList !== undefined &&
+				!stableTabListReproved &&
+				!isTypedTabListResponse(responses[index] ?? {})
+			) {
+				stableTabListReproved = true;
+				response = stableTabList;
+			} else {
+				response = responses[index++] ?? {};
+				if (isTabList && isTypedTabListResponse(response)) {
+					stableTabList = response;
+				}
+			}
 			return {
 				exitCode: response.exitCode ?? 0,
 				stdout: response.stdout ?? adapterSuccess({}),

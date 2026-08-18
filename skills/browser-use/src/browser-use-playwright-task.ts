@@ -37,6 +37,8 @@ export type PlaywrightTask = {
 	run_id: string;
 	target_tab_index: number;
 	allowed_origins: readonly string[];
+	/** Canonical target URL admitted before the Target Lease was acquired. */
+	expected_target_url?: string;
 	intent: PlaywrightTaskIntent;
 	mutation?: {
 		role: string;
@@ -146,9 +148,13 @@ export async function executePlaywrightTask(
 			);
 		} else {
 			const observedOrigin = pageOriginOf(snapshot?.stdout ?? "");
+			const observedUrl = pageUrlOf(snapshot?.stdout ?? "");
 			if (
 				observedOrigin === undefined ||
-				!validated.allowedOrigins.has(observedOrigin)
+				!validated.allowedOrigins.has(observedOrigin) ||
+				(task.expected_target_url !== undefined &&
+					normalizedHttpUrl(observedUrl ?? "") !==
+						normalizedHttpUrl(task.expected_target_url))
 			) {
 				taskOutcome = failure(
 					"playwright_task_origin_refused",
@@ -327,13 +333,59 @@ function exactOriginSet(
 }
 
 function pageOriginOf(stdout: string): string | undefined {
-	const pageUrl = stdout.match(/^- Page URL:\s*(\S+)\s*$/m)?.[1];
+	const pageUrl = pageUrlOf(stdout);
 	if (pageUrl === undefined) return undefined;
 	try {
 		return new URL(pageUrl).origin;
 	} catch {
 		return undefined;
 	}
+}
+
+function pageUrlOf(stdout: string): string | undefined {
+	return stdout.match(/^- Page URL:\s*(\S+)\s*$/m)?.[1];
+}
+
+function normalizedHttpUrl(value: string): string | undefined {
+	try {
+		const parsed = new URL(value);
+		return parsed.protocol === "http:" || parsed.protocol === "https:"
+			? parsed.href
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve one Playwright tab index to its current exact URL and detach. */
+export async function resolvePlaywrightTaskPageUrl(
+	runtime: PlaywrightTaskRuntime,
+	task: PlaywrightTask,
+): Promise<{ ok: true; url: string } | { ok: false }> {
+	const validated = validateTask(task);
+	if (!validated.ok) return { ok: false };
+	const session = `browser-use-${task.run_id}`;
+	const executable = task.handoff.attachment.probe_executable;
+	const attach = await runNative(runtime, {
+		command: executable,
+		args: ["attach", `--cdp=${task.handoff.endpoint.http}`, `--session=${session}`],
+		timeoutMs: COMMAND_TIMEOUT_MS,
+	});
+	if (!commandSucceeded(attach)) return { ok: false };
+	const selected = await runSessionCommand(runtime, executable, session, [
+		"tab-select",
+		String(task.target_tab_index),
+	]);
+	const snapshot = commandSucceeded(selected)
+		? await runSessionCommand(runtime, executable, session, ["snapshot"])
+		: undefined;
+	const detached = await runSessionCommand(runtime, executable, session, ["detach"]);
+	if (!commandSucceeded(snapshot) || !commandSucceeded(detached)) return { ok: false };
+	const url = pageUrlOf(snapshot?.stdout ?? "");
+	const origin = pageOriginOf(snapshot?.stdout ?? "");
+	return url !== undefined && origin !== undefined && validated.allowedOrigins.has(origin)
+		? { ok: true, url }
+		: { ok: false };
 }
 
 function resolveUniqueSemanticRef(

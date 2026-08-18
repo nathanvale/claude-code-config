@@ -87,6 +87,7 @@ describe("setup command contract", () => {
 			verbose: false,
 			noColor: false,
 			check: false,
+			rollback: false,
 			alias: "no_args",
 		});
 	});
@@ -111,6 +112,76 @@ describe("setup command contract", () => {
 			noColor: true,
 			check: true,
 		});
+	});
+
+	test("accepts the explicit Vault Git enrollment and rollback grammar only on sync", () => {
+		expect(parseSetupInvocation([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--check",
+			"--json",
+		])).toMatchObject({
+			command: "sync",
+			domain: "vault-git",
+			check: true,
+			rollback: false,
+		});
+		expect(parseSetupInvocation([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--input-stdin",
+			"setup.vault-git.host-enrollment",
+			"--json",
+		])).toMatchObject({
+			domain: "vault-git",
+			inputStdin: "setup.vault-git.host-enrollment",
+		});
+		expect(parseSetupInvocation([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--rollback",
+			"--check",
+		])).toMatchObject({ domain: "vault-git", rollback: true, check: true });
+		expect(() => parseSetupInvocation(["status", "--domain", "vault-git"])).toThrow(
+			"Unsupported flag for status: --domain",
+		);
+		expect(() => parseSetupInvocation(["sync", "--rollback"])).toThrow(
+			"--rollback requires --domain vault-git",
+		);
+		expect(() => parseSetupInvocation([
+			"sync",
+			"--domain",
+			"vault-git",
+			"--input-stdin",
+			"forged.contract",
+		])).toThrow("Unsupported --input-stdin contract");
+	});
+
+	test("discovery declares private-input application as a write and keeps the repair preview read-only", () => {
+		const sync = projectSetupCommandDiscoveryTree().commands.sync;
+		const contract = sync?.input_contracts?.find(
+			(candidate) => candidate.id === "setup.vault-git.host-enrollment",
+		);
+		expect(contract?.action_id).toBe("provide_host_enrollment_inputs");
+		const continuations = sync?.action_affordances?.continuations ?? [];
+		const byId = new Map(continuations.map((action) => [action.id, action]));
+		expect(byId.get("provide_host_enrollment_inputs")?.side_effects).toEqual([
+			"read",
+			"check",
+			"write",
+		]);
+		expect(byId.get("apply_host_enrollment")?.side_effects).toEqual([
+			"read",
+			"check",
+			"write",
+		]);
+		expect(byId.get("preview_host_enrollment_repair")?.side_effects).toEqual([
+			"read",
+			"check",
+		]);
 	});
 
 	test("rejects inline values for boolean flags", () => {
@@ -162,6 +233,9 @@ function argvForFlag(command: (typeof SETUP_COMMANDS)[number], flag: string): st
 	switch (flag) {
 		case "--scope": argv.push(flag, "user"); break;
 		case "--repo": argv.push("--scope", "project", flag, "/tmp/project"); break;
+		case "--domain": argv.push(flag, "vault-git"); break;
+		case "--input-stdin": argv.push("--domain", "vault-git", flag, "setup.vault-git.host-enrollment"); break;
+		case "--rollback": argv.push("--domain", "vault-git", flag); break;
 		default: argv.push(flag);
 	}
 	return argv;

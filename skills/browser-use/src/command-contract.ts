@@ -287,7 +287,11 @@ export const BROWSER_USE_OPERATION_CONTRACT_ID =
 	"browser-use.browser-operation" as const;
 // v2 (browser-use migration U1): operation binding fields derive from the
 // Verified Handoff Envelope.
-export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "2" as const;
+// v3: the operation success envelope publishes the canonical CDP target id and
+// the verified http endpoint, so a caller can hand the exact tab it operated on
+// to the Browser Adapter's native surface. Widening a public contract, so the
+// version moves. The ws endpoint form is still never emitted (R32).
+export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "3" as const;
 
 // Platform result contracts (platform plan 2026-07-21-002 U1). One contract
 // id per new family; the shared-run projection is the one schema auth and
@@ -1917,8 +1921,8 @@ export const browserUseAuthRepairActions = [
 	},
 	{
 		id: "request-binding-selection-grant",
-		summary: "Request a signed one-use grant to select one login item.",
-		sideEffects: ["check"],
+		summary: "Run the native picker and commit one grant-authorized Item Binding.",
+		sideEffects: ["check", "write"],
 	},
 ] as const;
 
@@ -2877,17 +2881,21 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"auth-request-binding-selection-grant": {
 			script: "browser-use",
 			summary:
-				"Project the ambiguous-binding candidate set a signed one-use selection grant must bind (R20); signing stays with the native Approval Broker.",
+				"Run one descriptor-private native selection ceremony, consume its signed one-use grant, and commit at most one Item Binding.",
 			usage: [
-				"auth request-binding-selection-grant --vault-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+				"auth request-binding-selection-grant --vault-id <id> --run <id> [--caller <label>] [--json|--plain]",
 			],
 			json: true,
-			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"The native picker is the review surface; its short-lived signed grant is atomically reserved before one first-revision binding write.",
+			},
 			outputModes: ["json", "plain"],
-			interactivity: "none",
+			interactivity: "required",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseAuthReadinessResultContract,
 			actionAffordances: {

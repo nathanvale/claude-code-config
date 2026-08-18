@@ -252,6 +252,83 @@ Session output is definition artifacts only: this log, the ADR 0009
 amendment, and the Suggested Explicit Port glossary term. Next step: scaffold
 `runtime/warm-chrome`, write failing station tests, port station-by-station.
 
+```yaml
+id: agent-chrome-xdg-data-owner-and-preserving-migration
+status: superseded
+accepted_by: nathan
+accepted_on: 2026-08-13
+superseded_by: agent-chrome-macos-data-owner-and-preserving-migration
+```
+
+Agent Chrome owns its durable Chrome user-data directory at
+`$XDG_DATA_HOME/agent-chrome/chrome-user-data`, defaulting to
+`~/.local/share/agent-chrome/chrome-user-data` when `XDG_DATA_HOME` is unset.
+This is durable, authentication-bearing browser data, not cache, runtime state,
+vault content, or Everyday Chrome data. The directory is owner-only (`0700`).
+
+Migration from `~/.agent-warm-profile` is preserving and explicit: preview,
+require Agent Chrome stopped, copy into a sibling staging directory, verify the
+copy without emitting private content, atomically promote, run Warm Chrome proof,
+then verify session continuity. Never overwrite an existing destination. Retain
+the legacy directory unchanged for rollback; V1 never deletes it. A relative
+`XDG_DATA_HOME` fails with a repair hint instead of changing ownership silently.
+Everyday Chrome is outside this migration and must remain untouched.
+
+```yaml
+id: agent-chrome-macos-data-owner-and-preserving-migration
+status: accepted
+accepted_by: nathan
+accepted_on: 2026-08-14
+```
+
+Agent Chrome owns its durable Chrome user-data directory at
+`~/Library/Application Support/Agent Chrome/Chrome User Data`. The native
+macOS owner gives Chrome its normal `~/Library/Caches` derivation and makes the
+product boundary visible. It supersedes only the XDG destination above; the
+accepted preview, stopped-Browser, staged copy, metadata verification, atomic
+promotion, session-continuity, unchanged legacy rollback, owner-only mode, and
+Everyday Chrome exclusions remain.
+
+```yaml
+id: agent-chrome-proof-first-direct-launch
+status: accepted
+accepted_by: nathan
+accepted_on: 2026-08-14
+```
+
+Ship a distinct orange `Agent Chrome.app` launcher. The installed bundle is a
+copied, signed native app containing an embedded compiled Warm Chrome helper;
+it has no repository or Bun runtime dependency. The helper proves Agent Chrome,
+creates and verifies one `chrome://newtab/` target through the proof-returned
+browser websocket, and re-proves the endpoint and profile. The native launcher
+then activates only the returned Browser pid and verifies macOS foreground pid
+equality.
+
+The launcher never reads Everyday Chrome, searches ambient `PATH`, synthesizes
+a CDP endpoint, or connects an external adapter. External adapters still enter
+through Browser Connect. Failure to prove the helper, profile, target, Browser
+pid, or foreground pid stops without fallback. Everyday Chrome keeps its normal
+Google Chrome application entrypoint and ordinary profile store.
+
+**Amendment 2026-08-14: generated profile avatar.** Use the generated orange
+Agent Chrome artwork for both the native app icon and Chrome's toolbar profile
+avatar. A dedicated preview-first helper owns the profile-avatar write. It
+targets only
+`~/Library/Application Support/Agent Chrome/Chrome User Data`, requires the
+profile stopped before mutation, preserves unrelated JSON state, and refuses a
+browser-level Google-signed-in profile rather than replacing its account photo.
+The native launcher runs this bounded convergence before Warm Chrome entry.
+Everyday Chrome remains excluded.
+
+**Amendment 2026-08-14: native cold launch through Launch Services.** Directly
+spawning Google Chrome from `Agent Chrome.app` made Agent Chrome the responsible
+process when Chrome attempted protected app-bundle work, producing a macOS App
+Management denial. Keep the Warm Chrome guards, proof, readiness loop, and
+exact-pid race policy, but replace only the installed app's process-creation
+adapter with an embedded `NSWorkspace.OpenConfiguration` helper. The helper
+returns the actual `NSRunningApplication` pid; proof must match that pid before
+success. Agent Chrome never requires App Management permission.
+
 ## Open questions
 
 - Exact `reason` detail vocabulary — the union is seeded (see the research

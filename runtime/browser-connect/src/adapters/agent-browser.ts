@@ -25,15 +25,15 @@ import {
 export const AGENT_BROWSER_EXECUTABLE = "agent-browser" as const;
 
 /**
- * Version PINNED in the definition (plan Sources, 2026-07 verified):
- * agent-browser v0.31.2 exposes `--cdp <port|url>` / `AGENT_BROWSER_CDP`.
+ * Version PINNED in the definition (2026-08-17 verified): agent-browser
+ * v0.34.0 exposes `--cdp <port|url>` / `AGENT_BROWSER_CDP`.
  */
-export const AGENT_BROWSER_PINNED_VERSION = "0.31.2" as const;
+export const AGENT_BROWSER_PINNED_VERSION = "0.34.0" as const;
 
 /**
  * Maintainer-authored installer policy for agent-browser (KTD13).
  *
- * agent-browser 0.31.2 declares a `postinstall` lifecycle script that stages
+ * agent-browser 0.34.0 declares a `postinstall` lifecycle script that stages
  * its platform-native binary (its genuine lock entry carries
  * `hasInstallScript: true`), so it CANNOT install correctly with lifecycle
  * scripts disabled: `lifecycleScriptsRequired: true` keeps package automation
@@ -42,9 +42,10 @@ export const AGENT_BROWSER_PINNED_VERSION = "0.31.2" as const;
  * lockfile are still committed as the trusted integrity and lifecycle
  * evidence behind that claim.
  *
- * The safe-upgrade allowlist entry (0.26.0 -> 0.31.2, AE5) is policy-level
- * truth; automatic upgrade additionally requires the full isolated-install
- * evidence, which the lifecycle gate withholds.
+ * The safe-upgrade allowlist entry (0.31.2 -> 0.34.0, AE5) records the
+ * transition proven through agent-browser's official upgrade path; automatic
+ * upgrade additionally requires the full isolated-install evidence, which the
+ * lifecycle gate withholds.
  */
 const AGENT_BROWSER_INSTALL_POLICY: AdapterPackagePolicy = {
 	packageName: "agent-browser",
@@ -69,7 +70,7 @@ const AGENT_BROWSER_INSTALL_POLICY: AdapterPackagePolicy = {
 	},
 	lifecycleScriptsRequired: true,
 	expectedBin: AGENT_BROWSER_EXECUTABLE,
-	safeUpgradeTransitions: [{ from: "0.26.0", to: AGENT_BROWSER_PINNED_VERSION }],
+	safeUpgradeTransitions: [{ from: "0.31.2", to: AGENT_BROWSER_PINNED_VERSION }],
 	operatorChoice: {
 		packageOwner: "agent-browser npm package maintainers",
 		docsUrl:
@@ -222,9 +223,15 @@ export const agentBrowserDefinition = {
 		try {
 			const result = await runtime.runCommand({
 				command: resolution.path,
-				// Read-only invocation: attach via injected endpoint and snapshot
-				// (no navigation, no mutation) through the adapter's own binary.
-				args: [...injection.argv, "--session", sessionName, "snapshot"],
+				// Connection-only invocation: prove the injected CDP endpoint through
+				// the adapter's own binary without binding or creating a page target.
+				args: [
+					...injection.argv,
+					"--session",
+					sessionName,
+					"get",
+					"cdp-url",
+				],
 				timeoutMs: PROBE_TIMEOUT_MS,
 			});
 			if (result.timedOut) {
@@ -249,7 +256,7 @@ export const agentBrowserDefinition = {
 						route,
 						probe_executable: resolution.path,
 					},
-					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+					evidence: `${AGENT_BROWSER_EXECUTABLE} attached and returned its CDP endpoint without binding a page target.`,
 				};
 			}
 		} catch (error) {

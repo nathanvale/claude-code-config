@@ -10,8 +10,9 @@ independently.
 The `src/` model is pure TypeScript: it signs nothing and holds no secret
 bytes. The unsigned native target sources (`BrowserUseSecurity.xcodeproj/`,
 `targets/`, `entitlements/`) are authored alongside it; they carry no secret
-bytes and do not build without full Xcode plus paid Apple Developer Program
-enrollment (ADR 0028 entry gate).
+bytes. An admitted local development install still requires full Xcode, a
+valid Apple Development identity, and a compatible embedded provisioning
+profile (ADR 0028 entry gate).
 
 ## The Three Targets
 
@@ -30,10 +31,12 @@ native capability. The native product may be entirely absent — that is a legal
 tested state, `native-capability-absent`, expressed through typed verdicts, not
 a crash or a stub.
 
-Production promotion is unavailable. The unsigned sources and hermetic tests do
-not install or admit a signed product and make no production Touch ID or
-Developer ID acceptance claim. Route signed-product installation, admission,
-presence-backed acceptance, and repair to a separate reviewed plan.
+Notarized production distribution remains unavailable. The operator-gated
+`install:binding-selection-local` script can build, sign, verify, and atomically
+install the Approval Broker plus its nested environment-auth supervisor for
+local development. Admission rejects an invalid version, signature, target,
+entitlement set, or embedded supervisor. This local lane makes no Developer ID
+or notarization acceptance claim.
 
 Bundle ids are minted: `src/model.ts` `TARGET_BUNDLE_IDS` carries the real
 `com.side-quest.browser-use-security.*` strings, mirroring each Xcode target's

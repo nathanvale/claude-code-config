@@ -5,9 +5,14 @@ import {
 	bindingApprovalReceiptDigestOf,
 } from "./browser-use-auth-bindings";
 import { createBindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
+import { createBindingCatalog } from "./browser-use-binding-catalog";
+import type {
+	BrowserUseBindingSelectionGrant,
+	BrowserUseBindingSelectionGrantVerifier,
+} from "./browser-use-binding-selection";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
-import { createDefaultPlatformFs } from "./browser-use-paths";
+import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 
 const disposals: Array<() => void> = [];
@@ -38,6 +43,88 @@ function port(): BrowserUseTokenRetrievalPort {
 }
 
 describe("auth binding lifecycle CLI", () => {
+	test("shows a selection-grant-backed binding through the redacted catalog projection", async () => {
+		const xdg = makeTempXdgEnv();
+		disposals.push(xdg.dispose);
+		const fs = createDefaultPlatformFs();
+		const opened = await openBrowserUsePaths(fs, xdg.env);
+		if (!opened.ok) throw new Error("binding fixture paths unavailable");
+		const selectionVerifier: BrowserUseBindingSelectionGrantVerifier = {
+			verifyStored: async (grant) => ({
+				ok: true,
+				grant: grant as BrowserUseBindingSelectionGrant,
+			}),
+			verifyAndReserve: async ({ grant }) => ({
+				ok: true,
+				grant: grant as BrowserUseBindingSelectionGrant,
+			}),
+		};
+		const grant: BrowserUseBindingSelectionGrant = {
+			grant_id: "selection-binding-show",
+			resolution_key: {
+				binding_ref: "github",
+				service_id: "github",
+				auth_context: "interactive-login",
+				environment: "agent-chrome",
+				profile: "default",
+			},
+			binding: {
+				service_id: "github",
+				auth_context: "interactive-login",
+				allowed_origins: ["https://github.com"],
+				allowed_login_paths: [],
+				vault_id: "vault-private",
+				item_id: "item-private",
+				allowed_auth_methods: ["password", "otp"],
+				binding_revision: 1,
+			},
+			facts: {
+				run_id: "run-selection-show",
+				service_id: "github",
+				origin: "https://github.com",
+				vault_id: "vault-private",
+				candidate_set_digest: "a".repeat(64),
+			},
+			issued_at_epoch_ms: 1_000,
+			expires_at_epoch_ms: 91_000,
+			verifier_key_id: "verifier-1",
+			signature: "signed-selection",
+		};
+		const catalog = createBindingCatalog({
+			fs,
+			root: `${opened.paths.resolution.roots.state}/binding-catalog`,
+			now: () => grant.issued_at_epoch_ms,
+			selectionGrantVerifier: selectionVerifier,
+		});
+		expect(await catalog.commitSelectionGrant(grant)).toEqual({ ok: true });
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: fs,
+			bindingApprovalReceiptVerifier: createBindingApprovalReceiptVerifier({
+				verifier: { key_id: "verifier-1", public_key: "fixture" },
+				verifySignature: () => true,
+			}),
+			bindingSelectionGrantVerifier: selectionVerifier,
+		});
+		const shown = await runForTest(
+			[
+				"auth", "binding", "show",
+				"--binding", "github",
+				"--service", "github",
+				"--environment", "agent-chrome",
+				"--profile", "default",
+				"--json",
+			],
+			runtime,
+		);
+		expect(shown.exitCode).toBe(0);
+		expect(parseJson(shown.stdout).data).toMatchObject({
+			evaluation: { status: "binding-active", binding_ref: "github", revision: 1 },
+		});
+		expect(shown.stdout).not.toContain("vault-private");
+		expect(shown.stdout).not.toContain("item-private");
+	});
+
 	test("creates once, lists without vault identity, and revokes before reuse", async () => {
 		const xdg = makeTempXdgEnv();
 		disposals.push(xdg.dispose);

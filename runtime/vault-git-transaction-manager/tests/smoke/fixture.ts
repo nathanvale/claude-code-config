@@ -1,6 +1,14 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +20,7 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
+import { readVaultGitProcessIdentity } from "../../src/cli.ts";
 import { VAULT_GIT_LEDGER_REF } from "../../src/model.ts";
 import { createReceiptStore } from "../../src/store.ts";
 import { admitActivationForTest } from "../activation-fixture.ts";
@@ -34,7 +43,6 @@ import { admitActivationForTest } from "../activation-fixture.ts";
  */
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const cliPath = join(packageRoot, "src", "cli.ts");
 const processCliPath = join(packageRoot, "tests", "smoke", "process-cli.ts");
 
 /** Shim behaviours the recorded `git` wrapper can impose on a row. */
@@ -84,6 +92,8 @@ export interface SmokeFixture {
 	): Promise<PreparedSmokeInterruption>;
 	/** Kill an owner process after a real external operation exposes its phase marker. */
 	killOwnerAfterFile(args: readonly string[], readyPath: string): Promise<void>;
+	/** Kill the detached background worker paused at one named engine boundary. */
+	killWorkerAtInterrupt(args: readonly string[], point: string): Promise<void>;
 	/** Run git in the clone. */
 	git(...args: string[]): string;
 	/** Run git in the bare remote. */
@@ -104,11 +114,55 @@ export interface PreparedSmokeCommand {
 
 /** A subprocess paused after one named durable runtime boundary. */
 export interface PreparedSmokeInterruption extends PreparedSmokeCommand {
+	/** Exact descendant identities observed while the interrupted command was alive. */
+	readonly descendantProcesses: readonly SmokeProcessIdentity[];
 	/** Kill the complete process group at the paused boundary. */
 	kill(): Promise<void>;
 }
 
+/** One exact process identity captured before an injected parent crash. */
+export interface SmokeProcessIdentity {
+	readonly pid: number;
+	readonly identity: string;
+}
+
+/**
+ * Run Doctor and, when it delegates, inspect the accepted task to its durable
+ * terminal diagnosis. This preserves the public foreground/background seam in
+ * smoke rows whose assertion concerns Doctor's authoritative result.
+ */
+export async function runDoctorToTerminal(
+	fixture: Pick<SmokeFixture, "run">,
+	args: readonly string[],
+): Promise<CliProcessResult> {
+	const accepted = await fixture.run(args);
+	if (accepted.exitCode !== 0) return accepted;
+	const acceptedData = parseCliProcessJson<{
+		data?: { task_id?: string; task_state?: string };
+	}>(accepted).data;
+	if (!acceptedData?.task_id || ["closed", "unknown"].includes(acceptedData.task_state ?? "")) {
+		return accepted;
+	}
+
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		const inspection = await fixture.run([
+			"doctor",
+			"--task-id",
+			acceptedData.task_id,
+			"--json",
+		]);
+		const taskState = parseCliProcessJson<{
+			data?: { task_state?: string };
+		}>(inspection).data?.task_state;
+		if (taskState === "closed" || taskState === "unknown") return inspection;
+		await Bun.sleep(25);
+	}
+	throw new Error(`Background Doctor task ${acceptedData.task_id} did not terminate`);
+}
+
 const roots: string[] = [];
+const stateRoots: string[] = [];
 const children = new Set<{
 	readonly child: ChildProcess;
 	readonly detached: boolean;
@@ -153,6 +207,35 @@ export async function mkSmokeSibling(
 	return mkSmokeClone(fixture.root, fixture.bare, name, {});
 }
 
+/**
+ * Publish one special checker to the committed fixture baseline before `begin`.
+ *
+ * The Validation Candidate is composed from the committed Admitted Baseline
+ * plus frozen Owned Paths, so a checker written only into the dirty worktree
+ * never reaches it. The commit stages exactly the checker entrypoint and is
+ * pushed so `begin` still observes aligned local and remote main; unrelated
+ * staged, unstaged, and untracked fixture bytes survive untouched.
+ *
+ * @param fixture - The fixture whose baseline receives the checker
+ * @param checkerSource - Exact `scripts/vault-check.ts` source
+ */
+export async function publishBaselineChecker(
+	fixture: Pick<SmokeFixture, "clone" | "git">,
+	checkerSource: string,
+): Promise<void> {
+	await mkdir(join(fixture.clone, "scripts"), { recursive: true });
+	await writeFile(join(fixture.clone, "scripts", "vault-check.ts"), checkerSource);
+	fixture.git("add", "--", "scripts/vault-check.ts");
+	fixture.git(
+		"commit",
+		"-m",
+		"test: publish baseline checker",
+		"--",
+		"scripts/vault-check.ts",
+	);
+	fixture.git("push", "origin", "HEAD:refs/heads/main");
+}
+
 async function mkSmokeClone(
 	root: string,
 	bare: string,
@@ -165,6 +248,7 @@ async function mkSmokeClone(
 ): Promise<SmokeFixture> {
 	const clone = join(root, name);
 	const stateRoot = join(root, `${name}-state`);
+	stateRoots.push(stateRoot);
 	const profileRoot = join(root, `${name}-profile`);
 	const shimMarker = join(root, `${name}-shim-marker`);
 	const shimLog = join(root, `${name}-shim-log`);
@@ -177,7 +261,28 @@ async function mkSmokeClone(
 		await writeFile(join(clone, "notes/event.md"), "baseline event\n");
 		await writeFile(join(clone, "staged.md"), "staged baseline\n");
 		await writeFile(join(clone, "unstaged.md"), "unstaged baseline\n");
-		git(clone, "add", "--", "notes/event.md", "staged.md", "unstaged.md");
+		// The Validation Candidate is composed from the committed Admitted
+		// Baseline, so a worktree-only checker never reaches it; the default
+		// passing checker and its manifest must ship in the seed commit.
+		await mkdir(join(clone, "scripts"), { recursive: true });
+		await writeFile(join(clone, "scripts/vault-check.ts"), "process.exit(0);\n");
+		await writeFile(
+			join(clone, "package.json"),
+			`${JSON.stringify({
+				private: true,
+				scripts: { check: "bun run scripts/vault-check.ts" },
+			})}\n`,
+		);
+		git(
+			clone,
+			"add",
+			"--",
+			"notes/event.md",
+			"staged.md",
+			"unstaged.md",
+			"scripts/vault-check.ts",
+			"package.json",
+		);
 		git(clone, "commit", "-m", "test: seed smoke vault");
 		git(clone, "push", "-u", "origin", "HEAD:refs/heads/main");
 		git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
@@ -196,6 +301,17 @@ async function mkSmokeClone(
 	await writeFile(join(shimDirectory, "git"), gitShimSource());
 	await chmod(join(shimDirectory, "git"), 0o755);
 
+	// The process wrapper resolves the admitted activation identity through the
+	// legacy fixture env lane, which validates these exact owner-only files.
+	const publicKeyPath = join(root, `${name}-writer.pub`);
+	const privateKeyPath = join(root, `${name}-writer`);
+	const knownHostsPath = join(root, `${name}-known_hosts`);
+	await writeFile(publicKeyPath, "ssh-ed25519 fixture-public-key\n");
+	await writeFile(privateKeyPath, "fixture-private-key\n", { mode: 0o600 });
+	await writeFile(knownHostsPath, "example.test ssh-ed25519 fixture-host-key\n", {
+		mode: 0o600,
+	});
+
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		HOME: profileRoot,
@@ -209,8 +325,15 @@ async function mkSmokeClone(
 		VAULT_GIT_ACTOR: `agent-${name}`,
 		VAULT_GIT_HOST: `host-${name}`,
 		VAULT_GIT_REMOTE: "origin",
+		VAULT_GIT_SSH_IDENTITY_FILE_PATH: privateKeyPath,
+		VAULT_GIT_SSH_PUBLIC_KEY_PATH: publicKeyPath,
+		VAULT_GIT_SSH_KNOWN_HOSTS_PATH: knownHostsPath,
+		// The configured activation identity owns the git binary, so it must
+		// name the recording shim or every shim-mode row silently runs real git.
+		VAULT_GIT_GIT_BINARY_PATH: join(shimDirectory, "git"),
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_TEST_HARNESS: "1",
 		VAULT_GIT_SHIM_LOG: shimLog,
 		...(options.leaseDurationMs
 			? { VAULT_GIT_TEST_LEASE_DURATION_MS: String(options.leaseDurationMs) }
@@ -224,7 +347,7 @@ async function mkSmokeClone(
 	});
 	if (options.activate !== false) await admitActivationForTest(store);
 
-	const executableCliPath = options.leaseDurationMs ? processCliPath : cliPath;
+	const executableCliPath = processCliPath;
 	const run = (args: readonly string[]) =>
 		runCliProcess({
 			label: `vault-git ${args.join(" ")}`,
@@ -311,6 +434,46 @@ async function mkSmokeClone(
 				},
 			};
 		},
+		// The detached worker, not the foreground caller, is the process paused at
+		// an engine boundary. Read its pid from durable task state and kill that.
+		killWorkerAtInterrupt: async (args: readonly string[], point: string) => {
+			const gate = join(root, `${name}-worker-interrupt-${crypto.randomUUID()}`);
+			const accepted = await runCliProcess({
+				label: `vault-git ${args.join(" ")}`,
+				argv: [process.execPath, processCliPath, ...args],
+				cwd: packageRoot,
+				env: {
+					...env,
+					VAULT_GIT_TEST_INTERRUPT_POINT: point,
+					VAULT_GIT_TEST_INTERRUPT_GATE: gate,
+				},
+				timeoutMs: 45_000,
+			});
+			if (accepted.exitCode !== 0) {
+				throw new Error(
+					`worker launch did not succeed: ${accepted.stdout}${accepted.stderr}`,
+				);
+			}
+			const taskId = parseCliProcessJson<{ data?: { task_id?: string } }>(
+				accepted,
+			).data?.task_id;
+			if (!taskId || !/^task_[0-9a-f]{32}$/.test(taskId)) {
+				throw new Error("worker launch omitted a valid task id");
+			}
+			await waitForFile(`${gate}.ready`, 30_000);
+			const worker = await readSmokeWorkerProcess(stateRoot, taskId, 10_000);
+			const termination = await terminateMatchingWorkerGroup(
+				worker.pid,
+				worker.identity,
+			);
+			if (termination !== "terminated") {
+				throw new Error(
+					termination === "mismatch"
+						? "durable worker process identity did not match"
+						: "durable worker process was absent before interruption",
+				);
+			}
+		},
 		prepareAtInterrupt: async (args: readonly string[], point: string) => {
 			const gate = join(root, `${name}-interrupt-${crypto.randomUUID()}`);
 			const child = trackSmokeChild(
@@ -331,6 +494,7 @@ async function mkSmokeClone(
 			child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
 			child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 			await waitForFile(`${gate}.ready`, 10_000);
+			const descendantProcesses = readDescendantProcesses(requiredPid(child));
 			const collect = async (): Promise<CliProcessResult> => {
 				const outcome = await new Promise<{
 					readonly exitCode: number | null;
@@ -354,6 +518,7 @@ async function mkSmokeClone(
 			};
 			return {
 				pid: requiredPid(child),
+				descendantProcesses,
 				trigger: async () => {
 					await writeFile(gate, "continue\n");
 					return collect();
@@ -362,6 +527,11 @@ async function mkSmokeClone(
 					if (!child.pid) throw new Error("interrupted process has no pid");
 					process.kill(-child.pid, "SIGKILL");
 					await collect();
+					await Promise.all(
+						descendantProcesses.map(({ pid, identity }) =>
+							terminateMatchingWorkerGroup(pid, identity),
+						),
+					);
 				},
 			};
 		},
@@ -420,6 +590,58 @@ async function mkSmokeClone(
 	};
 }
 
+/** Read one acknowledged worker only from its latest immutable task revision. @internal */
+export async function readSmokeWorkerProcess(
+	stateRoot: string,
+	taskId: string,
+	timeoutMs: number,
+): Promise<{ readonly pid: number; readonly identity: string }> {
+	if (!/^task_[0-9a-f]{32}$/.test(taskId)) throw new Error("invalid task id");
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		for (const repository of await readdir(managerRoot).catch(() => [])) {
+			const history = join(
+				managerRoot,
+				repository,
+				"tasks",
+				taskId,
+				"history",
+			);
+			const latest = (await readdir(history).catch(() => []))
+				.filter((name) => /^\d{12}\.json$/.test(name))
+				.sort()
+				.at(-1);
+			if (!latest) continue;
+			const source = await readFile(join(history, latest), "utf8").catch(() => "");
+			if (!source) continue;
+			try {
+				const record = JSON.parse(source) as {
+					taskId?: string;
+					workerPid?: number | null;
+					workerProcessIdentity?: string | null;
+				};
+				if (
+					record.taskId === taskId &&
+					Number.isSafeInteger(record.workerPid) &&
+					(record.workerPid as number) > 0 &&
+					typeof record.workerProcessIdentity === "string" &&
+					/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity)
+				) {
+					return {
+						pid: record.workerPid as number,
+						identity: record.workerProcessIdentity,
+					};
+				}
+			} catch {
+				// A concurrently published or malformed revision is never authoritative.
+			}
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error("timed out waiting for a durable worker process identity");
+}
+
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -435,20 +657,190 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
  * Rows call this from `afterEach` so no row inherits another row's state.
  */
 export async function cleanupSmokeFixtures(): Promise<void> {
+	const fixtureStateRoots = stateRoots.splice(0);
+	const fixtureRoots = roots.splice(0);
+	const cleanupErrors: unknown[] = [];
 	const running = [...children];
+	const descendantProcesses: SmokeProcessIdentity[] = [];
+	// Capture descendants, then stop and reap tracked callers before reading
+	// durable state. A caller can acknowledge a worker until it fully exits.
+	for (const { child } of running) {
+		if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+			continue;
+		}
+		try {
+			descendantProcesses.push(...readDescendantProcesses(child.pid));
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+	}
 	for (const { child, detached } of running) {
 		if (child.exitCode !== null || child.signalCode !== null) continue;
 		try {
 			if (detached) process.kill(-requiredPid(child), "SIGKILL");
 			else child.kill("SIGKILL");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+				cleanupErrors.push(error);
+			}
 		}
 	}
-	await Promise.all(running.map(({ child }) => waitForChildClose(child)));
-	await Promise.all(
-		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-	);
+	for (const result of await Promise.allSettled(
+		running.map(({ child }) => waitForChildClose(child)),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled([
+		...fixtureStateRoots.map((stateRoot) => terminateFixtureWorkers(stateRoot)),
+		...descendantProcesses.map(({ pid, identity }) =>
+			terminateMatchingWorkerGroup(pid, identity),
+		),
+	])) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	for (const result of await Promise.allSettled(
+		fixtureRoots.map((root) => rm(root, { recursive: true, force: true })),
+	)) {
+		if (result.status === "rejected") cleanupErrors.push(result.reason);
+	}
+	if (cleanupErrors.length > 0) {
+		throw new AggregateError(cleanupErrors, "smoke fixture cleanup failed");
+	}
+}
+
+async function terminateFixtureWorkers(stateRoot: string): Promise<void> {
+	const managerRoot = join(stateRoot, "vault-git-transaction-manager");
+	for (const repository of await readdir(managerRoot).catch(() => [])) {
+		for (const family of ["tasks", "doctor-tasks"] as const) {
+			const familyRoot = join(managerRoot, repository, family);
+			for (const taskId of await readdir(familyRoot).catch(() => [])) {
+				if (!/^(?:task|doctor_task)_[0-9a-f]{32}$/u.test(taskId)) continue;
+				const worker = await readLatestWorkerRevision(
+					join(familyRoot, taskId, "history"),
+					taskId,
+				);
+				if (worker === null) continue;
+				await terminateMatchingWorkerGroup(worker.pid, worker.identity);
+			}
+		}
+	}
+}
+
+async function readLatestWorkerRevision(
+	historyRoot: string,
+	expectedTaskId: string,
+): Promise<{ readonly pid: number; readonly identity: string } | null> {
+	const latest = (await readdir(historyRoot).catch(() => []))
+		.filter((name) => /^\d{12}\.json$/u.test(name))
+		.sort()
+		.at(-1);
+	if (!latest) return null;
+	const source = await readFile(join(historyRoot, latest), "utf8").catch(() => "");
+	if (!source) return null;
+	try {
+		const record = JSON.parse(source) as Record<string, unknown>;
+		if (
+			record.taskId !== expectedTaskId ||
+			typeof record.workerPid !== "number" ||
+			!Number.isSafeInteger(record.workerPid) ||
+			record.workerPid <= 0 ||
+			typeof record.workerProcessIdentity !== "string" ||
+			!/^[0-9a-f]{64}$/u.test(record.workerProcessIdentity)
+		) {
+			return null;
+		}
+		return {
+			pid: record.workerPid,
+			identity: record.workerProcessIdentity,
+		};
+	} catch {
+		return null;
+	}
+}
+
+async function terminateMatchingWorkerGroup(
+	pid: number,
+	expectedIdentity: string,
+): Promise<"terminated" | "absent" | "mismatch"> {
+	const firstObservation = observeWorkerProcess(pid, expectedIdentity);
+	if (firstObservation !== "matching") return firstObservation;
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		const afterRace = observeWorkerProcess(pid, expectedIdentity);
+		if (afterRace !== "matching") return afterRace;
+		process.kill(pid, "SIGKILL");
+	}
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const observation = observeWorkerProcess(pid, expectedIdentity);
+		if (observation === "absent" || observation === "mismatch") {
+			return "terminated";
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error(`fixture worker ${pid} survived cleanup`);
+}
+
+function observeWorkerProcess(
+	pid: number,
+	expectedIdentity: string,
+): "matching" | "absent" | "mismatch" {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return "absent";
+		throw error;
+	}
+	try {
+		return readVaultGitProcessIdentity(pid) === expectedIdentity
+			? "matching"
+			: "mismatch";
+	} catch (error) {
+		try {
+			process.kill(pid, 0);
+		} catch (livenessError) {
+			if ((livenessError as NodeJS.ErrnoException).code === "ESRCH") {
+				return "absent";
+			}
+			throw livenessError;
+		}
+		throw error;
+	}
+}
+
+function readDescendantProcesses(rootPid: number): readonly SmokeProcessIdentity[] {
+	const result = spawnSync("ps", ["-axo", "pid=,ppid="], {
+		encoding: "utf8",
+		env: { ...process.env, LC_ALL: "C" },
+	});
+	if (result.status !== 0) {
+		throw new Error(result.stderr || "failed to inspect smoke process tree");
+	}
+	const childrenByParent = new Map<number, number[]>();
+	for (const line of result.stdout.split("\n")) {
+		const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+		if (!match) continue;
+		const pid = Number(match[1]);
+		const parentPid = Number(match[2]);
+		const children = childrenByParent.get(parentPid) ?? [];
+		children.push(pid);
+		childrenByParent.set(parentPid, children);
+	}
+	const descendants: SmokeProcessIdentity[] = [];
+	const pending = [...(childrenByParent.get(rootPid) ?? [])];
+	while (pending.length > 0) {
+		const pid = pending.shift();
+		if (pid === undefined) continue;
+		pending.push(...(childrenByParent.get(pid) ?? []));
+		try {
+			descendants.push({ pid, identity: readVaultGitProcessIdentity(pid) });
+		} catch {
+			// The descendant exited between the process-tree and identity reads.
+		}
+	}
+	return descendants;
 }
 
 function trackSmokeChild(child: ChildProcess, detached: boolean): ChildProcess {
@@ -465,9 +857,17 @@ function requiredPid(child: ChildProcess): number {
 
 async function waitForChildClose(child: ChildProcess): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
-	await new Promise<void>((resolveChild) =>
-		child.once("close", () => resolveChild()),
-	);
+	await new Promise<void>((resolveChild, rejectChild) => {
+		const onClose = () => {
+			clearTimeout(timeout);
+			resolveChild();
+		};
+		const timeout = setTimeout(() => {
+			child.off("close", onClose);
+			rejectChild(new Error(`smoke process ${child.pid ?? "unknown"} did not exit`));
+		}, 5_000);
+		child.once("close", onClose);
+	});
 }
 
 /**

@@ -1,8 +1,12 @@
 import type {
+	VaultGitActivationBinding,
+	VaultGitActivationConfigurationField,
 	VaultGitLifecycleResultPayload,
 	VaultGitOwnedPathReceipt,
+	VaultGitStagedRecoveryPlan,
 	VaultGitStateSnapshot,
 	VaultGitUnrelatedStateSnapshot,
+	VaultGitValidationFailure,
 } from "./model.ts";
 
 /** Exact current checker implementation fingerprint. */
@@ -103,6 +107,8 @@ export interface VaultGitProcessRequest {
 	readonly stdin?: string;
 	/** Environment additions; ambient values remain process-adapter owned. */
 	readonly env?: Readonly<Record<string, string>>;
+	/** Use only the supplied environment for credential-free isolated work. */
+	readonly environmentMode?: "scrubbed" | "isolated";
 	/** Hard operation deadline. */
 	readonly timeoutMs: number;
 }
@@ -123,6 +129,15 @@ export interface VaultGitProcessResult {
 export interface VaultGitProcessPort {
 	/** Run one bounded process without a shell. */
 	run(request: VaultGitProcessRequest): Promise<VaultGitProcessResult>;
+}
+
+/** Live repository identity could not be proved before the bounded deadline. */
+export class VaultRepositoryIdentityUnavailableError extends Error {
+	/** Construct the stable availability failure used by composition policy. */
+	constructor() {
+		super("configured repository identity revalidation is unavailable");
+		this.name = "VaultRepositoryIdentityUnavailableError";
+	}
 }
 
 /** Main-branch relationship after fetching the exact upstream ref. */
@@ -156,7 +171,11 @@ export interface VaultGitMainInspectionFailure {
 /** Complete exact-main inspection result. */
 export type VaultGitMainInspection =
 	| VaultGitMainInspectionSuccess
-	| VaultGitMainInspectionFailure;
+	| VaultGitMainInspectionFailure
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
+	  };
 
 /** Read-only atomic-push admission result before transaction state exists. */
 export type VaultGitAtomicPushCapability =
@@ -186,6 +205,10 @@ export type VaultGitLedgerReadResult =
 	| {
 			readonly status: "failed";
 			readonly reason: "remote_unavailable" | "timed_out";
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason: "unsafe_remote_configuration";
 	  };
 
 /** Input for one compare-and-swap ledger append. */
@@ -336,6 +359,38 @@ export interface VaultGitClockPort {
 	now(): Date;
 }
 
+/** Live activation validation depth for admission or fenced continuation. */
+export type VaultGitActivationValidationScope = "admission" | "continuation";
+
+/** Closed fail-closed cause returned by the engine's activation port. */
+export type VaultGitActivationDenialReason =
+	| "configuration_missing"
+	| "admission_missing"
+	| "human_capability_required"
+	| "evidence_changed"
+	| "binding_changed"
+	| "invalidated"
+	| "revoked"
+	| "revalidation_unavailable";
+
+/** Complete validation result retained across the engine port boundary. */
+export type VaultGitActivationValidationResult =
+	| { readonly status: "admitted"; readonly evidenceId?: string }
+	| { readonly status: "revoked"; readonly evidenceId?: string }
+	| {
+			readonly status: "denied";
+			readonly reason: VaultGitActivationDenialReason;
+			readonly binding?: VaultGitActivationBinding;
+			readonly missingConfiguration?: readonly VaultGitActivationConfigurationField[];
+	  };
+
+/** Minimal activation gate owned by the engine port boundary. */
+export interface VaultGitActivationValidationPort {
+	validate(
+		scope?: VaultGitActivationValidationScope,
+	): Promise<VaultGitActivationValidationResult>;
+}
+
 /** Canonical configured-vault identity resolved at one write-capable phase. */
 export interface VaultGitRepositoryIdentity {
 	/** Stable non-secret identity; callers compare it with configured identity. */
@@ -366,13 +421,28 @@ export type VaultGitOwnedPathInspection =
 			readonly reason: VaultGitOwnedPathRefusalReason;
 	  };
 
-/** One owned path bound to the exact worktree content hash observed pre-check. */
+/** One owned path bound to the exact frozen content observed at check time. */
 export interface VaultGitOwnedPathContentHash {
 	/** Repository-relative owned leaf path. */
 	readonly path: string;
-	/** Blob object id of current worktree content, or null when absent. */
+	/** Blob object id of the frozen content, or null when absent. */
 	readonly contentHash: string | null;
+	/**
+	 * Exact Git file mode of the frozen entry, or null when absent. Required
+	 * so no checker can bind content while silently bypassing the mode fence.
+	 */
+	readonly fileMode: "100644" | "100755" | null;
 }
+
+/** Read-only preparation outcome for one staged-only quarantine recovery. */
+export type VaultGitStagedRecoveryPreparation =
+	| { readonly status: "ready"; readonly plan: VaultGitStagedRecoveryPlan }
+	| { readonly status: "refused"; readonly reason: "mismatch" | "timed_out" };
+
+/** Idempotent mutation outcome for one durable staged recovery plan. */
+export type VaultGitStagedRecoveryApplication =
+	| { readonly status: "recovered" }
+	| { readonly status: "refused"; readonly reason: "mismatch" | "timed_out" };
 
 /** Input for one exact local event commit. */
 export interface VaultGitExactCommitRequest {
@@ -383,11 +453,12 @@ export interface VaultGitExactCommitRequest {
 	/** Exact unrelated state recorded at admission or the latest join. */
 	readonly unrelatedState: VaultGitUnrelatedStateSnapshot;
 	/**
-	 * Content hashes captured immediately before the vault-owned check ran.
-	 * When present, the frozen candidate blobs must equal these hashes so the
-	 * committed bytes are exactly the checked bytes.
+	 * Content hashes and Git file modes frozen inside the Validation
+	 * Candidate. The frozen candidate blobs must equal these bindings so the
+	 * committed bytes are exactly the checked bytes; a request without them
+	 * cannot commit.
 	 */
-	readonly expectedContentHashes?: readonly VaultGitOwnedPathContentHash[];
+	readonly expectedContentHashes: readonly VaultGitOwnedPathContentHash[];
 	/** Complete manager-owned commit message. */
 	readonly message: string;
 	/** Non-secret admitted actor identity. */
@@ -465,6 +536,19 @@ export interface VaultGitRepositoryPort {
 	readonly hashOwnedPaths?: (
 		ownedPaths: readonly string[],
 	) => Promise<readonly VaultGitOwnedPathContentHash[]>;
+	/** Prove one local commit is an ancestor of another without changing refs. */
+	readonly inspectCommitAncestry?: (
+		ancestor: string,
+		descendant: string,
+	) => Promise<"ancestor" | "not_ancestor" | "failed" | "timed_out">;
+	/** Freeze exact staged additions before durable recovery intent is recorded. */
+	readonly prepareStagedRecovery?: (
+		ownedPaths: readonly VaultGitOwnedPathReceipt[],
+	) => Promise<VaultGitStagedRecoveryPreparation>;
+	/** Materialize and unstage only the entries named by a durable recovery plan. */
+	readonly applyStagedRecovery?: (
+		plan: VaultGitStagedRecoveryPlan,
+	) => Promise<VaultGitStagedRecoveryApplication>;
 	/** Build, verify, and install one exact local event commit. */
 	readonly commitExact?: (
 		request: VaultGitExactCommitRequest,
@@ -475,15 +559,35 @@ export interface VaultGitRepositoryPort {
 	) => Promise<VaultGitLocalCommitInspection>;
 }
 
-/** Result from the injected vault-owned validation command. */
-export type VaultGitCheckResult =
-	| { readonly status: "passed" }
-	| { readonly status: "failed"; readonly reason: "check_failed" | "timed_out" };
+export type {
+	VaultGitValidationFailure,
+	VaultGitValidationFailureClass,
+	VaultGitValidationStage,
+} from "./model.ts";
 
-/** Injected vault-owned check boundary run from the resolved vault root. */
+/** Exact Validation Candidate composition request for one completion check. */
+export interface VaultGitCheckRequest {
+	/** Exact local main object admitted at begin. */
+	readonly baselineHead: string;
+	/** Frozen admitted leaf set overlaid onto that baseline. */
+	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
+	/** Public transaction selector recorded as Candidate Residue ownership. */
+	readonly transactionId?: string;
+}
+
+/** Classified result from the injected vault-owned validation command. */
+export type VaultGitCheckResult =
+	| {
+			readonly status: "passed";
+			/** Frozen bindings the later commit must reproduce exactly. */
+			readonly checkedPaths: readonly VaultGitOwnedPathContentHash[];
+	  }
+	| ({ readonly status: "failed" } & VaultGitValidationFailure);
+
+/** Injected vault-owned check boundary run inside one Validation Candidate. */
 export interface VaultGitCheckPort {
-	/** Run the admitted repository's own deterministic check command. */
-	run(): Promise<VaultGitCheckResult>;
+	/** Run the vault's deterministic check against the exact frozen candidate. */
+	run(request: VaultGitCheckRequest): Promise<VaultGitCheckResult>;
 }
 
 /** Deterministic process, identity, randomness, and interruption boundary. */

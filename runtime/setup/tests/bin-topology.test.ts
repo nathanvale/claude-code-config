@@ -17,26 +17,16 @@ const SHEBANG_ENTRY = "#!/usr/bin/env bun\nconsole.log(\"bin fixture\");\n";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("bin manifest", () => {
-	test("discovers and projects vault-git through the managed bin destination", async () => {
+	test("leaves vault-git exclusively owned by Host Enrollment", async () => {
 		const fixture = await binFixture();
 		const manifest = await readBinManifest(REPO_ROOT);
 		const declaration = manifest.declarations.find(({ name }) => name === "vault-git");
-		expect(declaration).toBeDefined();
-		if (!declaration) throw new Error("vault-git bin declaration is missing");
-		expect(declaration.packageDir.endsWith("runtime/vault-git-transaction-manager")).toBe(true);
-		expect((await lstat(declaration.entry)).mode & 0o111).not.toBe(0);
+		expect(declaration).toBeUndefined();
 
 		const plan = await inspectBinTopology(REPO_ROOT, fixture.home, fixture.options);
 		const operation = plan.operations.find(({ name }) => name === "vault-git");
-		expect(operation).toMatchObject({
-			destination: join(fixture.binDir, "vault-git"),
-			action: "create",
-		});
-		expect(operation?.destination.startsWith(REPO_ROOT)).toBe(false);
-
-		const result = await applyBinTopology(plan);
-		expect(result.failed).toEqual([]);
-		expect(await readlink(join(fixture.binDir, "vault-git"))).toBe(declaration.entry);
+		expect(operation).toBeUndefined();
+		expect(await Bun.file(join(fixture.binDir, "vault-git")).exists()).toBe(false);
 	});
 
 	test("pathBin override beats #bin for the same package", async () => {

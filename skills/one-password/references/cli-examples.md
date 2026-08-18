@@ -93,10 +93,10 @@ set +x
 ITEM_TITLE="<known item>"
 FIELD_LABEL="<field label>"
 VAULT="<token-scoped vault>"
-TOKEN_WRAPPER="<managed wrapper that injects OP_SERVICE_ACCOUNT_TOKEN for one command>"
+TOKEN_WRAPPER="$HOME/code/dotfiles/bin/with-one-password-token"
 value="$(
   "$TOKEN_WRAPPER" op item get "$ITEM_TITLE" --vault "$VAULT" --format json |
-    FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_LABEL); if(!f?.value) process.exit(2); process.stdout.write(f.value);})'
+    FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const matches=(item.fields||[]).filter(x=>x.label===process.env.FIELD_LABEL && x.type==="CONCEALED"); if(matches.length!==1 || !matches[0].value) process.exit(2); process.stdout.write(matches[0].value);})'
 )"
 echo "field_len:${#value}"
 case "$value" in sk-*) echo "field_prefix:sk" ;; *) echo "field_prefix:other" ;; esac
@@ -104,6 +104,16 @@ echo "field_has_newline:$(printf %s "$value" | wc -l | tr -d ' ')"
 ```
 
 Keep JSON extraction scoped to the known item and vault. Do not enumerate vaults or items to discover candidates.
+
+## Process environment injection
+
+Use the wrapper's owned injection path when a declared capability needs one secret environment variable.
+
+```bash
+"$HOME/code/dotfiles/bin/with-one-password-token" inject <ENV_KEY> '<op://vault/item/field>' -- <command> [args...]
+```
+
+Do not substitute `op run`; the wrapper rejects it because the launched workload could inherit `OP_SERVICE_ACCOUNT_TOKEN`.
 
 ## Vault-scoped metadata search (explicit ask only)
 
@@ -115,7 +125,7 @@ set -euo pipefail
 set +x
 VAULT="<token-scoped vault>"
 QUERY="<query>"
-op item list --vault "$VAULT" --format json |
+"$HOME/code/dotfiles/bin/with-one-password-token" op item list --vault "$VAULT" --format json |
   QUERY="$QUERY" VAULT="$VAULT" node -e '
 let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
   const q=process.env.QUERY.toLowerCase();

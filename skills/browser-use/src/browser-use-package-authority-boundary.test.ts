@@ -52,6 +52,7 @@ describe("production package authority boundary", () => {
 		expect(runtime.runbookAuthenticatedStateProof).toBeUndefined();
 		expect(runtime.reviewedActionApprovalVerifier).toBeUndefined();
 		expect(runtime.authTokenRetrieval).toBeUndefined();
+		expect(runtime.bindingSelectionCeremony).toBeUndefined();
 	});
 
 	test("temporary production bundle excludes test factories and hostile authority", async () => {

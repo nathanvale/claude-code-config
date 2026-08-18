@@ -1,0 +1,719 @@
+{
+  "schema_version": 2,
+  "scenarios": [
+    {
+      "id": "p01-test-tdd",
+      "prompt": "While tdd remains the active workflow, change the repository-owned test concerning fresh installation, activation, and host discovery at the existing seam.",
+      "artifact": "test",
+      "handback": "tdd",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "change",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p02-test-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, run the repository-owned test concerning public CLI exit status, stdout, and timeout semantics at the new seam.",
+      "artifact": "test",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "run",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p03-test-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, read the repository-owned test concerning Bun and Node behaviour across CI platforms at the disputed seam.",
+      "artifact": "test",
+      "handback": "ci-testbed",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "read",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p04-test-cli-author",
+      "prompt": "While cli-author remains the active workflow, read the repository-owned test concerning browser-rendered accessible labels and navigation at the existing seam.",
+      "artifact": "test",
+      "handback": "cli-author",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "read",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p05-test-test-runner",
+      "prompt": "While test-runner remains the active workflow, run the repository-owned test concerning durable ownership, concurrent claims, and crash recovery at the disputed seam.",
+      "artifact": "test",
+      "handback": "test-runner",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p06-test-improve-test-architecture",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create the repository-owned test concerning Bun and Node behaviour across CI platforms at the new seam.",
+      "artifact": "test",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p07-fixture-tdd",
+      "prompt": "While tdd remains the active workflow, read the repository-owned fixture concerning Bun and Node behaviour across CI platforms at the existing seam.",
+      "artifact": "fixture",
+      "handback": "tdd",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "read",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p08-fixture-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, run the repository-owned fixture concerning Bun and Node behaviour across CI platforms at the existing seam.",
+      "artifact": "fixture",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "run",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p09-fixture-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, run the repository-owned fixture concerning public CLI exit status, stdout, and timeout semantics at the new seam.",
+      "artifact": "fixture",
+      "handback": "ci-testbed",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "run",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p10-fixture-cli-author",
+      "prompt": "While cli-author remains the active workflow, run the repository-owned fixture concerning browser-rendered accessible labels and navigation at the new seam.",
+      "artifact": "fixture",
+      "handback": "cli-author",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "run",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p11-fixture-test-runner",
+      "prompt": "While test-runner remains the active workflow, change the repository-owned fixture concerning durable ownership, concurrent claims, and crash recovery at the disputed seam.",
+      "artifact": "fixture",
+      "handback": "test-runner",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "change",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p12-fixture-improve-test-architecture",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create the repository-owned fixture concerning fresh installation, activation, and host discovery at the new seam.",
+      "artifact": "fixture",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p13-mock-tdd",
+      "prompt": "While tdd remains the active workflow, create the repository-owned mock concerning durable ownership, concurrent claims, and crash recovery at the new seam.",
+      "artifact": "mock",
+      "handback": "tdd",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p14-mock-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, change the repository-owned mock concerning Bun and Node behaviour across CI platforms at the disputed seam.",
+      "artifact": "mock",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "change",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p15-mock-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, read the repository-owned mock concerning durable ownership, concurrent claims, and crash recovery at the new seam.",
+      "artifact": "mock",
+      "handback": "ci-testbed",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "read",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p16-mock-cli-author",
+      "prompt": "While cli-author remains the active workflow, create the repository-owned mock concerning public CLI exit status, stdout, and timeout semantics at the existing seam.",
+      "artifact": "mock",
+      "handback": "cli-author",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "create",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p17-mock-test-runner",
+      "prompt": "While test-runner remains the active workflow, run the repository-owned mock concerning fresh installation, activation, and host discovery at the new seam.",
+      "artifact": "mock",
+      "handback": "test-runner",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "run",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p18-mock-improve-test-architecture",
+      "prompt": "While improve-test-architecture remains the active workflow, read the repository-owned mock concerning browser-rendered accessible labels and navigation at the disputed seam.",
+      "artifact": "mock",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "read",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p19-snapshot-tdd",
+      "prompt": "While tdd remains the active workflow, run the repository-owned snapshot concerning Bun and Node behaviour across CI platforms at the disputed seam.",
+      "artifact": "snapshot",
+      "handback": "tdd",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p20-snapshot-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, create the repository-owned snapshot concerning browser-rendered accessible labels and navigation at the existing seam.",
+      "artifact": "snapshot",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "create",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p21-snapshot-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, run the repository-owned snapshot concerning fresh installation, activation, and host discovery at the disputed seam.",
+      "artifact": "snapshot",
+      "handback": "ci-testbed",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p22-snapshot-cli-author",
+      "prompt": "While cli-author remains the active workflow, read the repository-owned snapshot concerning durable ownership, concurrent claims, and crash recovery at the new seam.",
+      "artifact": "snapshot",
+      "handback": "cli-author",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "read",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p23-snapshot-test-runner",
+      "prompt": "While test-runner remains the active workflow, create the repository-owned snapshot concerning Bun and Node behaviour across CI platforms at the new seam.",
+      "artifact": "snapshot",
+      "handback": "test-runner",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p24-snapshot-improve-test-architecture",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, change the repository-owned snapshot concerning public CLI exit status, stdout, and timeout semantics at the disputed seam.",
+      "artifact": "snapshot",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "change",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p25-test-helper-tdd",
+      "prompt": "While tdd remains the active workflow, change the repository-owned test-helper concerning public CLI exit status, stdout, and timeout semantics at the new seam.",
+      "artifact": "test-helper",
+      "handback": "tdd",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "change",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p26-test-helper-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, read the repository-owned test-helper concerning fresh installation, activation, and host discovery at the new seam.",
+      "artifact": "test-helper",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "read",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p27-test-helper-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, change the repository-owned test-helper concerning browser-rendered accessible labels and navigation at the existing seam.",
+      "artifact": "test-helper",
+      "handback": "ci-testbed",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "change",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p28-test-helper-cli-author",
+      "prompt": "While cli-author remains the active workflow, create the repository-owned test-helper concerning Bun and Node behaviour across CI platforms at the disputed seam.",
+      "artifact": "test-helper",
+      "handback": "cli-author",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "create",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p29-test-helper-test-runner",
+      "prompt": "While test-runner remains the active workflow, change the repository-owned test-helper concerning browser-rendered accessible labels and navigation at the existing seam.",
+      "artifact": "test-helper",
+      "handback": "test-runner",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "change",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p30-test-helper-improve-test-architecture",
+      "prompt": "While improve-test-architecture remains the active workflow, run the repository-owned test-helper concerning durable ownership, concurrent claims, and crash recovery at the existing seam.",
+      "artifact": "test-helper",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "run",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p31-test-harness-tdd",
+      "prompt": "While tdd remains the active workflow, change the repository-owned test-harness concerning browser-rendered accessible labels and navigation at the new seam.",
+      "artifact": "test-harness",
+      "handback": "tdd",
+      "profiles": [
+        "browser-and-ui"
+      ],
+      "operation": "change",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p32-test-harness-diagnosing-bugs",
+      "prompt": "While diagnosing-bugs remains the active workflow, create the repository-owned test-harness concerning durable ownership, concurrent claims, and crash recovery at the new seam.",
+      "artifact": "test-harness",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p33-test-harness-ci-testbed",
+      "prompt": "While ci-testbed remains the active workflow, create the repository-owned test-harness concerning durable ownership, concurrent claims, and crash recovery at the new seam.",
+      "artifact": "test-harness",
+      "handback": "ci-testbed",
+      "profiles": [
+        "state-concurrency-recovery"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p34-test-harness-cli-author",
+      "prompt": "While cli-author remains the active workflow, change the repository-owned test-harness concerning fresh installation, activation, and host discovery at the disputed seam.",
+      "artifact": "test-harness",
+      "handback": "cli-author",
+      "profiles": [
+        "installation-host-hosted"
+      ],
+      "operation": "change",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p35-test-harness-test-runner",
+      "prompt": "While test-runner remains the active workflow, read the repository-owned test-harness concerning public CLI exit status, stdout, and timeout semantics at the existing seam.",
+      "artifact": "test-harness",
+      "handback": "test-runner",
+      "profiles": [
+        "process-and-cli"
+      ],
+      "operation": "read",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p36-test-harness-improve-test-architecture",
+      "prompt": "While improve-test-architecture remains the active workflow, run the repository-owned test-harness concerning Bun and Node behaviour across CI platforms at the disputed seam.",
+      "artifact": "test-harness",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "runtime-ci-platform"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p37-test-tdd-runner-execution",
+      "prompt": "While tdd remains the active workflow, change the repository-owned test so its Bun one-shot versus watch mode, exact selector count, and retained machine reporter prove the existing seam.",
+      "artifact": "test",
+      "handback": "tdd",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "change",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p38-fixture-diagnosing-bugs-runner-execution",
+      "prompt": "While diagnosing-bugs remains the active workflow, create a repository-owned fixture for runner file isolation, within-file concurrency, randomized-order seed replay, and module-mock restoration at a new seam.",
+      "artifact": "fixture",
+      "handback": "diagnosing-bugs",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "create",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p39-mock-ci-testbed-runner-execution",
+      "prompt": "While ci-testbed remains the active workflow, run the existing repository-owned mock test with its runtime version, transform path, module cache, and restoration owner unchanged at the disputed seam.",
+      "artifact": "mock",
+      "handback": "ci-testbed",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "run",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p40-snapshot-cli-author-runner-execution",
+      "prompt": "While cli-author remains the active workflow, read the existing repository-owned snapshot test reporter and application-output separation at the existing seam without changing an artifact.",
+      "artifact": "snapshot",
+      "handback": "cli-author",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "read",
+      "seam": "existing",
+      "expected": {
+        "invokeTestDesign": false,
+        "briefBeforeEdit": false,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "return"
+      }
+    },
+    {
+      "id": "p41-test-helper-test-runner-runner-execution",
+      "prompt": "While test-runner remains the active workflow, change the repository-owned test helper for within-file concurrency, timeout cancellation, and resource cleanup at a new seam.",
+      "artifact": "test-helper",
+      "handback": "test-runner",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "change",
+      "seam": "new",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    },
+    {
+      "id": "p42-test-harness-improve-test-architecture-runner-execution",
+      "prompt": "Nathan has selected this candidate. While improve-test-architecture remains the active workflow, create a repository-owned test-harness concerning only one-shot runner termination, exact selector file and test counts, and a protocol-complete reporter receipt at the disputed seam. Runtime, CI, platform compatibility, public-process lifecycle, durable state, installation, browser, and hosted claims are explicitly outside this change.",
+      "artifact": "test-harness",
+      "handback": "improve-test-architecture",
+      "profiles": [
+        "runner-execution"
+      ],
+      "operation": "create",
+      "seam": "disputed",
+      "expected": {
+        "invokeTestDesign": true,
+        "briefBeforeEdit": true,
+        "activeWorkflowRemainsDriver": true,
+        "continuation": "await-seam-approval"
+      }
+    }
+  ]
+}

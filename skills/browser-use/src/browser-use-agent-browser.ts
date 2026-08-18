@@ -246,6 +246,8 @@ export type AgentBrowserTargetResolutionResult =
 	| {
 			ok: true;
 			target_tab_id: string;
+			/** Canonical CDP target identity supplied by Agent Browser 0.34. */
+			target_id: string;
 			/** Process-local resolution evidence. Never persist this URL. */
 			target_url: string;
 			binding: AgentBrowserTargetBinding;
@@ -434,7 +436,7 @@ function failure(
 
 async function releaseAgentBrowserTaskSession(
 	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserTask,
+	task: AgentBrowserCommandContext,
 ): Promise<AdapterReleaseResult> {
 	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
 	if (!releaseSession) {
@@ -544,12 +546,16 @@ type AgentBrowserCommandContext = Pick<
 	"handoff" | "run_id"
 >;
 
-function baseArgs(task: AgentBrowserCommandContext): string[] {
+function baseArgs(
+	task: AgentBrowserCommandContext,
+	strictTabBinding: boolean,
+): string[] {
 	return [
 		"--cdp",
 		task.handoff.endpoint.ws,
 		"--session",
 		deriveSessionName(task.run_id),
+		...(strictTabBinding ? ["--pin-tab"] : []),
 	];
 }
 
@@ -562,8 +568,24 @@ async function runNative(
 	try {
 		return await runtime.runCommand({
 			command: task.handoff.attachment.probe_executable,
-			args: [...baseArgs(task), ...args],
+			args: [...baseArgs(task, true), ...args],
 			...(stdinText === undefined ? {} : { stdinText }),
+			timeoutMs: COMMAND_TIMEOUT_MS,
+		});
+	} catch {
+		return undefined;
+	}
+}
+
+async function runNativeUnpinned(
+	runtime: AgentBrowserExecutionRuntime,
+	task: AgentBrowserCommandContext,
+	args: readonly string[],
+): Promise<McporterCommandResult | undefined> {
+	try {
+		return await runtime.runCommand({
+			command: task.handoff.attachment.probe_executable,
+			args: [...baseArgs(task, false), ...args],
 			timeoutMs: COMMAND_TIMEOUT_MS,
 		});
 	} catch {
@@ -687,7 +709,7 @@ function validateTask(
  *
  * @param runtime - Structured no-shell command runner
  * @param input - Verified handoff, target policy, remaining steps, and request
- * @returns One transient raw tab id plus opaque binding, or typed repair truth
+ * @returns One canonical CDP target id plus opaque binding, or typed repair truth
  */
 export async function resolveAgentBrowserTaskTarget(
 	runtime: AgentBrowserExecutionRuntime,
@@ -709,12 +731,26 @@ export async function resolveAgentBrowserTaskTarget(
 		);
 	}
 	const nativeCommand = (args: readonly string[]) =>
-		runNative(runtime, input, args);
-	return resolveAgentBrowserTarget(
+		runNativeUnpinned(runtime, input, args);
+	const resolution = await resolveAgentBrowserTarget(
 		nativeCommand,
 		input,
 		validation.allowedOrigins,
 	);
+	const release = await releaseAgentBrowserTaskSession(runtime, input);
+	if (resolution.ok) {
+		return release.released
+			? resolution
+			: {
+					...failure(
+						"agent_browser_command_failed",
+						"not-achieved",
+						"Agent Browser resolved the target but could not release its discovery session before custody admission.",
+					),
+					release,
+				};
+	}
+	return release.released ? resolution : { ...resolution, release };
 }
 
 /**
@@ -758,10 +794,13 @@ export async function executeAgentBrowserTask(
 	}
 	const nativeCommand = (args: readonly string[]) =>
 		runNative(runtime, task, args);
+	const unpinnedNativeCommand = (args: readonly string[]) =>
+		runNativeUnpinned(runtime, task, args);
 	const targetFailure = await selectAgentBrowserTarget(
-		nativeCommand,
+		unpinnedNativeCommand,
 		task,
 		validation.allowedOrigins,
+		nativeCommand,
 	);
 	let taskOutcome: AgentBrowserExecutionResult | undefined = targetFailure;
 
@@ -1246,7 +1285,17 @@ export async function executeAgentBrowserTask(
 	}
 
 	const release = await releaseAgentBrowserTaskSession(runtime, task);
-	return release.released ? taskOutcome : { ...taskOutcome, release };
+	if (release.released) return taskOutcome;
+	if (!taskOutcome.ok) return { ...taskOutcome, release };
+	return withDelivery(
+		failure(
+			"agent_browser_command_failed",
+			"unknown",
+			"The task reached its terminal browser outcome, but the owning Agent Browser session could not be released; inspect custody before continuing.",
+			executedSteps,
+			mutationDispatched,
+		),
+	);
 }
 
 // ---------------------------------------------------------------------------

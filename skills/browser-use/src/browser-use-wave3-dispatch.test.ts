@@ -31,6 +31,14 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
 import { parseHandoffFacts } from "./browser-use-discovery";
 import { browserUseContracts } from "./command-contract";
+import {
+	acquireBrowserLaneLease,
+	acquireTargetOperationLease,
+	browserAuthorityIdOf,
+	releaseBrowserLaneLease,
+	releaseRunTargetOwnership,
+	releaseTargetOperationLease,
+} from "./browser-use-browser-custody";
 
 // =========================================================================
 // Wave-3 shared-CLI integration: chrome-devtools-mcp task-run dispatch and the
@@ -105,7 +113,44 @@ function chromeTraceStopped(): string {
 	return mcpText("## Trace\nRecording stopped; 1 trace captured.");
 }
 function agentSuccess(data: unknown): string {
-	return JSON.stringify({ success: true, data, error: null });
+	const normalized =
+		typeof data === "object" &&
+		data !== null &&
+		"tabs" in data &&
+		Array.isArray(data.tabs)
+			? {
+					...data,
+					tabs: data.tabs.map((tab) =>
+						typeof tab === "object" && tab !== null && !("targetId" in tab)
+							? { ...tab, targetId: "cdp-target-auth" }
+							: tab,
+					),
+				}
+			: data;
+	return JSON.stringify({ success: true, data: normalized, error: null });
+}
+
+function agentSemanticArgs(args: readonly string[]): readonly string[] {
+	const pinIndex = args.indexOf("--pin-tab");
+	return pinIndex >= 0 ? args.slice(pinIndex + 1) : args.slice(4);
+}
+
+function agentSessionReleaseResponse(args: readonly string[]) {
+	if (args[0] === "--session" && args.at(-2) === "close") {
+		return {
+			exitCode: 0,
+			stdout: agentSuccess({ closed: true }),
+			stderr: "",
+		};
+	}
+	if (args[0] === "session" && args[1] === "list") {
+		return {
+			exitCode: 0,
+			stdout: agentSuccess({ sessions: [] }),
+			stderr: "",
+		};
+	}
+	return undefined;
 }
 
 // --- Store setup -------------------------------------------------------------
@@ -591,8 +636,10 @@ function scriptedRuntime(
 			writeTextFile: (path: string, contents: string) =>
 				import("node:fs/promises").then((m) =>
 					m.writeFile(path, contents, { mode: 0o600 }),
-				),
+			),
 			runCommand: async (input) => {
+				const release = agentSessionReleaseResponse(input.args);
+				if (release !== undefined) return release;
 				calls.push([input.command, ...input.args]);
 				const response = responses[index++] ?? {};
 				return {
@@ -758,6 +805,101 @@ async function resumePresenceBlockedRunbook(input: {
 // =========================================================================
 
 describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
+	test("an exact target owned by another run refuses before chrome dispatch", async () => {
+		const store = await makeStore();
+		const handoffPath = writeHandoff(
+			store.base,
+			"chrome-devtools-mcp",
+			"run-chrome-target-held",
+		);
+		const parsed = parseHandoffFacts(readFileSync(handoffPath, "utf-8"));
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const held = await acquireTargetOperationLease(store.deps, {
+			authorityId: browserAuthorityIdOf(parsed.facts),
+			runId: "other-run",
+			adapterId: "agent-browser",
+			rawTargetId: "cdp-target-test",
+			operation: "read",
+			ttlMs: 30_000,
+			ownershipEvidence: {
+				kind: "adapter-creation-receipt",
+				adapter_id: "agent-browser",
+				run_id: "other-run",
+				raw_target_id: "cdp-target-test",
+			},
+		});
+		if (!held.ok) throw new Error("fixture target lease failed");
+		await releaseTargetOperationLease(store.deps, held.lease);
+		try {
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				{ stdout: chromePagesListing() },
+			]);
+			const result = await runForTest(
+				[
+					"task", "run",
+					"--intent", "debug",
+					"--handoff", handoffPath,
+					"--tab", "0",
+					"--allowed-origin", "https://example.test",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_owned_by_other_run",
+			});
+			expect(calls).toHaveLength(1);
+		} finally {
+			await releaseRunTargetOwnership(store.deps, "other-run");
+		}
+	});
+
+	test("a held Browser Lane refuses trace capture before chrome dispatch", async () => {
+		const store = await makeStore();
+		const handoffPath = writeHandoff(
+			store.base,
+			"chrome-devtools-mcp",
+			"run-chrome-lane-held",
+		);
+		const parsed = parseHandoffFacts(readFileSync(handoffPath, "utf-8"));
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const held = await acquireBrowserLaneLease(store.deps, {
+			authorityId: browserAuthorityIdOf(parsed.facts),
+			runId: "other-run",
+			mutation: "domain-policy",
+			ttlMs: 30_000,
+		});
+		if (!held.ok) throw new Error("fixture Browser Lane failed");
+		try {
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				{ stdout: chromePagesListing() },
+			]);
+			const result = await runForTest(
+				[
+					"task", "run",
+					"--intent", "performance-profile",
+					"--handoff", handoffPath,
+					"--tab", "0",
+					"--allowed-origin", "https://example.test",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "browser_lane_held",
+			});
+			expect(calls).toHaveLength(1);
+		} finally {
+			await releaseBrowserLaneLease(store.deps, held.lease);
+		}
+	});
+
 	test("a debug intent compiles to console + network and confirms read-only", async () => {
 		const store = await makeStore();
 		const handoffPath = writeHandoff(store.base, "chrome-devtools-mcp", "run-chrome-1");
@@ -765,6 +907,7 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		// network-read: list_pages (origin proof) then list_console_messages then
 		// list_network_requests. Both reads are bounded native evidence, no artifact.
 		const { runtime, calls } = scriptedRuntime(store.env, [
+			{ stdout: chromePagesListing() },
 			{ stdout: chromePagesListing() },
 			{ stdout: chromeConsole() },
 			{ stdout: chromeNetwork() },
@@ -791,8 +934,8 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		expect(run.adapter_id).toBe("chrome-devtools-mcp");
 		// The executor drove the compiled chrome tool set, never the agent-browser CLI.
 		expect(calls[0]?.join(" ")).toContain("list_pages");
-		expect(calls[1]?.join(" ")).toContain("list_console_messages");
-		expect(calls[2]?.join(" ")).toContain("list_network_requests");
+		expect(calls[2]?.join(" ")).toContain("list_console_messages");
+		expect(calls[3]?.join(" ")).toContain("list_network_requests");
 		// debug is a two-op read set: no artifact-producing tool ran.
 		expect(calls.some((c) => c.join(" ").includes("performance_start_trace"))).toBe(
 			false,
@@ -827,6 +970,7 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		// A corrected retry with the SAME handoff proceeds cleanly (no conflict).
 		const retryRuntime = scriptedRuntime(store.env, [
 			{ stdout: chromePagesListing() },
+			{ stdout: chromePagesListing() },
 			{ stdout: chromeConsole() },
 			{ stdout: chromeNetwork() },
 		]);
@@ -857,6 +1001,7 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		// a native artifact reference the run persists (R21).
 		const { runtime, calls } = scriptedRuntime(store.env, [
 			{ stdout: chromePagesListing() },
+			{ stdout: chromePagesListing() },
 			{ stdout: chromeTraceStarted() },
 			{ stdout: chromeTraceStopped() },
 		]);
@@ -876,8 +1021,8 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 			.run as Record<string, unknown>;
 		expect(run.state).toBe("confirmed");
 		// The compiled trace op drove start/stop and produced one export artifact.
-		expect(calls[1]?.join(" ")).toContain("performance_start_trace");
-		expect(calls[2]?.join(" ")).toContain("performance_stop_trace");
+		expect(calls[2]?.join(" ")).toContain("performance_start_trace");
+		expect(calls[3]?.join(" ")).toContain("performance_stop_trace");
 		const artifacts = run.artifacts as Array<Record<string, unknown>>;
 		expect(Array.isArray(artifacts)).toBe(true);
 		expect(artifacts).toHaveLength(1);
@@ -1083,8 +1228,10 @@ describe("runbook family — live (U4 wiring)", () => {
 			ensureDirectory: (path: string) =>
 				import("node:fs/promises").then((module) =>
 					module.mkdir(path, { recursive: true, mode: 0o700 }).then(() => undefined),
-				),
+			),
 			runCommand: async (input) => {
+				const release = agentSessionReleaseResponse(input.args);
+				if (release !== undefined) return release;
 				calls.push([input.command, ...input.args]);
 				if (input.args.includes("screenshot")) {
 					const artifactPath = input.args.find((argument) =>
@@ -1231,8 +1378,10 @@ describe("runbook family — live (U4 wiring)", () => {
 			ensureDirectory: (path: string) =>
 				import("node:fs/promises").then((module) =>
 					module.mkdir(path, { recursive: true, mode: 0o700 }).then(() => undefined),
-				),
+			),
 			runCommand: async (input) => {
+				const release = agentSessionReleaseResponse(input.args);
+				if (release !== undefined) return release;
 				if (input.args.includes("screenshot")) {
 					const artifactPath = input.args.find((argument) =>
 						argument.endsWith(".png"),
@@ -1358,9 +1507,11 @@ describe("runbook family — live (U4 wiring)", () => {
 					writeTextFile: (path: string, contents: string) =>
 						import("node:fs/promises").then((module) =>
 							module.writeFile(path, contents, { mode: 0o600 }),
-						),
-					runCommand: async (input) => {
-						calls.push([input.command, ...input.args]);
+					),
+				runCommand: async (input) => {
+					const release = agentSessionReleaseResponse(input.args);
+					if (release !== undefined) return release;
+					calls.push([input.command, ...input.args]);
 						if (input.args.includes("screenshot")) {
 							const artifactPath = input.args.find((argument) =>
 								argument.endsWith(".png"),
@@ -1666,9 +1817,11 @@ describe("runbook family — live (U4 wiring)", () => {
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((module) =>
 					module.readFile(path, "utf-8"),
-				),
+			),
 			runCommand: async (input) => {
-				const semantic = input.args.slice(4);
+				const release = agentSessionReleaseResponse(input.args);
+				if (release !== undefined) return release;
+				const semantic = agentSemanticArgs(input.args);
 				browserCalls.push(semantic);
 				if (!activationStarted) {
 					activationStarted = true;
@@ -1859,7 +2012,10 @@ describe("runbook family — live (U4 wiring)", () => {
 			runbook_target_binding: {
 				schema_version: "1",
 				mode: "exact",
-				binding_id: candidateIdOf(targetEnvelopeId, ["adapter_page_id", "t1"]),
+				binding_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"cdp-target-auth",
+				]),
 			},
 			runbook_progress: {
 				schema_version: "1",
@@ -2609,7 +2765,7 @@ describe("runbook family — live (U4 wiring)", () => {
 				mode: "exact",
 				binding_id: candidateIdOf(targetEnvelopeId, [
 					"adapter_page_id",
-					"t1",
+					"cdp-target-auth",
 				]),
 			},
 			runbook_progress: {
@@ -2684,7 +2840,7 @@ describe("runbook family — live (U4 wiring)", () => {
 				mode: "automatic",
 				binding_id: candidateIdOf(targetEnvelopeId, [
 					"adapter_page_id",
-					"t1",
+					"cdp-target-auth",
 				]),
 			},
 			runbook_progress: {
@@ -2746,18 +2902,11 @@ describe("runbook family — live (U4 wiring)", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(calls).toHaveLength(7);
+		expect(calls).toHaveLength(5);
 		expect(calls.some((call) => call.includes("open"))).toBe(false);
-		expect(calls.slice(-2)).toEqual([
-			[
-				"/opt/browser-connect/probe",
-				"--session",
-				"browser-use-run-runbook-bound-cursor",
-				"close",
-				"--json",
-			],
-			["/opt/browser-connect/probe", "session", "list", "--json"],
-		]);
+		expect(
+			calls.map((call) => agentSemanticArgs(call.slice(1))),
+		).toContainEqual(["tab", "cdp-target-auth", "--json"]);
 	});
 
 	test("concurrent bound resumes produce one executor dispatch", async () => {
@@ -2794,7 +2943,7 @@ describe("runbook family — live (U4 wiring)", () => {
 						mode: "automatic",
 						binding_id: candidateIdOf(targetEnvelopeId, [
 							"adapter_page_id",
-							"t1",
+							"cdp-target-auth",
 						]),
 					},
 					runbook_progress: {
@@ -2831,9 +2980,11 @@ describe("runbook family — live (U4 wiring)", () => {
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((module) =>
 					module.readFile(path, "utf-8"),
-				),
+			),
 			runCommand: async (input) => {
-				const semantic = input.args.slice(4);
+				const release = agentSessionReleaseResponse(input.args);
+				if (release !== undefined) return release;
+				const semantic = agentSemanticArgs(input.args);
 				calls.push(semantic);
 				if (semantic[0] === "snapshot") {
 					snapshotInvocationCount += 1;
@@ -2964,6 +3115,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		const store = await makeStore();
 		const scripted = scriptedRuntime(store.env, [
 			{ stdout: chromePagesListing() },
+			{ stdout: chromePagesListing() },
 			{ stdout: chromeConsole() },
 			{ stdout: chromeNetwork() },
 		]);
@@ -3037,6 +3189,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		const store = await makeStore();
 		const handoffPath = writeHandoff(store.base, "chrome-devtools-mcp", "run-managed-1");
 		const scripted = scriptedRuntime(store.env, [
+			{ stdout: chromePagesListing() },
 			{ stdout: chromePagesListing() },
 			{ stdout: chromeConsole() },
 			{ stdout: chromeNetwork() },
@@ -3166,24 +3319,19 @@ describe("task run — internal envelope mint (D4)", () => {
 		);
 		expect(plain.stdout).not.toContain("binding_id");
 		expect(plain.stdout).not.toContain("target_candidate_id");
-		expect(scripted.calls.slice(0, -2).map((call) => call.slice(5))).toEqual([
+		expect(
+			scripted.calls.map((call) => {
+				const pinIndex = call.indexOf("--pin-tab");
+				return call.slice(pinIndex >= 0 ? pinIndex + 1 : 5);
+			}),
+		).toEqual([
 			["tab", "list", "--json"],
 			["tab", "list", "--json"],
-			["tab", "t1", "--json"],
+			["tab", "cdp-target-auth", "--json"],
 			["get", "url", "--json"],
 			["open", "https://example.test/", "--json"],
 			["get", "url", "--json"],
 			["snapshot", "-i", "--json"],
-		]);
-		expect(scripted.calls.slice(-2)).toEqual([
-			[
-				"/opt/browser-connect/probe",
-				"--session",
-				`browser-use-${mintedRunId}`,
-				"close",
-				"--json",
-			],
-			["/opt/browser-connect/probe", "session", "list", "--json"],
 		]);
 	});
 });

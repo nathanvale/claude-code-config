@@ -50,8 +50,18 @@ function successfulProbeResponse(
 ): AdapterCommandResult {
 	return (
 		agentBrowserReleaseResult(EXECUTABLE_PATH, input) ??
-		{ exitCode: 0, stdout: "snapshot", stderr: "" }
+		{ exitCode: 0, stdout: "cdp-url", stderr: "" }
 	);
+}
+
+function probeSessionNameOf(commands: AdapterCommandInput[]): string {
+	const probe = commands.find((command) => command.args.includes("cdp-url"));
+	const sessionFlag = probe?.args.indexOf("--session") ?? -1;
+	expect(sessionFlag).toBeGreaterThanOrEqual(0);
+	const probeSessionName = probe?.args[sessionFlag + 1];
+	expect(probeSessionName).toMatch(PROBE_SESSION_PATTERN);
+	if (!probeSessionName) throw new Error("probe session name missing");
+	return probeSessionName;
 }
 
 describe("agent-browser probeAttachment", () => {
@@ -65,12 +75,9 @@ describe("agent-browser probeAttachment", () => {
 		);
 
 		expect(result.attached).toBe(true);
-		const probe = commands.find((command) => command.args.includes("snapshot"));
-		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
-		expect(sessionFlag).toBeGreaterThanOrEqual(0);
-		const probeSessionName = probe?.args[sessionFlag + 1];
-		expect(probeSessionName).toMatch(PROBE_SESSION_PATTERN);
-		if (!probeSessionName) throw new Error("probe session name missing");
+		const probe = commands.find((command) => command.args.includes("cdp-url"));
+		const probeSessionName = probeSessionNameOf(commands);
+		expect(probe?.args).not.toContain("--pin-tab");
 
 		const release = commands.find((command) => command.args.includes("close"));
 		expect(release?.args).toEqual([
@@ -86,7 +93,7 @@ describe("agent-browser probeAttachment", () => {
 
 	test("releases the derived named session after probe failure", async () => {
 		const { runtime, commands } = runtimeWith((input) => {
-			if (input.args.includes("snapshot")) {
+			if (input.args.includes("cdp-url")) {
 				return { exitCode: 2, stdout: "", stderr: "probe failed" };
 			}
 			return successfulProbeResponse(input);
@@ -99,12 +106,7 @@ describe("agent-browser probeAttachment", () => {
 		);
 
 		expect(result.attached).toBe(false);
-		const probe = commands.find((command) => command.args.includes("snapshot"));
-		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
-		expect(sessionFlag).toBeGreaterThanOrEqual(0);
-		const probeSessionName = probe?.args[sessionFlag + 1];
-		expect(probeSessionName).toMatch(PROBE_SESSION_PATTERN);
-		if (!probeSessionName) throw new Error("probe session name missing");
+		const probeSessionName = probeSessionNameOf(commands);
 		expect(commands.find((command) => command.args.includes("close"))?.args).toEqual([
 			"--session",
 			probeSessionName,

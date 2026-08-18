@@ -48,6 +48,11 @@ function json(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
 }
 
+function semanticCallArgs(call: readonly string[]): string[] {
+	const pinIndex = call.indexOf("--pin-tab");
+	return call.slice(pinIndex === -1 ? 5 : pinIndex + 1);
+}
+
 async function verifyUrlPostcondition(
 	postcondition: AgentBrowserPostcondition,
 	observedUrl: string,
@@ -159,7 +164,8 @@ function runtimeFor(
 			}
 			commandInputs.push(input);
 			calls.push([input.command, ...input.args]);
-			const semanticArgs = input.args.slice(4);
+			const pinIndex = input.args.indexOf("--pin-tab");
+			const semanticArgs = input.args.slice(pinIndex === -1 ? 4 : pinIndex + 1);
 			if (
 				semanticArgs[0] === "get" &&
 				semanticArgs[1] === "url" &&
@@ -191,15 +197,25 @@ function runtimeFor(
 					const parsed = JSON.parse(result.stdout) as {
 						success?: boolean;
 						data?: {
-							tabs?: Array<{ tabId?: string; url?: string }>;
+							tabs?: Array<{
+								tabId?: string;
+								targetId?: string;
+								url?: string;
+							}>;
 						};
 					};
 					listedUrls = new Map(
-						(parsed.data?.tabs ?? []).flatMap((tab) =>
-							typeof tab.tabId === "string" && typeof tab.url === "string"
-								? [[tab.tabId, tab.url] as const]
-								: [],
-						),
+						(parsed.data?.tabs ?? []).flatMap((tab) => {
+							if (typeof tab.url !== "string") return [];
+							return [
+								...(typeof tab.tabId === "string"
+									? [[tab.tabId, tab.url] as const]
+									: []),
+								...(typeof tab.targetId === "string"
+									? [[tab.targetId, tab.url] as const]
+									: []),
+							];
+						}),
 					);
 				} catch {
 					listedUrls = new Map();
@@ -309,7 +325,7 @@ describe("Agent Browser native task lane", () => {
 		expect(releaseInputs.every((input) => !input.args.includes("--cdp"))).toBe(true);
 	});
 
-	test("keeps successful task truth when session release fails", async () => {
+	test("blocks confirmed task truth when session release fails", async () => {
 		const runtime = runtimeFor(
 			[
 				{
@@ -345,12 +361,10 @@ describe("Agent Browser native task lane", () => {
 		});
 
 		expect(result).toMatchObject({
-			ok: true,
-			outcome: "confirmed",
-			release: {
-				released: false,
-				cause: "command-failed",
-			},
+			ok: false,
+			code: "agent_browser_command_failed",
+			outcome: "unknown",
+			executed_steps: 1,
 		});
 		expect(runtime.releaseCalls).toHaveLength(1);
 		expect(runtime.releaseCalls[0]?.args).toEqual([
@@ -654,6 +668,7 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"--pin-tab",
 				"get",
 				"url",
 				"--json",
@@ -664,6 +679,7 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"--pin-tab",
 				"snapshot",
 				"-i",
 				"--json",
@@ -674,6 +690,7 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"--pin-tab",
 				"get",
 				"url",
 				"--json",
@@ -684,6 +701,7 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"--pin-tab",
 				"click",
 				"@e4",
 				"--json",
@@ -694,6 +712,7 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"--pin-tab",
 				"get",
 				"url",
 				"--json",
@@ -1739,6 +1758,7 @@ describe("Agent Browser target resolution", () => {
 					tabs: [
 						{
 							tabId: "t1",
+							targetId: "target-1",
 							type: "page",
 							url: "https://example.test/",
 						},
@@ -1762,13 +1782,14 @@ describe("Agent Browser target resolution", () => {
 
 		expect(result).toEqual({
 			ok: true,
-			target_tab_id: "t1",
+			target_tab_id: "target-1",
+			target_id: "target-1",
 			target_url: "https://example.test/",
 			binding: {
 				schema_version: "1",
 				target_candidate_id: candidateIdOf(targetEnvelopeId, [
 					"adapter_page_id",
-					"t1",
+					"target-1",
 				]),
 			},
 		});
@@ -1801,7 +1822,7 @@ describe("Agent Browser target resolution", () => {
 				max_attempts: 3,
 			},
 		});
-		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+		expect(runtime.calls.map(semanticCallArgs)).toEqual([
 			["tab", "list", "--json"],
 			["get", "cdp-url", "--json"],
 			["tab", "list", "--json"],
@@ -1825,7 +1846,7 @@ describe("Agent Browser target resolution", () => {
 			ok: false,
 			code: "agent_browser_target_unavailable",
 		});
-		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+		expect(runtime.calls.map(semanticCallArgs)).toEqual([
 			["tab", "list", "--json"],
 		]);
 	});
@@ -1835,8 +1856,18 @@ describe("Agent Browser target resolution", () => {
 			{
 				stdout: json({
 					tabs: [
-						{ tabId: "t1", type: "page", url: "https://example.test/one" },
-						{ tabId: "t2", type: "page", url: "https://example.test/two" },
+						{
+							tabId: "t1",
+							targetId: "target-1",
+							type: "page",
+							url: "https://example.test/one",
+						},
+						{
+							tabId: "t2",
+							targetId: "target-2",
+							type: "page",
+							url: "https://example.test/two",
+						},
 					],
 				}),
 			},
@@ -1854,7 +1885,106 @@ describe("Agent Browser target resolution", () => {
 			},
 		});
 
-		expect(result).toMatchObject({ ok: true, target_tab_id: "t2" });
+		expect(result).toMatchObject({
+			ok: true,
+			target_tab_id: "target-2",
+			target_id: "target-2",
+		});
+	});
+
+	test("accepts a canonical CDP target id across session-local tab ids", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "session-local-7",
+							targetId: "cdp-target-42",
+							type: "page",
+							url: "https://example.test/fixture",
+						},
+					],
+				}),
+			},
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-canonical-target",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: {
+				kind: "exact",
+				tab_id: "cdp-target-42",
+				target_envelope_id: targetEnvelopeId,
+			},
+		});
+
+		expect(result).toEqual({
+			ok: true,
+			target_tab_id: "cdp-target-42",
+			target_id: "cdp-target-42",
+			target_url: "https://example.test/fixture",
+			binding: {
+				schema_version: "1",
+				target_candidate_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"cdp-target-42",
+				]),
+			},
+		});
+		expect(runtime.releaseCalls.map((call) => call.args)).toEqual([
+			[
+				"--session",
+				"browser-use-run-canonical-target",
+				"close",
+				"--json",
+			],
+			["session", "list", "--json"],
+		]);
+	});
+
+	test("releases the derived session when target resolution refuses", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "session-local-7",
+							targetId: "cdp-target-42",
+							type: "page",
+							url: "https://other.test/",
+						},
+					],
+				}),
+			},
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-target-refusal-release",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: {
+				kind: "exact",
+				tab_id: "cdp-target-42",
+				target_envelope_id: targetEnvelopeId,
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_origin_refused",
+		});
+		expect(runtime.releaseCalls.map((call) => call.args)).toEqual([
+			[
+				"--session",
+				"browser-use-run-target-refusal-release",
+				"close",
+				"--json",
+			],
+			["session", "list", "--json"],
+		]);
 	});
 
 	test("returns typed zero-candidate and ambiguous repair truth", async () => {
@@ -1862,7 +1992,12 @@ describe("Agent Browser target resolution", () => {
 			{
 				stdout: json({
 					tabs: [
-						{ tabId: "t1", type: "page", url: "https://other.test/" },
+						{
+							tabId: "t1",
+							targetId: "target-1",
+							type: "page",
+							url: "https://other.test/",
+						},
 					],
 				}),
 			},
@@ -1871,8 +2006,18 @@ describe("Agent Browser target resolution", () => {
 			{
 				stdout: json({
 					tabs: [
-						{ tabId: "t1", type: "page", url: "https://example.test/one" },
-						{ tabId: "t2", type: "page", url: "https://example.test/two" },
+						{
+							tabId: "t1",
+							targetId: "target-1",
+							type: "page",
+							url: "https://example.test/one",
+						},
+						{
+							tabId: "t2",
+							targetId: "target-2",
+							type: "page",
+							url: "https://example.test/two",
+						},
 					],
 				}),
 			},
@@ -1906,7 +2051,12 @@ describe("Agent Browser target resolution", () => {
 			{
 				stdout: json({
 					tabs: [
-						{ tabId: "t2", type: "page", url: "https://example.test/" },
+						{
+							tabId: "t2",
+							targetId: "target-2",
+							type: "page",
+							url: "https://example.test/",
+						},
 					],
 				}),
 			},
@@ -1937,14 +2087,28 @@ describe("Agent Browser target resolution", () => {
 		const firstOpenRuntime = runtimeFor([
 			{
 				stdout: json({
-					tabs: [{ tabId: "t1", type: "page", url: "about:blank" }],
+					tabs: [
+						{
+							tabId: "t1",
+							targetId: "target-1",
+							type: "page",
+							url: "about:blank",
+						},
+					],
 				}),
 			},
 		]);
 		const firstSnapshotRuntime = runtimeFor([
 			{
 				stdout: json({
-					tabs: [{ tabId: "t1", type: "page", url: "about:blank" }],
+					tabs: [
+						{
+							tabId: "t1",
+							targetId: "target-1",
+							type: "page",
+							url: "about:blank",
+						},
+					],
 				}),
 			},
 		]);
@@ -1966,7 +2130,8 @@ describe("Agent Browser target resolution", () => {
 
 		expect(accepted).toMatchObject({
 			ok: true,
-			target_tab_id: "t1",
+			target_tab_id: "target-1",
+			target_id: "target-1",
 			target_url: "about:blank",
 		});
 		expect(refused).toMatchObject({
@@ -2002,7 +2167,7 @@ describe("Agent Browser target resolution", () => {
 			executed_steps: 1,
 			mutation_dispatched: true,
 		});
-		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+		expect(runtime.calls.map(semanticCallArgs)).toEqual([
 			["tab", "list", "--json"],
 			["tab", "t1", "--json"],
 			["get", "url", "--json"],
@@ -2019,6 +2184,7 @@ describe("Agent Browser target resolution", () => {
 						tabs: [
 							{
 								tabId: "t1",
+								targetId: "target-1",
 								type: "page",
 								url: "https://example.test/",
 							},
@@ -2050,9 +2216,10 @@ describe("Agent Browser target resolution", () => {
 			{
 				stdout: json({
 					tabs: [
-						{
-							tabId: "t1",
-							type: "page",
+							{
+								tabId: "t1",
+								targetId: "target-1",
+								type: "page",
 							url: "https://example.test/original",
 						},
 					],
@@ -2074,6 +2241,7 @@ describe("Agent Browser target resolution", () => {
 					tabs: [
 						{
 							tabId: "t1",
+							targetId: "target-1",
 							type: "page",
 							url: "https://example.test/drifted",
 						},

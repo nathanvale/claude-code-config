@@ -30,6 +30,7 @@ type NativeCommand = (
 ) => Promise<McporterCommandResult | undefined>;
 type AgentBrowserTab = {
 	tabId: string;
+	targetId?: string;
 	url: string;
 	type?: string;
 };
@@ -99,12 +100,12 @@ function failure(
 
 function targetBindingOf(
 	targetEnvelopeId: string,
-	tabId: string,
+	canonicalTargetId: string,
 ): AgentBrowserTargetBinding {
 	return {
 		schema_version: "1",
 		target_candidate_id: toCandidate(
-			{ id: tabId },
+			{ id: canonicalTargetId },
 			0,
 			targetEnvelopeId,
 			false,
@@ -128,6 +129,9 @@ function parseTabs(data: JsonObject): AgentBrowserTab[] | undefined {
 		return [
 			{
 				tabId: tab.tabId,
+				...(typeof tab.targetId === "string" && SAFE_TAB_ID.test(tab.targetId)
+					? { targetId: tab.targetId }
+					: {}),
 				url: tab.url,
 				...(typeof tab.type === "string" ? { type: tab.type } : {}),
 			},
@@ -212,10 +216,12 @@ function targetIsAdmissible(
 }
 
 /**
- * Resolve one raw Agent Browser tab before durable task execution.
+ * Resolve one Agent Browser tab to its canonical CDP target before durable
+ * task execution.
  *
- * The raw adapter id stays process-local. Callers persist only the returned
- * candidate binding, scoped by their target-envelope id.
+ * Agent Browser tab ids are session-local and may be accepted only as an
+ * input convenience. Callers persist and execute against the returned
+ * canonical CDP target id plus its target-envelope-scoped opaque binding.
  *
  * @param run - Native command seam already bound to the verified handoff
  * @param input - Origin policy, remaining steps, and exact or automatic request
@@ -234,7 +240,9 @@ export async function resolveAgentBrowserTarget(
 
 	if (input.target.kind === "exact") {
 		const exactTabId = input.target.tab_id;
-		const exact = tabs.find((tab) => tab.tabId === exactTabId);
+		const exact = tabs.find(
+			(tab) => tab.targetId === exactTabId || tab.tabId === exactTabId,
+		);
 		if (exact === undefined) {
 			return failure(
 				"agent_browser_target_unavailable",
@@ -249,11 +257,19 @@ export async function resolveAgentBrowserTarget(
 				"The requested tab is outside the task's allowed origins.",
 			);
 		}
+		if (exact.targetId === undefined) {
+			return failure(
+				"agent_browser_target_unavailable",
+				"not-achieved",
+				"Agent Browser did not return the canonical CDP target id required for custody.",
+			);
+		}
 		return {
 			ok: true,
-			target_tab_id: exact.tabId,
+			target_tab_id: exact.targetId,
+			target_id: exact.targetId,
 			target_url: exact.url,
-			binding: targetBindingOf(input.target.target_envelope_id, exact.tabId),
+			binding: targetBindingOf(input.target.target_envelope_id, exact.targetId),
 		};
 	}
 
@@ -261,12 +277,14 @@ export async function resolveAgentBrowserTarget(
 	if (boundCandidateId !== undefined) {
 		const bound = tabs.find(
 			(tab) =>
-				targetBindingOf(input.target.target_envelope_id, tab.tabId)
+				tab.targetId !== undefined &&
+				targetBindingOf(input.target.target_envelope_id, tab.targetId)
 					.target_candidate_id === boundCandidateId,
 		);
 		if (
 			bound === undefined ||
-			!targetIsAdmissible(bound, allowedOrigins, input.steps)
+			!targetIsAdmissible(bound, allowedOrigins, input.steps) ||
+			bound.targetId === undefined
 		) {
 			return failure(
 				"agent_browser_target_moved",
@@ -276,9 +294,10 @@ export async function resolveAgentBrowserTarget(
 		}
 		return {
 			ok: true,
-			target_tab_id: bound.tabId,
+			target_tab_id: bound.targetId,
+			target_id: bound.targetId,
 			target_url: bound.url,
-			binding: targetBindingOf(input.target.target_envelope_id, bound.tabId),
+			binding: targetBindingOf(input.target.target_envelope_id, bound.targetId),
 		};
 	}
 
@@ -307,11 +326,19 @@ export async function resolveAgentBrowserTarget(
 			"No admissible Agent Browser tab is available for this task.",
 		);
 	}
+	if (selected.targetId === undefined) {
+		return failure(
+			"agent_browser_target_unavailable",
+			"not-achieved",
+			"Agent Browser did not return the canonical CDP target id required for custody.",
+		);
+	}
 	return {
 		ok: true,
-		target_tab_id: selected.tabId,
+		target_tab_id: selected.targetId,
+		target_id: selected.targetId,
 		target_url: selected.url,
-		binding: targetBindingOf(input.target.target_envelope_id, selected.tabId),
+		binding: targetBindingOf(input.target.target_envelope_id, selected.targetId),
 	};
 }
 
@@ -395,6 +422,7 @@ export async function selectAgentBrowserTarget(
 	run: NativeCommand,
 	task: AgentBrowserTask,
 	allowedOrigins: ReadonlySet<string>,
+	strictRun: NativeCommand = run,
 ): Promise<ExecutionFailure | undefined> {
 	let attempts = 0;
 	let lastSignal = "no connection attempt completed";
@@ -439,7 +467,10 @@ export async function selectAgentBrowserTarget(
 			);
 		}
 		const tabs = parseTabs(data);
-		const target = tabs?.find((tab) => tab.tabId === task.target_tab_id);
+		const target = tabs?.find(
+			(tab) =>
+				tab.targetId === task.target_tab_id || tab.tabId === task.target_tab_id,
+		);
 		if (target === undefined) {
 			return failure(
 				"agent_browser_target_unavailable",
@@ -462,7 +493,9 @@ export async function selectAgentBrowserTarget(
 		}
 		const selected = await run(["tab", task.target_tab_id, "--json"]);
 		if (parseSuccessData(selected) !== undefined) {
-			const reproved = parseSuccessData(await run(["get", "url", "--json"]));
+			const reproved = parseSuccessData(
+				await strictRun(["get", "url", "--json"]),
+			);
 			if (typeof reproved?.url !== "string") {
 				return failure(
 					"agent_browser_target_unavailable",

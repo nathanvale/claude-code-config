@@ -17,14 +17,24 @@ import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 
 import {
+	EVIDENCE_ID,
+	parseVaultGitPreparedEvidence,
+	type VaultGitPreparedEvidenceV2,
+} from "./activation-contract.ts";
+import {
 	VAULT_GIT_EVENT_TYPES,
+	VAULT_GIT_ACTIVATION_BINDINGS,
 	VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	VAULT_GIT_RECEIPT_TRANSITIONS,
 	VAULT_GIT_TRANSACTION_PHASES,
+	isVaultGitOwnedPathLeaf,
 	type VaultGitActivationRecord,
+	type VaultGitActivationInvalidationRecord,
+	type VaultGitActivationRevocationRecord,
 	type VaultGitCheckerAdmissionRecord,
 	type VaultGitPrivateHygieneResult,
 	type VaultGitReceipt,
+	type VaultGitStagedRecoveryPlan,
 } from "./model.ts";
 
 /**
@@ -58,16 +68,34 @@ export class VaultGitReceiptExistsError extends Error {
 	}
 }
 
+/** Exact legacy admission encountered during the V2-only activation upgrade. */
+export class VaultGitLegacyActivationRecordError extends Error {
+	/** Stable private classification consumed by the activation authority. */
+	readonly code = "legacy_activation_record";
+	constructor() {
+		super("legacy activation record requires fresh preparation");
+		this.name = "VaultGitLegacyActivationRecordError";
+	}
+}
+
 /** Stable durable-file category; never emitted by command output. */
 export type VaultGitDurabilityTarget =
 	| "history"
 	| "current"
+	| "task_claim"
+	| "task_state"
+	| "doctor_task_claim"
+	| "doctor_task_state"
 	| "capability"
 	| "doctor_token"
 	| "checker_admission"
+	| "prepared_evidence"
 	| "activation"
+	| "activation_invalidation"
+	| "activation_revocation"
 	| "janitor_report"
-	| "quarantine";
+	| "quarantine"
+	| "candidate_residue";
 
 /** One observable load-bearing filesystem operation. */
 export interface VaultGitDurabilityOperation {
@@ -186,23 +214,34 @@ export interface VaultGitDoctorProof {
 	readonly issuedAt: string;
 }
 
-/** Append-only host quarantine transition. */
-export interface VaultGitQuarantineRecord {
+/** Fields shared by every append-only host quarantine transition. */
+interface VaultGitQuarantineRecordBase {
 	/** Superseded transaction correlation. */
 	readonly transactionId: string;
 	/** Superseded fencing generation. */
 	readonly ledgerGeneration: string;
-	/**
-	 * Append-only quarantine transition.
-	 *
-	 * `takeover_pending` marks a superseding abandonment admitted but not yet
-	 * proven remote; doctor reconciles it against the observed ledger
-	 * generation before any host write authority returns.
-	 */
-	readonly status: "takeover_pending" | "quarantined" | "reconciled";
 	/** Injected transition timestamp. */
 	readonly recordedAt: string;
 }
+
+/** Append-only host quarantine transition. */
+export type VaultGitQuarantineRecord =
+	| (VaultGitQuarantineRecordBase & {
+			/**
+			 * Append-only quarantine transition.
+			 *
+			 * `takeover_pending` marks a superseding abandonment admitted but not
+			 * yet proven remote; doctor reconciles it against the observed ledger
+			 * generation before any host write authority returns.
+			 */
+			readonly status: "takeover_pending" | "quarantined" | "reconciled";
+		  })
+	| (VaultGitQuarantineRecordBase & {
+			/** Recovery intent persisted before any canonical worktree or index mutation. */
+			readonly status: "recovery_pending";
+			/** Exact staged blobs and unrelated-state fence required for restart. */
+			readonly recoveryPlan: VaultGitStagedRecoveryPlan;
+	  });
 
 /** Valid receipt state loaded from private storage. */
 export interface VaultGitReceiptLoaded {
@@ -231,7 +270,10 @@ export interface VaultGitReceiptStore {
 		readonly capabilities: string;
 		readonly doctorTokens: string;
 		readonly checkerAdmission: string;
+		readonly preparedEvidence: string;
 		readonly activation: string;
+		readonly activationInvalidation: string;
+		readonly activationRevocation: string;
 		readonly janitorReports: string;
 		readonly quarantine: string;
 	};
@@ -281,10 +323,30 @@ export interface VaultGitReceiptStore {
 	admitChecker(record: VaultGitCheckerAdmissionRecord): Promise<void>;
 	/** Read the current checker admission, or null before operator admission. */
 	readCheckerAdmission(): Promise<VaultGitCheckerAdmissionRecord | null>;
+	/** Publish one complete V2 evidence snapshot without granting write authority. */
+	publishPreparedEvidence(evidence: VaultGitPreparedEvidenceV2): Promise<void>;
+	/** Read the current V2 evidence snapshot, or null before preparation. */
+	readPreparedEvidence(): Promise<VaultGitPreparedEvidenceV2 | null>;
 	/** Persist the R34 runtime activation admission using owner-only durable storage. */
 	admitActivation(record: VaultGitActivationRecord): Promise<void>;
 	/** Read the runtime activation admission, or null before operator admission. */
 	readActivation(): Promise<VaultGitActivationRecord | null>;
+	/** Persist one changed-binding invalidation for exact prepared evidence. */
+	recordActivationInvalidation(
+		record: VaultGitActivationInvalidationRecord,
+	): Promise<void>;
+	/** Read one exact-evidence invalidation marker, or the newest marker when omitted. */
+	readActivationInvalidation(
+		evidenceId?: string,
+	): Promise<VaultGitActivationInvalidationRecord | null>;
+	/** Persist one human-owned revocation for exact prepared evidence. */
+	recordActivationRevocation(
+		record: VaultGitActivationRevocationRecord,
+	): Promise<void>;
+	/** Read one exact-evidence revocation marker, or the newest marker when omitted. */
+	readActivationRevocation(
+		evidenceId?: string,
+	): Promise<VaultGitActivationRevocationRecord | null>;
 	/** Remove closed capability material, settled doctor tokens, and Janitor reports beyond the newest fifty. */
 	prunePrivateHygiene(now: string): Promise<VaultGitPrivateHygieneResult>;
 	/** Append one owner-only Janitor report outside the configured vault. */
@@ -373,7 +435,10 @@ export function createReceiptStore(
 		capabilities: join(repositoryRoot, "capabilities"),
 		doctorTokens: join(repositoryRoot, "doctor-tokens"),
 		checkerAdmission: join(repositoryRoot, "checker-admission.json"),
+		preparedEvidence: join(repositoryRoot, "prepared-evidence.json"),
 		activation: join(repositoryRoot, "activation.json"),
+		activationInvalidation: join(repositoryRoot, "activation-invalidations"),
+		activationRevocation: join(repositoryRoot, "activation-revocations"),
 		janitorReports: join(repositoryRoot, "janitor-reports"),
 		quarantine: join(repositoryRoot, "quarantine"),
 	} as const;
@@ -385,6 +450,8 @@ export function createReceiptStore(
 			paths.history,
 			paths.capabilities,
 			paths.doctorTokens,
+			paths.activationInvalidation,
+			paths.activationRevocation,
 			paths.janitorReports,
 			paths.quarantine,
 		]) {
@@ -406,6 +473,17 @@ export function createReceiptStore(
 	): string {
 		assertReceiptId(receiptId);
 		return join(paths.capabilities, `${receiptId}.${role}`);
+	}
+
+	async function readPreparedEvidence(): Promise<VaultGitPreparedEvidenceV2 | null> {
+		let source: string;
+		try {
+			source = await readPrivateText(paths.preparedEvidence);
+		} catch (error) {
+			if (isMissing(error)) return null;
+			throw error;
+		}
+		return parseVaultGitPreparedEvidence(JSON.parse(source));
 	}
 
 	return {
@@ -433,7 +511,7 @@ export function createReceiptStore(
 			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, durability);
-			await durablePublishExclusive(paths.current, receipt, durability);
+			await durablePublishReceiptExclusive(paths.current, receipt, durability);
 			return copyCapabilities(capabilities);
 		},
 		async append(receipt) {
@@ -571,8 +649,23 @@ export function createReceiptStore(
 			validateCheckerAdmission(value);
 			return value;
 		},
+		async publishPreparedEvidence(evidence) {
+			const parsed = parseVaultGitPreparedEvidence(evidence);
+			await prepare();
+			await durableJson(
+				paths.preparedEvidence,
+				parsed,
+				"prepared_evidence",
+				durability,
+			);
+		},
+		readPreparedEvidence,
 		async admitActivation(record) {
 			validateActivationRecord(record);
+			const evidence = await readPreparedEvidence();
+			if (evidence?.evidenceId !== record.evidenceId) {
+				throw new Error("activation evidence does not match");
+			}
 			await prepare();
 			await durableJson(paths.activation, record, "activation", durability);
 		},
@@ -585,8 +678,45 @@ export function createReceiptStore(
 				throw error;
 			}
 			const value: unknown = JSON.parse(source);
+			if (isLegacyActivationRecord(value)) {
+				throw new VaultGitLegacyActivationRecordError();
+			}
 			validateActivationRecord(value);
 			return value;
+		},
+		async recordActivationInvalidation(record) {
+			validateActivationInvalidation(record);
+			await prepare();
+			await publishActivationMarker(
+				paths.activationInvalidation,
+				record,
+				"activation_invalidation",
+				durability,
+			);
+		},
+		async readActivationInvalidation(evidenceId) {
+			return readActivationMarker(
+				paths.activationInvalidation,
+				validateActivationInvalidation,
+				evidenceId,
+			);
+		},
+		async recordActivationRevocation(record) {
+			validateActivationRevocation(record);
+			await prepare();
+			await publishActivationMarker(
+				paths.activationRevocation,
+				record,
+				"activation_revocation",
+				durability,
+			);
+		},
+		async readActivationRevocation(evidenceId) {
+			return readActivationMarker(
+				paths.activationRevocation,
+				validateActivationRevocation,
+				evidenceId,
+			);
 		},
 		async prunePrivateHygiene(now) {
 			if (!isIso(now)) throw new Error("private hygiene time invalid");
@@ -859,15 +989,29 @@ async function durableJson(
 	);
 }
 
-async function durablePublishExclusiveValue(
+/**
+ * Publish `bytes` to `path` so a torn write is never observed: staged temp,
+ * file sync, exclusive link, directory sync. The caller owns the race policy
+ * for a destination that already exists — `onExists` decides that outcome (and
+ * the returned value) when link(2) reports EEXIST, so a throwing writer and a
+ * yield-as-loser writer share one durability sequence. `wrapFailure` names the
+ * unavailability error for the caller's domain.
+ *
+ * Do not sync the parent directory before the exclusive link succeeds: the
+ * link publishes the already-synced inode, and syncing earlier would fence a
+ * destination the loser never wrote.
+ */
+export async function durablePublishExclusive(
 	path: string,
-	value: unknown,
+	bytes: Uint8Array,
 	target: VaultGitDurabilityTarget,
 	durability: VaultGitDurabilityPort,
-): Promise<void> {
-	const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+	onExists: (syncParent: () => Promise<void>) => Promise<boolean>,
+	wrapFailure: (cause: unknown) => Error,
+): Promise<boolean> {
 	const temporary = `${path}.tmp-${randomUUID()}`;
 	let handle: FileHandle | undefined;
+	const syncParent = () => durability.syncDirectory(join(path, ".."), target);
 	try {
 		handle = await open(temporary, "wx", 0o600);
 		await durability.writeTemp(handle, bytes, target);
@@ -877,54 +1021,54 @@ async function durablePublishExclusiveValue(
 		try {
 			await durability.linkExclusive(temporary, path, target);
 		} catch (error) {
-			if (isExists(error)) throw new VaultGitReceiptExistsError();
+			if (isExists(error)) return await onExists(syncParent);
 			throw error;
 		}
-		await durability.syncDirectory(join(path, ".."), target);
+		await syncParent();
+		return true;
 	} catch (error) {
 		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
 		if (error instanceof VaultGitReceiptExistsError) throw error;
-		throw new Error("receipt durability unavailable", { cause: error });
+		throw wrapFailure(error);
+	} finally {
+		await unlink(temporary).catch(() => undefined);
 	}
-	await unlink(temporary).catch(() => undefined);
 }
 
-/**
- * Publish one file only when no file exists at the destination.
- *
- * Preserves the temp-write, file-sync, atomic-publish, parent-sync durability
- * order: link(2) publishes the already-synced inode and fails with EEXIST
- * when a concurrent writer won, so a racing loser can never overwrite.
- */
-async function durablePublishExclusive(
+async function durablePublishExclusiveValue(
+	path: string,
+	value: unknown,
+	target: VaultGitDurabilityTarget,
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	await durablePublishExclusive(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(value)}\n`),
+		target,
+		durability,
+		() => {
+			throw new VaultGitReceiptExistsError();
+		},
+		(cause) => new Error("receipt durability unavailable", { cause }),
+	);
+}
+
+/** Publish the current-receipt file only when no file exists at the head. */
+async function durablePublishReceiptExclusive(
 	path: string,
 	receipt: VaultGitReceipt,
 	durability: VaultGitDurabilityPort,
 ): Promise<void> {
-	const bytes = new TextEncoder().encode(`${JSON.stringify(receipt)}\n`);
-	const temporary = `${path}.tmp-${randomUUID()}`;
-	let handle: FileHandle | undefined;
-	try {
-		handle = await open(temporary, "wx", 0o600);
-		await durability.writeTemp(handle, bytes, "current");
-		await durability.syncFile(handle, "current");
-		await handle.close();
-		handle = undefined;
-		try {
-			await durability.linkExclusive(temporary, path, "current");
-		} catch (error) {
-			if (isExists(error)) throw new VaultGitReceiptExistsError();
-			throw error;
-		}
-		await durability.syncDirectory(join(path, ".."), "current");
-	} catch (error) {
-		if (handle) await handle.close().catch(() => undefined);
-		await unlink(temporary).catch(() => undefined);
-		if (error instanceof VaultGitReceiptExistsError) throw error;
-		throw new Error("receipt durability unavailable", { cause: error });
-	}
-	await unlink(temporary).catch(() => undefined);
+	await durablePublishExclusive(
+		path,
+		new TextEncoder().encode(`${JSON.stringify(receipt)}\n`),
+		"current",
+		durability,
+		() => {
+			throw new VaultGitReceiptExistsError();
+		},
+		(cause) => new Error("receipt durability unavailable", { cause }),
+	);
 }
 
 async function durableBytes(
@@ -1149,14 +1293,143 @@ function validateActivationRecord(
 ): asserts value is VaultGitActivationRecord {
 	if (
 		!isRecord(value) ||
-		!hasExactKeys(value, ["schemaVersion", "admittedAt", "note"]) ||
-		value.schemaVersion !== 1 ||
+		!hasExactKeys(value, [
+			"schemaVersion",
+			"evidenceId",
+			"admittedAt",
+			"note",
+		]) ||
+		value.schemaVersion !== 2 ||
+		typeof value.evidenceId !== "string" ||
+		!EVIDENCE_ID.test(value.evidenceId) ||
 		!isIso(value.admittedAt) ||
 		!isOneLine(value.note) ||
 		(value.note as string).length > 500
 	) {
 		throw new Error("activation record invalid");
 	}
+}
+
+function isLegacyActivationRecord(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		hasExactKeys(value, ["schemaVersion", "admittedAt", "note"]) &&
+		value.schemaVersion === 1 &&
+		isIso(value.admittedAt) &&
+		isOneLine(value.note) &&
+		(value.note as string).length <= 500
+	);
+}
+
+function validateActivationInvalidation(
+	value: unknown,
+): asserts value is VaultGitActivationInvalidationRecord {
+	const valid = isRecord(value) && [
+		hasExactKeys(value, [
+			"schemaVersion",
+			"evidenceId",
+			"binding",
+			"invalidatedAt",
+		]),
+		value.schemaVersion === 1,
+		isPreparedEvidenceId(value.evidenceId),
+		VAULT_GIT_ACTIVATION_BINDINGS.includes(
+			value.binding as VaultGitActivationInvalidationRecord["binding"],
+		),
+		isIso(value.invalidatedAt),
+	].every(Boolean);
+	if (!valid) {
+		throw new Error("activation invalidation record invalid");
+	}
+}
+
+function validateActivationRevocation(
+	value: unknown,
+): asserts value is VaultGitActivationRevocationRecord {
+	const valid = isRecord(value) && [
+		hasExactKeys(value, ["schemaVersion", "evidenceId", "revokedAt", "note"]),
+		value.schemaVersion === 1,
+		isPreparedEvidenceId(value.evidenceId),
+		isIso(value.revokedAt),
+		isOneLine(value.note),
+		typeof value.note === "string" && value.note.length <= 500,
+	].every(Boolean);
+	if (!valid) {
+		throw new Error("activation revocation record invalid");
+	}
+}
+
+async function publishActivationMarker(
+	directory: string,
+	record: { readonly evidenceId: string },
+	label: "activation_invalidation" | "activation_revocation",
+	durability: VaultGitDurabilityPort,
+): Promise<void> {
+	const path = activationMarkerPath(directory, record.evidenceId);
+	try {
+		await durablePublishExclusiveValue(path, record, label, durability);
+	} catch (error) {
+		if (!(error instanceof VaultGitReceiptExistsError)) throw error;
+		const existing = JSON.parse(await readPrivateText(path)) as {
+			readonly evidenceId?: unknown;
+		};
+		if (existing.evidenceId !== record.evidenceId) throw error;
+	}
+}
+
+async function readActivationMarker<T extends { readonly evidenceId: string }>(
+	directory: string,
+	validate: (value: unknown) => asserts value is T,
+	evidenceId?: string,
+): Promise<T | null> {
+	const names = evidenceId === undefined
+		? await readdir(directory).catch((error) => {
+				if (isMissing(error)) return [];
+				throw error;
+			})
+		: [`${activationMarkerDigest(evidenceId)}.json`];
+	const records = await Promise.all(
+		names.filter((name) => name.endsWith(".json")).map(async (name) => {
+			try {
+				const value: unknown = JSON.parse(
+					await readPrivateText(join(directory, name)),
+				);
+				validate(value);
+				return value;
+			} catch (error) {
+				if (isMissing(error)) return null;
+				throw error;
+			}
+		}),
+	);
+	const present = records.filter((record) => record !== null) as T[];
+	return present.sort(
+		(left, right) => activationMarkerTime(right) - activationMarkerTime(left),
+	)[0] ?? null;
+}
+
+function activationMarkerPath(directory: string, evidenceId: string): string {
+	return join(directory, `${activationMarkerDigest(evidenceId)}.json`);
+}
+
+function activationMarkerDigest(evidenceId: string): string {
+	if (!isPreparedEvidenceId(evidenceId)) {
+		throw new Error("activation marker evidence invalid");
+	}
+	return createHash("sha256").update(evidenceId).digest("hex");
+}
+
+function activationMarkerTime(record: object): number {
+	const value = "revokedAt" in record
+		? record.revokedAt
+		: "invalidatedAt" in record
+			? record.invalidatedAt
+			: undefined;
+	return typeof value === "string" ? Date.parse(value) : Number.NaN;
+}
+
+function isPreparedEvidenceId(value: unknown): value is string {
+	return typeof value === "string" && EVIDENCE_ID.test(value);
 }
 
 function validateCheckerAdmission(
@@ -1303,23 +1576,61 @@ async function unlinkPrivateFile(path: string): Promise<void> {
 function validateQuarantineRecord(
 	value: unknown,
 ): asserts value is VaultGitQuarantineRecord {
+	const recoveryPending =
+		isRecord(value) && value.status === "recovery_pending";
 	if (
 		!isRecord(value) ||
-		!hasExactKeys(value, [
-			"transactionId",
-			"ledgerGeneration",
-			"status",
-			"recordedAt",
-		]) ||
+		!hasExactKeys(
+			value,
+			recoveryPending
+				? [
+						"transactionId",
+						"ledgerGeneration",
+						"status",
+						"recordedAt",
+						"recoveryPlan",
+					]
+				: ["transactionId", "ledgerGeneration", "status", "recordedAt"],
+		) ||
 		!isTransactionId(value.transactionId) ||
 		!isObjectId(value.ledgerGeneration) ||
 		(value.status !== "takeover_pending" &&
 			value.status !== "quarantined" &&
+			value.status !== "recovery_pending" &&
 			value.status !== "reconciled") ||
-		!isIso(value.recordedAt)
+		!isIso(value.recordedAt) ||
+		(recoveryPending && !isStagedRecoveryPlan(value.recoveryPlan))
 	) {
 		throw new Error("quarantine record invalid");
 	}
+}
+
+function isStagedRecoveryPlan(value: unknown): value is VaultGitStagedRecoveryPlan {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, ["baselineHead", "unrelatedState", "entries"]) ||
+		!isObjectId(value.baselineHead) ||
+		!isUnrelatedState(value.unrelatedState) ||
+		!Array.isArray(value.entries) ||
+		value.entries.length === 0
+	) {
+		return false;
+	}
+	const paths = new Set<string>();
+	for (const entry of value.entries) {
+		if (
+			!isRecord(entry) ||
+			!hasExactKeys(entry, ["path", "objectId", "mode"]) ||
+			!isOwnedPath(entry.path) ||
+			!isObjectId(entry.objectId) ||
+			(entry.mode !== "100644" && entry.mode !== "100755") ||
+			paths.has(entry.path)
+		) {
+			return false;
+		}
+		paths.add(entry.path);
+	}
+	return true;
 }
 
 function isHexDigest(value: unknown): value is string {
@@ -1432,16 +1743,12 @@ function isHex(value: unknown): value is string {
 	return typeof value === "string" && value.length % 2 === 0 && /^[0-9a-f]*$/.test(value);
 }
 
-function isOwnedPath(value: unknown): value is string {
-	if (typeof value !== "string" || value.length === 0 || value.startsWith("/")) return false;
-	const segments = value.split("/");
-	return segments.every((part) => part.length > 0 && part !== "." && part !== ".." && part.toLowerCase() !== ".git");
-}
+const isOwnedPath = isVaultGitOwnedPathLeaf;
 
 function assertReceiptId(value: string): void { if (!isReceiptId(value)) throw new Error("invalid receipt id"); }
 function isReceiptId(value: unknown): value is string { return typeof value === "string" && /^receipt_[0-9a-f]{32}$/.test(value); }
 function isTransactionId(value: unknown): value is string { return typeof value === "string" && /^txn_[0-9a-f]{32}$/.test(value); }
-function isObjectId(value: unknown): value is string { return typeof value === "string" && /^[0-9a-f]{40,64}$/.test(value); }
+function isObjectId(value: unknown): value is string { return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value); }
 function isNullableObjectId(value: unknown): boolean { return value === null || isObjectId(value); }
 function isIso(value: unknown): value is string { return typeof value === "string" && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value; }
 function isOneLine(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && !/[\r\n\0]/.test(value); }

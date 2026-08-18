@@ -1,12 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { statSync, writeFileSync } from "node:fs";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { createGitAdapter, createNodeProcessPort } from "../src/git-adapter.ts";
+import {
+	createGitAdapter,
+	createGitRepositoryAdapter,
+	createNodeProcessPort,
+} from "../src/git-adapter.ts";
 import type {
 	VaultGitProcessPort,
 	VaultGitProcessRequest,
@@ -76,6 +89,127 @@ function createFakeAdapter(
 	});
 }
 
+type StagedRecoveryProbe =
+	| "read_tree"
+	| "read_index"
+	| "hash_path"
+	| "capture_unrelated";
+
+async function createStagedRecoveryAdapter(
+	probe: StagedRecoveryProbe,
+	failure: "timed_out" | "failed" = "timed_out",
+) {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-staged-recovery-probe-"));
+	fixtureRoots.push(root);
+	const repositoryPath = join(root, "repository");
+	await mkdir(repositoryPath);
+	await writeFile(join(repositoryPath, "candidate.md"), "candidate\n");
+	let resetApplied = false;
+	let injected = false;
+	const process = fakePort(({ args }) => {
+		const exactIndexProbe =
+			args[0] === "ls-files" &&
+			args.includes(":(top,literal)candidate.md");
+		const selected =
+			(probe === "read_tree" && args[0] === "ls-tree") ||
+			(probe === "read_index" && exactIndexProbe) ||
+			(probe === "hash_path" && args[0] === "hash-object") ||
+			(probe === "capture_unrelated" && args[0] === "status");
+		if (selected && !injected) {
+			injected = true;
+			return failure === "timed_out"
+				? { timedOut: true }
+				: { exitCode: 1 };
+		}
+		if (args[0] === "rev-parse") return { stdout: `${LOCAL_MAIN}\n` };
+		if (args[0] === "ls-tree") return { stdout: "" };
+		if (exactIndexProbe) {
+			return resetApplied
+				? { stdout: "" }
+				: { stdout: `100644 ${EXPECTED} 0\tcandidate.md\0` };
+		}
+		if (args[0] === "hash-object") return { stdout: `${EXPECTED}\n` };
+		if (args[0] === "reset") resetApplied = true;
+		return {};
+	});
+	return createGitRepositoryAdapter({
+		repositoryPath,
+		repositoryIdentity: "vault-git:v1:fixture",
+		process,
+		timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+	});
+}
+
+async function createPreparedStagedRecoveryFixture(options: {
+	readonly candidateContent: string | Uint8Array;
+	readonly createProcess?: (
+		realProcess: VaultGitProcessPort,
+		repositoryPath: string,
+	) => VaultGitProcessPort;
+}) {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-staged-recovery-"));
+	fixtureRoots.push(root);
+	const repositoryPath = join(root, "repository");
+	git(root, ["init", "--initial-branch=main", repositoryPath]);
+	git(repositoryPath, ["config", "user.name", "Fixture"]);
+	git(repositoryPath, ["config", "user.email", "fixture@example.invalid"]);
+	await writeFile(join(repositoryPath, "initial.md"), "initial\n");
+	git(repositoryPath, ["add", "--", "initial.md"]);
+	git(repositoryPath, ["commit", "-m", "initial"]);
+	await writeFile(join(repositoryPath, "candidate.md"), options.candidateContent);
+	git(repositoryPath, ["add", "--", "candidate.md"]);
+	const candidateObjectId = git(repositoryPath, ["rev-parse", ":candidate.md"]);
+	const realProcess = createNodeProcessPort();
+	const process = options.createProcess?.(realProcess, repositoryPath) ?? realProcess;
+	const repository = createGitRepositoryAdapter({
+		repositoryPath,
+		repositoryIdentity: "vault-git:v1:fixture",
+		process,
+		timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+	});
+	const prepared = await repository.prepareStagedRecovery?.([
+		{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
+	]);
+	if (prepared?.status !== "ready") {
+		throw new Error("staged recovery fixture was not ready");
+	}
+	return {
+		plan: prepared.plan,
+		candidateObjectId,
+		repository,
+		repositoryPath,
+	};
+}
+
+/** Build a real-Git fixture with one deterministic recovery-boundary mutation. */
+async function createStagedRecoveryRaceFixture(options: {
+	readonly missingWorktree: boolean;
+	readonly isBoundary: (request: VaultGitProcessRequest) => boolean;
+	readonly inject: (repositoryPath: string) => void;
+}) {
+	let injected = false;
+	const fixture = await createPreparedStagedRecoveryFixture({
+		candidateContent: "planned\n",
+		createProcess: (realProcess, repositoryPath) => ({
+			async run(request) {
+				if (!injected && options.isBoundary(request)) {
+					injected = true;
+					options.inject(repositoryPath);
+				}
+				return realProcess.run(request);
+			},
+		}),
+	});
+	if (options.missingWorktree) {
+		await rm(join(fixture.repositoryPath, "candidate.md"));
+	}
+	return {
+		...fixture,
+		plannedObjectId: fixture.candidateObjectId,
+		wasInjected: () => injected,
+	};
+}
+
 function ledgerReadResponder(
 	contentResponse: Partial<VaultGitProcessResult>,
 ): Responder {
@@ -122,16 +256,424 @@ describe("git adapter construction", () => {
 		).toThrow("unsafe entry");
 		},
 	);
+
+	test("injects the exact admitted SSH closure into remote and repository Git", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-ssh-closure-"));
+		fixtureRoots.push(root);
+		const repositoryPath = join(root, "repository");
+		await mkdir(repositoryPath);
+		const admittedGitEnvironment = {
+			GIT_SSH_COMMAND:
+				"'/usr/bin/ssh' -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes",
+			GIT_SSH_VARIANT: "ssh",
+		} as const;
+		const requests: VaultGitProcessRequest[] = [];
+		const process = fakePort((request) => {
+			requests.push(request);
+			if (request.args[0] === "config") {
+				return request.args.includes("remote.origin.url")
+					? { stdout: "/tmp/remote.git\n" }
+					: { exitCode: 1 };
+			}
+			if (
+				request.args[0] === "ls-remote" &&
+				request.args[1] === "--get-url"
+			) {
+				return { stdout: "/tmp/remote.git\n" };
+			}
+			if (request.args[0] === "ls-remote") {
+				return { exitCode: 2, stdout: "" };
+			}
+			if (request.args[0] === "rev-parse") {
+				return { stdout: `${LOCAL_MAIN}\n` };
+			}
+			return {};
+		});
+		const remote = createGitAdapter({
+			repositoryPath,
+			process,
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			admittedGitEnvironment,
+		});
+		const repository = createGitRepositoryAdapter({
+			repositoryPath,
+			repositoryIdentity: "vault-git:v1:fixture",
+			resolveRepositoryIdentity: async () => ({
+				identity: "vault-git:v1:fixture",
+				repositoryRoot: repositoryPath,
+			}),
+			process,
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			admittedGitEnvironment,
+		});
+
+		expect(await remote.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "ok",
+			head: null,
+		});
+		expect(await repository.resolveCanonicalIdentity()).toEqual({
+			identity: "vault-git:v1:fixture",
+			localMainHead: LOCAL_MAIN,
+		});
+		expect(requests.length).toBeGreaterThan(1);
+		for (const request of requests) {
+			expect(request.env).toMatchObject(admittedGitEnvironment);
+		}
+	});
+
+	test("rejects an injected identity proof for another repository root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-other-proof-"));
+		fixtureRoots.push(root);
+		const repositoryPath = join(root, "repository");
+		const otherRepositoryPath = join(root, "other-repository");
+		await Promise.all([mkdir(repositoryPath), mkdir(otherRepositoryPath)]);
+		const repository = createGitRepositoryAdapter({
+			repositoryPath,
+			repositoryIdentity: "vault-git:v1:fixture",
+			resolveRepositoryIdentity: async () => ({
+				identity: "vault-git:v1:other",
+				repositoryRoot: otherRepositoryPath,
+			}),
+			process: fakePort((request) =>
+				request.args[0] === "rev-parse"
+					? { stdout: `${LOCAL_MAIN}\n` }
+					: {},
+			),
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+		});
+
+		await expect(repository.resolveCanonicalIdentity()).rejects.toThrow(
+			"configured repository root is not canonical",
+		);
+	});
+
+	test("canonicalizes both configured and identity-proof repository roots", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-proof-root-"));
+		fixtureRoots.push(root);
+		const canonicalRoot = join(root, "repository");
+		const configuredRoot = join(root, "repository-link");
+		await mkdir(canonicalRoot);
+		await symlink(canonicalRoot, configuredRoot);
+		const repository = createGitRepositoryAdapter({
+			repositoryPath: configuredRoot,
+			repositoryIdentity: "vault-git:v1:fixture",
+			resolveRepositoryIdentity: async () => ({
+				identity: "vault-git:v1:fixture",
+				repositoryRoot: canonicalRoot,
+			}),
+			process: fakePort((request) =>
+				request.args[0] === "rev-parse"
+					? { stdout: `${LOCAL_MAIN}\n` }
+					: {},
+			),
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+		});
+
+		expect(await repository.resolveCanonicalIdentity()).toEqual({
+			identity: "vault-git:v1:fixture",
+			localMainHead: LOCAL_MAIN,
+		});
+	});
+});
+
+describe("git repository staged recovery safeguards", () => {
+	const ownedPaths = [
+		{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
+	] as const;
+	const plan = {
+		baselineHead: LOCAL_MAIN,
+		unrelatedState: { statusHex: "", indexHex: "" },
+		entries: [
+			{ path: "candidate.md", objectId: EXPECTED, mode: "100644" as const },
+		],
+	};
+
+	test.each<StagedRecoveryProbe>([
+		"read_tree",
+		"read_index",
+		"hash_path",
+		"capture_unrelated",
+	])("prepare preserves a nested %s subprocess timeout", async (probe) => {
+		const repository = await createStagedRecoveryAdapter(probe);
+
+		expect(await repository.prepareStagedRecovery?.(ownedPaths)).toEqual({
+			status: "refused",
+			reason: "timed_out",
+		});
+	});
+
+	test.each<StagedRecoveryProbe>([
+		"read_tree",
+		"read_index",
+		"hash_path",
+		"capture_unrelated",
+	])("apply preserves a nested %s subprocess timeout", async (probe) => {
+		const repository = await createStagedRecoveryAdapter(probe);
+
+		expect(await repository.applyStagedRecovery?.(plan)).toEqual({
+			status: "refused",
+			reason: "timed_out",
+		});
+	});
+
+	test("keeps a non-timeout nested probe failure as mismatch", async () => {
+		const repository = await createStagedRecoveryAdapter("read_tree", "failed");
+
+		expect(await repository.prepareStagedRecovery?.(ownedPaths)).toEqual({
+			status: "refused",
+			reason: "mismatch",
+		});
+	});
+
+	test("recovers a staged file containing invalid UTF-8 bytes", async () => {
+		const candidateBytes = Uint8Array.from([
+			0x74,
+			0x65,
+			0x78,
+			0x74,
+			0x0a,
+			0xc3,
+			0x28,
+			0x0a,
+		]);
+		const temporaryModes: number[] = [];
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: candidateBytes,
+			createProcess: (realProcess) => ({
+				async run(request) {
+					if (request.args[0] === "diff") {
+						const temporaryIndexPath = request.env?.GIT_INDEX_FILE;
+						const output = request.args.find((arg) =>
+							arg.startsWith("--output="),
+						);
+						if (temporaryIndexPath) {
+							temporaryModes.push(statSync(temporaryIndexPath).mode & 0o777);
+						}
+						if (output) {
+							temporaryModes.push(
+								statSync(output.slice("--output=".length)).mode & 0o777,
+							);
+						}
+					} else if (request.args[0] === "apply") {
+						const patchPath = request.args.at(-1);
+						if (patchPath) {
+							temporaryModes.push(statSync(patchPath).mode & 0o777);
+						}
+					}
+					return realProcess.run(request);
+				},
+			}),
+		});
+		await rm(join(fixture.repositoryPath, "candidate.md"));
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "recovered",
+		});
+		expect(await readFile(join(fixture.repositoryPath, "candidate.md"))).toEqual(
+			Buffer.from(candidateBytes),
+		);
+		expect(
+			git(fixture.repositoryPath, ["ls-files", "--stage", "--", "candidate.md"]),
+		).toBe("");
+		expect(temporaryModes.length).toBeGreaterThan(0);
+		expect(new Set(temporaryModes)).toEqual(new Set([0o600]));
+		expect(
+			(await readdir(join(fixture.repositoryPath, ".git"))).filter((entry) =>
+				entry.includes(".vault-git-"),
+			),
+		).toEqual([]);
+	});
+
+	test("accepts persisted unrelated state regardless of object key order", async () => {
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: "candidate\n",
+		});
+		const reorderedPlan = {
+			...fixture.plan,
+			unrelatedState: {
+				indexHex: fixture.plan.unrelatedState.indexHex,
+				statusHex: fixture.plan.unrelatedState.statusHex,
+			},
+		};
+
+		expect(await fixture.repository.applyStagedRecovery?.(reorderedPlan)).toEqual({
+			status: "recovered",
+		});
+	});
+
+	test("preserves a timeout when temporary recovery cleanup fails", async () => {
+		let blockedTemporaryRoot: string | null = null;
+		const fixture = await createPreparedStagedRecoveryFixture({
+			candidateContent: "candidate\n",
+			createProcess: (realProcess) => ({
+				async run(request) {
+					if (blockedTemporaryRoot === null && request.args[0] === "diff") {
+						const temporaryIndexPath = request.env?.GIT_INDEX_FILE;
+						if (!temporaryIndexPath) {
+							throw new Error("missing temporary index path");
+						}
+						blockedTemporaryRoot = dirname(temporaryIndexPath);
+						await chmod(blockedTemporaryRoot, 0o500);
+						return {
+							exitCode: null,
+							stdout: "",
+							stderr: "",
+							timedOut: true,
+						};
+					}
+					return realProcess.run(request);
+				},
+			}),
+		});
+
+		try {
+			expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+				status: "refused",
+				reason: "timed_out",
+			});
+			expect(blockedTemporaryRoot).not.toBeNull();
+			if (blockedTemporaryRoot !== null && process.getuid?.() !== 0) {
+				expect(statSync(blockedTemporaryRoot).isDirectory()).toBe(true);
+			}
+		} finally {
+			if (blockedTemporaryRoot !== null) {
+				await chmod(blockedTemporaryRoot, 0o700).catch(() => undefined);
+				await rm(blockedTemporaryRoot, { recursive: true, force: true });
+			}
+		}
+	});
+
+	test("preserves a concurrently replaced owned index entry", async () => {
+		let newerObjectId = "";
+		const fixture = await createStagedRecoveryRaceFixture({
+			missingWorktree: false,
+			isBoundary: ({ args }) =>
+				args[0] === "apply" &&
+				args.includes("--cached") &&
+				args.includes("--reverse"),
+			inject(repositoryPath) {
+				newerObjectId = gitStdin(repositoryPath, "newer\n", [
+					"hash-object",
+					"-w",
+					"--stdin",
+				]);
+				git(repositoryPath, [
+					"update-index",
+					"--add",
+					"--cacheinfo",
+					`100644,${newerObjectId},candidate.md`,
+				]);
+			},
+		});
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "refused",
+			reason: "mismatch",
+		});
+		expect(fixture.wasInjected()).toBe(true);
+		expect(
+			git(fixture.repositoryPath, [
+				"ls-files",
+				"--stage",
+				"--",
+				"candidate.md",
+			]),
+		).toContain(newerObjectId);
+	});
+
+	test("preserves concurrently created owned worktree content", async () => {
+		const competingContent = "concurrent writer\n";
+		const fixture = await createStagedRecoveryRaceFixture({
+			missingWorktree: true,
+			isBoundary: ({ args }) =>
+				args[0] === "apply" &&
+				!args.includes("--cached") &&
+				!args.includes("--reverse"),
+			inject(repositoryPath) {
+				writeFileSync(join(repositoryPath, "candidate.md"), competingContent);
+			},
+		});
+
+		expect(await fixture.repository.applyStagedRecovery?.(fixture.plan)).toEqual({
+			status: "refused",
+			reason: "mismatch",
+		});
+		expect(fixture.wasInjected()).toBe(true);
+		expect(
+			await Bun.file(join(fixture.repositoryPath, "candidate.md")).text(),
+		).toBe(competingContent);
+		expect(
+			git(fixture.repositoryPath, [
+				"ls-files",
+				"--stage",
+				"--",
+				"candidate.md",
+			]),
+		).toContain(fixture.plannedObjectId);
+	});
 });
 
 describe("git adapter ledger reads", () => {
+	test.each([
+		"https://example.invalid/vault.git?token=secret",
+		"ssh://git@example.invalid/vault.git#branch",
+	])("rejects a network URL with query or fragment before process execution: %s", async (remote) => {
+		const requests: VaultGitProcessRequest[] = [];
+		const adapter = createGitAdapter({
+			repositoryPath: "/repository",
+			process: fakePort((request) => {
+				requests.push(request);
+				return {};
+			}),
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			allowedRemoteHosts: ["example.invalid"],
+		});
+
+		expect(await adapter.readLedger(remote, VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
+		expect(requests).toEqual([]);
+	});
+
+	test("rejects a configured network URL with query before effective-target execution", async () => {
+		const requests: VaultGitProcessRequest[] = [];
+		const configuredRemoteUrl =
+			"ssh://git@example.invalid/vault.git?command=exploit";
+		const adapter = createGitAdapter({
+			repositoryPath: "/repository",
+			process: fakePort((request) => {
+				requests.push(request);
+				if (
+					request.args[0] === "config" &&
+					request.args.includes("remote.origin.url")
+				) {
+					return { stdout: `${configuredRemoteUrl}\n` };
+				}
+				if (request.args[0] === "config") return { exitCode: 1 };
+				throw new Error("effective target must not execute");
+			}),
+			timeouts: { fetchMs: 1_000, pushMs: 1_000, localMs: 1_000 },
+			allowedRemoteHosts: ["example.invalid"],
+		});
+
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
+		expect(requests.every((request) => request.args[0] === "config")).toBe(true);
+	});
+
 	test("rejects Git transport-helper remotes before process execution", async () => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("process must not run");
 		});
-		await expect(
-			adapter.readLedger("ext::sh -c exploit", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("remote must be one safe Git remote name or URL");
+		expect(
+			await adapter.readLedger("ext::sh -c exploit", VAULT_GIT_LEDGER_REF),
+		).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test.each([
@@ -155,22 +697,24 @@ describe("git adapter ledger reads", () => {
 		"ext::sh -c exploit",
 		"http://example.invalid/vault.git",
 		"git://example.invalid/vault.git",
-	])("rejects a named remote whose configured endpoint is unsafe: %s", async (configuredRemoteUrl) => {
+	])("returns a structured refusal for an unsafe configured endpoint: %s", async (configuredRemoteUrl) => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("transport must not run");
 		}, { configuredRemoteUrl, allowedRemoteHosts: ["example.invalid"] });
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("unsafe transport");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test("rejects a network host outside the construction allowlist", async () => {
 		const adapter = createFakeAdapter(() => {
 			throw new Error("transport must not run");
 		}, { configuredRemoteUrl: "ssh://git@example.invalid/vault.git" });
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("remote host is not admitted");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
 
 	test("a timed-out ledger content read fails instead of reporting absence", async () => {
@@ -211,6 +755,17 @@ describe("git adapter ledger reads", () => {
 });
 
 describe("git adapter main inspection", () => {
+	test("returns a structured refusal for unsafe remote configuration", async () => {
+		const adapter = createFakeAdapter(() => {
+			throw new Error("transport must not run");
+		}, { configuredRemoteUrl: "git://example.invalid/vault.git" });
+
+		expect(await adapter.inspectMain("origin")).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
+	});
+
 	test.each([
 		{
 			name: "command failure",
@@ -708,10 +1263,88 @@ describe("git adapter process environment", () => {
 			process: createNodeProcessPort(),
 			timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
 		});
-		await expect(
-			adapter.readLedger("origin", VAULT_GIT_LEDGER_REF),
-		).rejects.toThrow("executable transport helper");
+		expect(await adapter.readLedger("origin", VAULT_GIT_LEDGER_REF)).toEqual({
+			status: "refused",
+			reason: "unsafe_remote_configuration",
+		});
 	});
+
+	test("clean real repository passes effective auth config inspection", async () => {
+		const root = await mkdtemp(join(tmpdir(), "vault-git-clean-config-"));
+		fixtureRoots.push(root);
+		const repositoryPath = join(root, "repository");
+		git(root, ["init", "--initial-branch=main", repositoryPath]);
+		const repository = createGitRepositoryAdapter({
+			repositoryPath,
+			repositoryIdentity: "vault-git:v1:fixture",
+			process: createNodeProcessPort(),
+			timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+		});
+
+		expect(await repository.inspectSafety?.()).toEqual({ status: "safe" });
+	});
+
+	test.each([
+		["credential.helper", "!fixture-helper"],
+		["http.extraHeader", "Authorization: redacted-test-value"],
+	])(
+		"included %s fails closed before a network-capable Git command",
+		async (key, value) => {
+			const root = await mkdtemp(join(tmpdir(), "vault-git-included-config-"));
+			fixtureRoots.push(root);
+			const remote = join(root, "remote.git");
+			const clone = join(root, "clone");
+			const includedConfig = join(root, "included.gitconfig");
+			git(root, ["init", "--bare", "--initial-branch=main", remote]);
+			git(root, ["clone", remote, clone]);
+			git(root, ["config", "--file", includedConfig, key, value]);
+			git(clone, ["config", "include.path", includedConfig]);
+
+			const requests: VaultGitProcessRequest[] = [];
+			const realProcess = createNodeProcessPort();
+			const process: VaultGitProcessPort = {
+				async run(request) {
+					requests.push(request);
+					return realProcess.run(request);
+				},
+			};
+			const remoteAdapter = createGitAdapter({
+				repositoryPath: clone,
+				process,
+				timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+			});
+
+			const remoteResult = await remoteAdapter.readLedger(
+				"origin",
+				VAULT_GIT_LEDGER_REF,
+			);
+			const remoteRequests = [...requests];
+
+			const repository = createGitRepositoryAdapter({
+				repositoryPath: clone,
+				repositoryIdentity: "vault-git:v1:fixture",
+				process,
+				timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+			});
+
+			expect(remoteResult).toEqual({
+				status: "refused",
+				reason: "unsafe_remote_configuration",
+			});
+			expect(
+				remoteRequests.some(
+					({ args }) =>
+						(args[0] === "ls-remote" && args[1] === "--refs") ||
+						args[0] === "fetch" ||
+						args[0] === "push",
+				),
+			).toBe(false);
+			expect(await repository.inspectSafety?.()).toEqual({
+				status: "refused",
+				reason: "credential_helper",
+			});
+		},
+	);
 });
 
 describe("node process port", () => {

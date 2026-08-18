@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	copyFileSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -13,11 +14,21 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
+import {
+	createQualificationReceipt,
+	QUALIFICATION_SOURCE_PATHS,
+} from "../skills/test-design/evals/qualification.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
-const vaultGitStartupRule =
-	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; only when its CLI reports the `activation_blocked` blocker, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time.";
+const vaultGitStartupRule = [
+	"- Before code-repo file edits, verify isolation with the `worktree` skill (new/attach); never edit the main checkout.",
+	"- Treat the configured Super-vault in `~/.config/context/vault.md` as the sole worktree-isolation exception.",
+	"- Route vault writes through the `vault-git` skill; it must honor the owner-controlled pause marker before invoking the transaction manager.",
+	"- Never create vault worktrees; allow only one canonical writer. Keep read-only vault work in the main checkout.",
+].join("\n");
+const testDesignStartupRule =
+	"Before creating or changing a repository-test artifact, invoke `test-design` and complete its Test Design Brief. Then return to the current workflow.";
 
 const registeredOwnerPaths = [
 	"skills/productivity-connectors/SKILL.md",
@@ -38,6 +49,9 @@ const registeredOwnerPaths = [
 	"skills/context-advisor/SKILL.md",
 	"skills/context-advisor/references/storage-routing.md",
 	"skills/vault-git/SKILL.md",
+	"skills/test-design/SKILL.md",
+	"skills/test-design/evals/qualification.ts",
+	"skills/test-design/evals/qualification.json",
 ] as const;
 
 interface ProcessResult {
@@ -101,12 +115,19 @@ function createFixture(): Fixture {
 	mkdirSync(repository, { recursive: true });
 	writeRepositoryFile(repository, "AGENTS.md", "# Agent instructions\n");
 	writeRepositoryFile(repository, "CLAUDE.md", "# Claude wrapper\n");
-	writeRepositoryFile(repository, "agent-instructions.config", "startup_owner=.\n");
 	writeRepositoryFile(repository, "scripts/agent-instructions.sh", readFileSync(sourceScript, "utf8"));
 	chmodSync(script, 0o755);
 	for (const path of registeredOwnerPaths) {
 		writeRepositoryFile(repository, path);
 	}
+	for (const path of QUALIFICATION_SOURCE_PATHS) {
+		writeRepositoryFile(repository, path);
+		copyFileSync(join(repositoryRoot, path), join(repository, path));
+	}
+	writeFileSync(
+		join(repository, "skills/test-design/evals/qualification.json"),
+		`${JSON.stringify(createQualificationReceipt(repository), null, 2)}\n`,
+	);
 
 	git(repository, ["init", "--quiet"]);
 	git(repository, ["config", "user.name", "Agent Instructions Test"]);
@@ -114,11 +135,7 @@ function createFixture(): Fixture {
 	git(repository, ["add", "--all"]);
 	git(repository, ["commit", "--quiet", "-m", "test: seed instruction topology"]);
 
-	mkdirSync(join(home, ".codex"), { recursive: true });
-	mkdirSync(join(home, ".claude"), { recursive: true });
-	symlinkSync(join(repository, "AGENTS.md"), join(home, ".codex/AGENTS.md"));
-	symlinkSync(join(repository, "AGENTS.md"), join(home, ".claude/AGENTS.md"));
-	symlinkSync(join(repository, "CLAUDE.md"), join(home, ".claude/CLAUDE.md"));
+	mkdirSync(home, { recursive: true });
 
 	return { root, repository, home, script };
 }
@@ -150,6 +167,29 @@ function parseReport(result: ProcessResult): StagedReport {
 	}
 }
 
+function expectLocalRoute(
+	fixture: Fixture,
+	agents: string,
+	route: string,
+	qualificationSource?: string,
+): void {
+	writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
+	expect(readFileSync(join(fixture.repository, "AGENTS.md"), "utf8")).toContain(route);
+	expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	if (qualificationSource) {
+		const sourcePath = join(fixture.repository, qualificationSource);
+		const source = readFileSync(sourcePath, "utf8");
+		writeFileSync(sourcePath, `${source}\nqualification drift\n`);
+		const staleQualification = runScript(fixture, ["check", "--json"]);
+		expect(staleQualification.exitCode).toBe(0);
+		expect(parseReport(staleQualification).failures).not.toContain(
+			"test-design Startup Surface route lacks current qualification",
+		);
+		writeFileSync(sourcePath, source);
+		expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+	}
+}
+
 function findContrastingSortLocale(): string | undefined {
 	const locales = run("locale", ["-a"]);
 	if (locales.exitCode !== 0) return undefined;
@@ -166,33 +206,29 @@ function findContrastingSortLocale(): string | undefined {
 }
 
 describe("agent instruction staged health", () => {
-	test("delivers the vault-git write route through both startup surfaces", () => {
+	test("keeps the mandatory test-design route in the repository source", () => {
+		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
+		expect(agents).toContain(testDesignStartupRule);
+
+		withFixture((fixture) => {
+			expectLocalRoute(
+				fixture,
+				agents,
+				testDesignStartupRule,
+				"skills/test-design/references/pattern-library.md",
+			);
+		});
+	});
+
+	test("keeps the vault-git write route in the repository source", () => {
 		const agents = readFileSync(join(repositoryRoot, "AGENTS.md"), "utf8");
 		expect(agents).toContain(vaultGitStartupRule);
 
 		withFixture((fixture) => {
-			writeFileSync(join(fixture.repository, "AGENTS.md"), agents);
-
-			expect(readFileSync(join(fixture.home, ".codex/AGENTS.md"), "utf8")).toContain(
+			expectLocalRoute(
+				fixture,
+				agents,
 				vaultGitStartupRule,
-			);
-			expect(readFileSync(join(fixture.home, ".claude/AGENTS.md"), "utf8")).toContain(
-				vaultGitStartupRule,
-			);
-			expect(runScript(fixture, ["check"]).exitCode).toBe(0);
-
-			// Delivery negative control: a stale managed copy that lost the rule
-			// must fail projection-drift detection, so this test guards the
-			// delivery step itself, not just symlink read-back plumbing.
-			unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
-			writeFileSync(
-				join(fixture.home, ".codex/AGENTS.md"),
-				agents.replace(vaultGitStartupRule, "stale startup without the vault-git route"),
-			);
-			const drifted = runScript(fixture, ["check", "--json"]);
-			expect(drifted.exitCode).toBe(1);
-			expect(parseReport(drifted).failures).toContain(
-				"Codex user startup drift: ~/.codex/AGENTS.md",
 			);
 		});
 	});
@@ -257,14 +293,12 @@ describe("agent instruction staged health", () => {
 			const exactInputs = [
 				"AGENTS.md",
 				"CLAUDE.md",
-				"agent-instructions.config",
 				"scripts/agent-instructions.sh",
 				...registeredOwnerPaths,
 				appendixPath,
 			];
 			writeRepositoryFile(fixture.repository, "AGENTS.md", "# Changed agent instructions\n");
 			writeRepositoryFile(fixture.repository, "CLAUDE.md", "# Changed Claude wrapper\n");
-			writeRepositoryFile(fixture.repository, "agent-instructions.config", "startup_owner=./\n");
 			writeFileSync(fixture.script, `${readFileSync(fixture.script, "utf8")}\n# staged fixture change\n`);
 			for (const path of registeredOwnerPaths) {
 				writeRepositoryFile(fixture.repository, path, `changed ${path}\n`);

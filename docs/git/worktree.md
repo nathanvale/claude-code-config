@@ -20,8 +20,9 @@ These do NOT override the rule: a handoff saying "start a fresh branch" (start i
 
 Allowed in the main checkout: read-only work (analysis, review, search, tests without edits) and operations that target it by design (`setup sync` from main, worktree management itself, pull/fetch).
 
-The agent memory store, `~/.claude/projects/<slug>/memory/**`, is exempt for the same reason: the running agent writes it as session state, so a worktree would divert those writes away from the real store and silently break memory. `~/.claude/projects` may symlink into a repo's main checkout; the exemption is enforced in `hooks/git/git-safety.ts` (`isAgentMemoryPath`) and covers only the `memory/` subtree, so sibling transcripts and ordinary source in the backing repo stay blocked.
+Repo exception: claude-code-config and dotfiles run main-direct mode — implementation happens in the main checkout on `main`; complex commits are gated by `compound-engineering:ce-code-review` per the AGENTS.md "Context And Git" override (the contract owner); decision: `docs/adr/0035-main-direct-mode-for-config-repos.md`.
 
+Path exception: the agent memory store, `~/.claude/projects/<slug>/memory/**`, is exempt in every repo. The running agent writes it as session state, so a worktree would divert those writes away from the real store and silently break memory. `~/.claude/projects` may symlink into a repo's main checkout; the exemption is enforced in `hooks/git/git-safety.ts` (`isAgentMemoryPath`) and covers only the `memory/` subtree, so sibling transcripts and ordinary source in the backing repo stay blocked.
 ## Verbs
 
 | Verb | What it does | Side effects |

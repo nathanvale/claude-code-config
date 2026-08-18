@@ -1,22 +1,32 @@
 import { createHash } from "node:crypto";
 
-import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
+import {
+	VAULT_GIT_LEDGER_REF,
+	createVaultGitActivationRestriction,
+	nextVaultGitReceipt,
+} from "./model.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitDoctorFinding,
+	VaultGitDoctorPublicationEvidence,
+	VaultGitDoctorValidationRouteEvidence,
 	VaultGitEngineNextActionId,
 	VaultGitRepairAction,
 	VaultGitRetrySafety,
 	VaultGitTransactionPhase,
 	VaultGitTransactionState,
 } from "./model.ts";
-import type {
-	VaultGitRepositoryPort,
-	VaultGitRuntimePort,
+import {
+	VaultRepositoryIdentityUnavailableError,
+	type VaultGitLocalCommitInspection,
+	type VaultGitRepositoryPort,
+	type VaultGitRuntimePort,
 } from "./ports.ts";
 import {
 	observeRemoteLedger,
 	type RemoteLedgerEngine,
+	validateRemoteLease,
 } from "./remote-ledger.ts";
 import type {
 	VaultGitDoctorProof,
@@ -78,16 +88,66 @@ export interface VaultGitDoctorResult {
 	readonly repairAction?: VaultGitRepairAction;
 	/** Non-secret transaction correlation. */
 	readonly transactionId?: string;
+	/** Closed U4 validation-route evidence, present only when proven. */
+	readonly validationEvidence?: VaultGitDoctorValidationRouteEvidence;
+	/** Closed U4 publication-outcome evidence; exclusive with validationEvidence. */
+	readonly publicationEvidence?: VaultGitDoctorPublicationEvidence;
 	/** Exact ledger fencing generation. */
 	readonly ledgerGeneration?: string;
 	/** True only when fresh stale-lease proof issued private token material. */
 	readonly takeoverTokenIssued?: boolean;
+	/** Cause-specific public activation refusal, when activation stopped writes. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 }
 
 /** Read-only doctor policy surface. */
 export interface VaultGitDoctor {
 	/** Reconcile private, local, and remote evidence into one continuation. */
 	diagnose(input?: VaultGitDoctorInput): Promise<VaultGitDoctorResult>;
+}
+
+/** Cheap receipt-only classification used before slow authoritative proof. */
+export function classifyVaultGitDoctorLocalReceipt(
+	loaded: Awaited<ReturnType<VaultGitReceiptStore["load"]>>,
+	selectedTransactionId?: string,
+): {
+	readonly phase: VaultGitTransactionPhase;
+	readonly state: VaultGitTransactionState;
+	readonly transactionId?: string;
+} {
+	if (loaded.status === "absent") {
+		return { phase: "blocked", state: "absent" };
+	}
+	if (loaded.status !== "loaded") {
+		return { phase: "human_required", state: "human_required" };
+	}
+	if (
+		selectedTransactionId !== undefined &&
+		loaded.receipt.transactionId !== null &&
+		loaded.receipt.transactionId !== selectedTransactionId
+	) {
+		return {
+			phase: loaded.receipt.phase,
+			state: "human_required",
+			transactionId: loaded.receipt.transactionId,
+		};
+	}
+	const state: VaultGitTransactionState =
+		loaded.receipt.phase === "push_pending" ||
+		loaded.receipt.phase === "repairable" ||
+		loaded.receipt.phase === "human_required" ||
+		loaded.receipt.phase === "closed"
+			? loaded.receipt.phase
+			: loaded.receipt.phase === "blocked"
+				? "unknown"
+				: "active";
+	return {
+		phase: loaded.receipt.phase,
+		state,
+		...(loaded.receipt.transactionId
+			? { transactionId: loaded.receipt.transactionId }
+			: {}),
+	};
 }
 
 const summaries = {
@@ -149,7 +209,10 @@ export async function diagnoseVaultGitTransaction(
 	if (quarantine?.status === "takeover_pending") {
 		return reconcileInterruptedTakeover(options, quarantine);
 	}
-	if (quarantine?.status === "quarantined") {
+	if (
+		quarantine?.status === "quarantined" ||
+		quarantine?.status === "recovery_pending"
+	) {
 		return report("superseded", "human_required", "host_quarantined", "operator_required", "reconcile_quarantine", summaries.reconcile, diagnosticsReference, {
 			blocker: "host_quarantined",
 			repairAction: "reconcile-quarantine",
@@ -184,7 +247,31 @@ export async function diagnoseVaultGitTransaction(
 	let identity: Awaited<ReturnType<VaultGitRepositoryPort["resolveCanonicalIdentity"]>>;
 	try {
 		identity = await options.repository.resolveCanonicalIdentity();
-	} catch {
+	} catch (error) {
+		if (error instanceof VaultRepositoryIdentityUnavailableError) {
+			const state =
+				receipt.phase === "push_pending" || receipt.phase === "repairable"
+					? receipt.phase
+					: "active";
+			const activationRestriction = createVaultGitActivationRestriction({
+				stoppedAction: "vault_write",
+				cause: "revalidation_unavailable",
+			});
+			return report(
+				state,
+				receipt.phase,
+				"activation_missing",
+				"same_input_safe",
+				activationRestriction.nextAction.id,
+				activationRestriction.nextAction.summary,
+				receipt.diagnosticsReference,
+				{
+					...common,
+					blocker: "activation_blocked",
+					activationRestriction,
+				},
+			);
+		}
 		return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "inspect_configured_vault", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "vault_identity_changed" });
 	}
 	if (identity.identity !== options.repositoryIdentity) {
@@ -195,9 +282,11 @@ export async function diagnoseVaultGitTransaction(
 		if (!receipt.transactionId || !receipt.leaseGeneration || !receipt.expectedMainCommit || !options.ledger.git.reconcileAtomicClose || !options.repository.inspectLocalCommit) {
 			return report("human_required", receipt.phase, "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, receipt.diagnosticsReference, { ...common, blocker: "receipt_corrupt" });
 		}
-		// Remote reconciliation runs before any local-head comparison: a lost
-		// acknowledgement must classify closed from remote ancestry evidence
-		// even after later transactions or pulls advance local main (R17a).
+		// A remotely closed result is admissible only for the original host, so a
+		// receipt-host mismatch is contract breach before any remote probe.
+		if (receipt.host !== options.runtime.host()) {
+			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach", publicationEvidence: "contract_breach" });
+		}
 		// A null ledgerReleaseId is the documented crash window before
 		// onPrepared recorded the release object; no push began, so the remote
 		// cannot hold the release and reconciliation is skipped.
@@ -212,14 +301,42 @@ export async function diagnoseVaultGitTransaction(
 				ledgerCommit: receipt.ledgerReleaseId,
 			});
 			if (reconciled.status === "closed") {
-				return report("push_pending", receipt.phase, "publication_already_closed", "same_input_safe", "run_repair", summaries.closeVerified, receipt.diagnosticsReference, { ...common, repairAction: "close-verified" });
+				return report("push_pending", receipt.phase, "publication_already_closed", "same_input_safe", "run_repair", summaries.closeVerified, receipt.diagnosticsReference, { ...common, repairAction: "close-verified", publicationEvidence: "remotely_closed" });
 			}
 			if (reconciled.status === "host_contract_breach") {
-				return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
+				return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach", publicationEvidence: "contract_breach" });
 			}
 			if (reconciled.status === "unknown") {
-				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
+				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable", publicationEvidence: "unavailable" });
 			}
+		}
+		// R17a: remote closure proof precedes the local-head fence so later
+		// transactions cannot hide a lost acknowledgement; without closure proof,
+		// moved local main blocks retry.
+		if (identity.localMainHead !== receipt.expectedMainCommit) {
+			return report("human_required", receipt.phase, "publication_pending", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "push_pending", publicationEvidence: "conflicting" });
+		}
+		const validated = await validateRemoteLease(options.ledger, {
+			remote: receipt.remote,
+			expectedGeneration: receipt.leaseGeneration,
+			transactionId: receipt.transactionId,
+		});
+		if (validated.status === "refused") {
+			if (
+				validated.blocker === "host_contract_breach" ||
+				validated.blocker === "ledger_malformed"
+			) {
+				return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: validated.blocker, publicationEvidence: "contract_breach" });
+			}
+			if (
+				validated.blocker === "lease_generation_stale" ||
+				validated.blocker === "lease_owner_unknown"
+			) {
+				// A superseded or unattributable lease while our push outcome is
+				// unknown is conflicting remote evidence, never a retry.
+				return report("superseded", receipt.phase, "lease_superseded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: validated.blocker, publicationEvidence: "conflicting" });
+			}
+			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: validated.blocker, publicationEvidence: "unavailable" });
 		}
 		const localCommit = await options.repository.inspectLocalCommit(
 			receipt.expectedMainCommit,
@@ -227,26 +344,12 @@ export async function diagnoseVaultGitTransaction(
 		// A transient probe failure proves nothing about the commit structure;
 		// breach stays reserved for structurally wrong evidence.
 		if (localCommit.status === "failed") {
-			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
+			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable", publicationEvidence: "unavailable" });
 		}
-		if (
-			localCommit.status !== "ok" ||
-			localCommit.parents.length !== 1 ||
-			localCommit.parents[0] !== receipt.localMainHead ||
-			!hasTransactionTrailer(localCommit.message, receipt.transactionId)
-		) {
-			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
+		if (!isResumedLocalCommit(localCommit, receipt)) {
+			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach", publicationEvidence: "contract_breach" });
 		}
-		if (receipt.host !== options.runtime.host()) {
-			return report("human_required", receipt.phase, "publication_pending", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "push_pending" });
-		}
-		// Deterministic retry-push requires local main to sit exactly on the
-		// prepared commit; a moved head routes to the operator instead of a
-		// breach because the remote outcome above proved nothing partial.
-		if (identity.localMainHead !== receipt.expectedMainCommit) {
-			return report("human_required", receipt.phase, "publication_pending", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "push_pending" });
-		}
-		return report("push_pending", receipt.phase, "publication_pending", "same_input_safe", "run_repair", summaries.retryPush, receipt.diagnosticsReference, { ...common, repairAction: "retry-push" });
+		return report("push_pending", receipt.phase, "publication_pending", "same_input_safe", "run_repair", summaries.retryPush, receipt.diagnosticsReference, { ...common, repairAction: "retry-push", publicationEvidence: "proven_not_published_origin_intact" });
 	}
 
 	const observed = await observeRemoteLedger(options.ledger, {
@@ -314,12 +417,7 @@ export async function diagnoseVaultGitTransaction(
 			if (commit.status === "failed") {
 				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
 			}
-			if (
-				commit.status === "ok" &&
-				commit.parents.length === 1 &&
-				commit.parents[0] === receipt.localMainHead &&
-				hasTransactionTrailer(commit.message, receipt.transactionId)
-			) {
+			if (isResumedLocalCommit(commit, receipt)) {
 				return report("repairable", receipt.phase, "local_commit_recovered", "same_input_safe", "run_repair", summaries.resume, receipt.diagnosticsReference, { ...common, repairAction: "resume" });
 			}
 		}
@@ -420,10 +518,32 @@ async function reconcileInterruptedTakeover(
 	return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "lease_generation_stale" });
 }
 
-function hasTransactionTrailer(message: string, transactionId: string): boolean {
+export function hasTransactionTrailer(
+	message: string,
+	transactionId: string,
+): boolean {
 	return message
 		.split(/\r?\n/)
 		.some((line) => line === `Vault-Transaction: ${transactionId}`);
+}
+
+/**
+ * Whether a local commit is the well-formed resumed event commit for this
+ * transaction: a single-parent commit sitting exactly on the receipt's local
+ * main head and carrying the transaction trailer. Doctor and Repair must agree
+ * on this predicate; owning it here keeps the recovery verdict single-sourced.
+ */
+export function isResumedLocalCommit(
+	commit: VaultGitLocalCommitInspection,
+	receipt: { readonly localMainHead: string; readonly transactionId: string | null },
+): boolean {
+	return (
+		receipt.transactionId !== null &&
+		commit.status === "ok" &&
+		commit.parents.length === 1 &&
+		commit.parents[0] === receipt.localMainHead &&
+		hasTransactionTrailer(commit.message, receipt.transactionId)
+	);
 }
 
 /**
@@ -525,6 +645,12 @@ function report(
 			: {}),
 		...(extra.takeoverTokenIssued
 			? { takeoverTokenIssued: true as const }
+			: {}),
+		...(extra.publicationEvidence
+			? { publicationEvidence: extra.publicationEvidence }
+			: {}),
+		...(extra.activationRestriction
+			? { activationRestriction: extra.activationRestriction }
 			: {}),
 	};
 }

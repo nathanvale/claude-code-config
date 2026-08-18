@@ -21,6 +21,7 @@ import {
 	projectSetupStationMap,
 	setupBranchStationCatalog,
 } from "../src/branch-station-catalog.ts";
+import { createVaultGitHostEnrollment } from "../src/vault-git-host-enrollment.ts";
 import {
 	hashHookBytes,
 	hookProvenanceIdentity,
@@ -181,7 +182,7 @@ async function runStation(station: SetupStation): Promise<BranchStationEvidence>
 	const fixture = await makeFixture(station.id.replaceAll(".", "-"));
 	const scenario = await prepareScenario(station.id, fixture);
 	const before = await snapshotFixture(fixture);
-	const result = await runSetup(station, fixture, scenario.argv, scenario.fault, scenario.direct);
+	const result = await runSetup(station, fixture, scenario.argv, scenario.fault, scenario.direct, scenario.stdin);
 	const after = await snapshotFixture(fixture);
 	const envelope = assertStationEnvelope(station, result);
 	assertSetupStation(station, result, envelope);
@@ -257,7 +258,7 @@ async function snapshotPath(path: string, label: string, snapshot: string[]): Pr
 async function prepareScenario(
 	id: StationId,
 	fixture: Fixture,
-): Promise<{ argv: string[]; fault?: string; direct?: boolean }> {
+): Promise<{ argv: string[]; fault?: string; direct?: boolean; stdin?: string }> {
 	const [command] = id.split(".") as [string];
 	const project = [command, "--scope", "project", "--repo", fixture.source, "--json"];
 	const user = [command, "--json"];
@@ -310,7 +311,150 @@ async function prepareScenario(
 		case "catalog.blocked": await rm(join(fixture.source, "skills/alpha/SKILL.md")); return { argv: ["catalog", "alpha", ...project.slice(1)] };
 		case "catalog.not_found": return { argv: ["catalog", "missing", ...project.slice(1)] };
 		case "commands.catalog": return { argv: ["commands", "--json"] };
+		case "sync.vault_git_inputs_required":
+			return { argv: ["sync", "--domain", "vault-git", "--check", "--json"] };
+		case "sync.vault_git_selected": {
+			await vaultGitSourceFixture(fixture);
+			await enrollVaultGit(fixture, await vaultGitSshFixture(fixture));
+			return { argv: ["sync", "--domain", "vault-git", "--check", "--json"] };
+		}
+		case "sync.vault_git_ssh_prerequisite":
+			return {
+				argv: ["sync", "--domain", "vault-git", "--check", "--input-stdin", "setup.vault-git.host-enrollment", "--json"],
+				stdin: JSON.stringify({
+					ssh_identity_file_path: join(fixture.root, "missing-identity"),
+					ssh_public_key_path: join(fixture.root, "missing-identity.pub"),
+					ssh_known_hosts_path: join(fixture.root, "missing-known-hosts"),
+				}),
+			};
+		case "sync.vault_git_enrollment_ready":
+			return {
+				argv: ["sync", "--domain", "vault-git", "--check", "--input-stdin", "setup.vault-git.host-enrollment", "--json"],
+				stdin: JSON.stringify(await vaultGitSshFixture(fixture)),
+			};
+		case "sync.vault_git_applied": {
+			await vaultGitSourceFixture(fixture);
+			return {
+				argv: ["sync", "--domain", "vault-git", "--input-stdin", "setup.vault-git.host-enrollment", "--json"],
+				stdin: JSON.stringify(await vaultGitSshFixture(fixture)),
+			};
+		}
+		case "sync.vault_git_noop": {
+			await vaultGitSourceFixture(fixture);
+			const ssh = await vaultGitSshFixture(fixture);
+			await enrollVaultGit(fixture, ssh);
+			return {
+				argv: ["sync", "--domain", "vault-git", "--input-stdin", "setup.vault-git.host-enrollment", "--json"],
+				stdin: JSON.stringify(ssh),
+			};
+		}
+		case "sync.vault_git_selection_blocked": {
+			await vaultGitSourceFixture(fixture);
+			await vaultGitActiveWork(fixture);
+			return {
+				argv: ["sync", "--domain", "vault-git", "--input-stdin", "setup.vault-git.host-enrollment", "--json"],
+				stdin: JSON.stringify(await vaultGitSshFixture(fixture)),
+			};
+		}
+		case "sync.vault_git_rollback_ready": {
+			await vaultGitUpgradeFixture(fixture);
+			return { argv: ["sync", "--domain", "vault-git", "--rollback", "--check", "--json"] };
+		}
+		case "sync.vault_git_rollback_applied": {
+			await vaultGitUpgradeFixture(fixture);
+			return { argv: ["sync", "--domain", "vault-git", "--rollback", "--json"] };
+		}
+		case "sync.vault_git_rollback_blocked": {
+			await vaultGitUpgradeFixture(fixture);
+			await vaultGitActiveWork(fixture);
+			return { argv: ["sync", "--domain", "vault-git", "--rollback", "--json"] };
+		}
 		default: throw new Error(`No process fixture for ${id}`);
+	}
+}
+
+function vaultGitEntrypoint(fixture: Fixture): string {
+	return join(fixture.source, "runtime", "vault-git-transaction-manager", "src", "cli.ts");
+}
+
+async function vaultGitSourceFixture(fixture: Fixture, source = "station fixture vault git"): Promise<void> {
+	const entrypoint = vaultGitEntrypoint(fixture);
+	await mkdir(dirname(entrypoint), { recursive: true });
+	await writeFile(entrypoint, `#!/usr/bin/env bun\nconsole.log(${JSON.stringify(source)});\n`);
+	if (!(await Bun.file(join(fixture.source, ".git", "HEAD")).exists())) {
+		vaultGitGit(fixture.source, ["init", "--initial-branch=main"]);
+	}
+	vaultGitGit(fixture.source, ["add", "."]);
+	vaultGitGit(fixture.source, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", source]);
+	vaultGitGit(fixture.source, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+}
+
+async function vaultGitSshFixture(fixture: Fixture): Promise<Record<string, string>> {
+	const identity = join(fixture.root, "repository-writer");
+	const generated = Bun.spawnSync([
+		"/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", identity,
+	]);
+	if (generated.exitCode !== 0) throw new Error("fixture ssh-keygen failed");
+	const knownHosts = join(fixture.root, "known_hosts");
+	await writeFile(
+		knownHosts,
+		"github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureReviewedHostKey\n",
+	);
+	await chmod(identity, 0o600);
+	await chmod(knownHosts, 0o600);
+	return {
+		ssh_identity_file_path: identity,
+		ssh_public_key_path: `${identity}.pub`,
+		ssh_known_hosts_path: knownHosts,
+	};
+}
+
+async function enrollVaultGit(fixture: Fixture, ssh: Record<string, string>): Promise<void> {
+	const enrollment = createVaultGitHostEnrollment({
+		configRoot: join(fixture.home, ".config", "context", "vault-git"),
+		dataRoot: join(fixture.home, ".local", "share", "context", "vault-git"),
+		selectorPath: join(fixture.home, ".bun", "bin", "vault-git"),
+		sourceRepoRoot: fixture.source,
+		runtimeEntrypoint: vaultGitEntrypoint(fixture),
+		inspectWorkState: async () => "clear",
+	});
+	const result = await enrollment.apply({
+		sshIdentityFilePath: ssh.ssh_identity_file_path as string,
+		sshPublicKeyPath: ssh.ssh_public_key_path as string,
+		sshKnownHostsPath: ssh.ssh_known_hosts_path as string,
+	});
+	if (result.state !== "applied" && result.state !== "noop") {
+		throw new Error(`vault-git enrollment fixture failed: ${result.state}`);
+	}
+}
+
+async function vaultGitUpgradeFixture(fixture: Fixture): Promise<void> {
+	await vaultGitSourceFixture(fixture);
+	const ssh = await vaultGitSshFixture(fixture);
+	await enrollVaultGit(fixture, ssh);
+	await vaultGitSourceFixture(fixture, "station fixture vault git two");
+	await enrollVaultGit(fixture, ssh);
+}
+
+async function vaultGitActiveWork(fixture: Fixture): Promise<void> {
+	const receipt = join(
+		fixture.home, ".local", "state", "vault-git-transaction-manager",
+		"c".repeat(64), "current.json",
+	);
+	await mkdir(dirname(receipt), { recursive: true, mode: 0o700 });
+	await writeFile(receipt, `${JSON.stringify({ phase: "writing" })}\n`, { mode: 0o600 });
+}
+
+function vaultGitGit(cwd: string, args: readonly string[]): void {
+	const result = Bun.spawnSync(["/usr/bin/git", ...args], {
+		cwd,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+	});
+	if (result.exitCode !== 0) {
+		throw new Error(`vault-git fixture git ${args[0] ?? "command"} failed`);
 	}
 }
 
@@ -320,14 +464,19 @@ async function runSetup(
 	argv: readonly string[],
 	fault = "none",
 	direct = false,
+	stdin?: string,
 ): Promise<CliProcessResult> {
 	return runCliProcess({
 		label: typeof label === "string" ? label : label.id,
 		argv: [process.execPath, direct ? CLI_PATH : FIXTURE_RUNNER, ...argv],
 		cwd: PACKAGE_ROOT,
+		...(stdin === undefined ? {} : { stdin }),
 		env: {
 			...process.env,
 			HOME: fixture.home,
+			XDG_CONFIG_HOME: join(fixture.home, ".config"),
+			XDG_DATA_HOME: join(fixture.home, ".local", "share"),
+			XDG_STATE_HOME: join(fixture.home, ".local", "state"),
 			SETUP_FIXTURE_SOURCE: fixture.source,
 			SETUP_FIXTURE_HOME: fixture.home,
 			SETUP_FIXTURE_STATE: fixture.state,

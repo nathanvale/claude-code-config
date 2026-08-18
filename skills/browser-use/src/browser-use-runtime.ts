@@ -10,6 +10,10 @@
 // ---------------------------------------------------------------------------
 
 import {
+	createPublicKey,
+	verify,
+} from "node:crypto";
+import {
 	closeSync,
 	constants as fsConstants,
 	existsSync,
@@ -31,6 +35,7 @@ import {
 	type AdmissionRuntime,
 	type ProductAdmissionResult,
 	createNativeAbsentRuntime,
+	inspectBindingSelectionNativeCapability,
 } from "@side-quest/browser-use-security";
 import {
 	type BrowserUseOpExecute,
@@ -47,7 +52,15 @@ import type {
 	BrowserUseBindingApprovalReceiptVerifier,
 } from "./browser-use-auth-approval";
 import { createP256BindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
-import { createNativeBindingApprovalBroker } from "./browser-use-binding-approval-native";
+import {
+	createNativeBindingApprovalBroker,
+	createNativeBindingSelectionCeremony,
+} from "./browser-use-binding-approval-native";
+import type {
+	BrowserUseBindingSelectionCeremonyPort,
+	BrowserUseBindingSelectionGrantVerifier,
+} from "./browser-use-binding-selection";
+import { createBindingSelectionGrantVerifier } from "./browser-use-binding-selection";
 import { createBindingCatalog } from "./browser-use-binding-catalog";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import { createBrowserUseSessionIdentityProof } from "./browser-use-session-identity-proof";
@@ -66,13 +79,18 @@ import {
 	reviewedActionVerifierIdentityIsValid,
 } from "./browser-use-reviewed-action-approval";
 import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
-import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
+import type {
+	BrowserUseCdpTargetIdentity,
+	BrowserUseDevToolsRequest,
+	BrowserUseTargetProofRefusalCause,
+} from "./browser-use-target-proof";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	fullFsyncDurableFile,
 	inspectBrowserUsePaths,
 	inspectBrowserUseRoot,
+	openBrowserUsePaths,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
@@ -1306,10 +1324,26 @@ export type BrowserUseRuntime = {
 	authenticatedStateProof?: BrowserUseAuthenticatedStateProof;
 	/** Endpoint-bound transport shared by both entry modes. */
 	authTransport?: BrowserUseAuthTransportFactory;
+	/**
+	 * Exact browser-level target resolver. Production falls back to the verified
+	 * handoff WebSocket; tests inject this seam so no live browser is contacted.
+	 */
+	resolveTargetIdentity?: (input: {
+		expected_url: string;
+		allowed_origins: readonly string[];
+		preferred_target_id?: string;
+	}) => Promise<
+		| { ok: true; target: BrowserUseCdpTargetIdentity }
+		| { ok: false; cause: BrowserUseTargetProofRefusalCause }
+	>;
 	/** Presence-backed lifecycle signer. Ordinary runbook execution never calls it. */
 	bindingApprovalBroker?: BrowserUseBindingApprovalBrokerPort;
 	/** Presence-free verifier for immutable binding revisions. */
 	bindingApprovalReceiptVerifier?: BrowserUseBindingApprovalReceiptVerifier;
+	/** Descriptor-private native picker and one-use selection signer. */
+	bindingSelectionCeremony?: BrowserUseBindingSelectionCeremonyPort;
+	/** Offline selection-grant verifier with atomic reservation custody. */
+	bindingSelectionGrantVerifier?: BrowserUseBindingSelectionGrantVerifier;
 	/** Test/composition seam for an already approved binding catalog owner. */
 	runbookApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
@@ -1383,13 +1417,74 @@ export function createDefaultBrowserUseRuntime(
 	};
 }
 
+function createP256BindingSelectionGrantVerifier(
+	runtime: BrowserUseRuntime,
+	identity: BrowserUseReviewedActionVerifierIdentity,
+): BrowserUseBindingSelectionGrantVerifier {
+	let publicKey: ReturnType<typeof createPublicKey> | undefined;
+	try {
+		const raw = Buffer.from(identity.public_key, "base64");
+		if (raw.length !== 65 || raw[0] !== 0x04) {
+			throw new Error("invalid P-256 uncompressed public key");
+		}
+		publicKey = createPublicKey({
+			key: {
+				kty: "EC",
+				crv: "P-256",
+				x: raw.subarray(1, 33).toString("base64url"),
+				y: raw.subarray(33, 65).toString("base64url"),
+			},
+			format: "jwk",
+		});
+	} catch {
+		publicKey = undefined;
+	}
+	return createBindingSelectionGrantVerifier({
+		verifier: identity,
+		verifySignature: ({ digest, signature, key_id }) => {
+			if (publicKey === undefined || key_id !== identity.key_id) return false;
+			try {
+				return verify(
+					"sha256",
+					Buffer.from(digest, "hex"),
+					publicKey,
+					Buffer.from(signature, "base64"),
+				);
+			} catch {
+				return false;
+			}
+		},
+		reserveGrant: async (grantId) => {
+			const opened = await openBrowserUsePaths(runtime.platformFs, runtime.env);
+			if (!opened.ok) return false;
+			const root = join(
+				opened.paths.resolution.roots.state,
+				"binding-selection-grants",
+			);
+			try {
+				await runtime.platformFs.mkdir(root, { recursive: true, mode: 0o700 });
+				const metadata = await runtime.platformFs.lstat(root);
+				if (metadata?.kind !== "directory" || metadata.mode !== 0o700) return false;
+				await runtime.platformFs.createExclusive(
+					join(root, grantId),
+					`${grantId}\n`,
+					0o600,
+				);
+				await runtime.platformFs.syncDirectory(root);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+	});
+}
+
 /**
  * Production runtime construction with native-capability wiring (auth plan
  * U3a/U3b). Builds the default runtime, then queries the native security seam:
- * only an `admitted` product yields a real Token Retrieval Port. On this
- * machine the product is unsigned/absent, so `authTokenRetrieval` stays
- * undefined and the public auth command keeps returning the typed
- * `native-capability-absent` evaluation — byte-identical to today. An explicit
+ * only an `admitted` product yields a real Token Retrieval Port. An absent or
+ * invalid product leaves `authTokenRetrieval` undefined and the public auth
+ * command returns the typed `native-capability-absent` evaluation. An explicit
  * `overrides.authTokenRetrieval` (or a caller-supplied port) is honored as-is
  * and never overwritten by the seam probe.
  *
@@ -1453,6 +1548,30 @@ export async function createProductionBrowserUseRuntime(
 			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
 		}
 	}
+	const runtimeHome = runtime.env.HOME;
+	const installedBindingSelectionCapability =
+		runtime.bindingSelectionCeremony === undefined &&
+		runtimeHome !== undefined
+			? await (async () => {
+					const paths = resolveBrowserUsePaths(runtime.env);
+					if (!paths.ok) return undefined;
+					const configRoot = paths.resolution.roots.config;
+					const inspected = await inspectBrowserUseRoot(runtime.platformFs, {
+						kind: "config",
+						path: configRoot,
+					});
+					if (!inspected.ok || !inspected.exists) return undefined;
+					const canonicalConfigRoot = await runtime.platformFs.realpath(configRoot);
+					if (canonicalConfigRoot === undefined) return undefined;
+					const result = await inspectBindingSelectionNativeCapability({
+						home: runtimeHome,
+						configRoot: canonicalConfigRoot,
+					});
+					return result.status === "admitted"
+						? { ...result, configRoot: canonicalConfigRoot }
+						: undefined;
+				})()
+			: undefined;
 	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
 	if (
 		runtime.runbookHumanIdentityAttestation === undefined &&
@@ -1480,11 +1599,38 @@ export async function createProductionBrowserUseRuntime(
 	) {
 		runtime.bindingApprovalBroker = createNativeBindingApprovalBroker(brokerPath);
 	}
+	const selectionOwner = environmentTokenSupervisorDeps(runtime.env);
+	if (
+		runtime.bindingSelectionCeremony === undefined &&
+		installedBindingSelectionCapability !== undefined &&
+		selectionOwner?.opPath !== undefined
+	) {
+		runtime.bindingSelectionCeremony = createNativeBindingSelectionCeremony(
+			installedBindingSelectionCapability.brokerPath,
+			{
+				supervisorPath: installedBindingSelectionCapability.supervisorPath,
+				opPath: selectionOwner.opPath,
+				configRoot: installedBindingSelectionCapability.configRoot,
+			},
+		);
+	}
+	if (
+		runtime.bindingSelectionGrantVerifier === undefined &&
+		reviewedActionVerifierIdentity !== undefined
+	) {
+		runtime.bindingSelectionGrantVerifier =
+			createP256BindingSelectionGrantVerifier(
+				runtime,
+				reviewedActionVerifierIdentity,
+			);
+	}
 	if (
 		runtime.runbookApprovedBindingResolver === undefined &&
-		runtime.bindingApprovalReceiptVerifier !== undefined
+		(runtime.bindingApprovalReceiptVerifier !== undefined ||
+			runtime.bindingSelectionGrantVerifier !== undefined)
 	) {
 		const verifier = runtime.bindingApprovalReceiptVerifier;
+		const selectionGrantVerifier = runtime.bindingSelectionGrantVerifier;
 		runtime.runbookApprovedBindingResolver = async (input) => {
 			const opened = await inspectBrowserUsePaths(runtime.platformFs, runtime.env);
 			if (!opened.ok) return null;
@@ -1492,6 +1638,7 @@ export async function createProductionBrowserUseRuntime(
 				fs: runtime.platformFs,
 				root: join(opened.paths.resolution.roots.state, "binding-catalog"),
 				verifier,
+				selectionGrantVerifier,
 			});
 			const resolved = await catalog.resolve({
 				binding_ref: input.binding_ref,

@@ -85,6 +85,8 @@ import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-envi
 import {
 	type BrowserUseDevToolsRequest,
 	type BrowserUseMintedVerifiedTarget,
+	type BrowserUseCdpTargetIdentity,
+	type BrowserUseTargetProofRefusalCause,
 	mintBrowserUseVerifiedTarget,
 	resolveBrowserUseCdpTargetIdentity,
 } from "./browser-use-target-proof";
@@ -122,8 +124,15 @@ import {
 import { createBrowserUseAuthContract } from "./browser-use-auth";
 import {
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
+	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
+import {
+	type BrowserUseBindingSelectionGrant,
+	type BrowserUseBindingSelectionRequest,
+	bindingSelectionCandidateDigestOf,
+} from "./browser-use-binding-selection";
 import {
 	acquireBrowserUseAuthAccess,
 	managedBrowserUseAuthAccessProvider,
@@ -140,6 +149,7 @@ import {
 	RUNTIME_FAILURE_EXIT_CODE,
 	USAGE_EXIT_CODE,
 	actionFor,
+	candidateIdOf,
 	redactUnsafeText,
 	stringField,
 	targetEnvelopeIdOf,
@@ -211,6 +221,7 @@ import type {
 	BrowserUseAuthContext,
 	BrowserUseBindingResolutionKey,
 	BrowserUseItemBinding,
+	BrowserUseVaultItemEvidence,
 } from "./browser-use-auth-bindings";
 import {
 	isBrowserUseAuthContext,
@@ -239,6 +250,20 @@ import {
 	executeAgentBrowserTask,
 	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
+import {
+	type BrowserCustodyRefusalCode,
+	type BrowserLaneLease,
+	type TargetOperationLease,
+	type TargetOperationLeaseResult,
+	acquireBrowserLaneLease,
+	acquireTargetOperationLease,
+	browserAuthorityIdOf,
+	heartbeatBrowserLaneLease,
+	heartbeatTargetOperationLease,
+	releaseBrowserLaneLease,
+	releaseRunTargetOwnership,
+	releaseTargetOperationLease,
+} from "./browser-use-browser-custody";
 import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
 import {
 	type ChromeTask,
@@ -247,12 +272,14 @@ import {
 	type ChromeTaskIntent,
 	compileChromeOperationSet,
 	executeChromeTask,
+	resolveChromeTaskPageUrl,
 } from "./browser-use-chrome-task";
 import {
 	type PlaywrightTask,
 	type PlaywrightTaskIntent,
 	type PlaywrightTaskResult,
 	executePlaywrightTask,
+	resolvePlaywrightTaskPageUrl,
 } from "./browser-use-playwright-task";
 import {
 	type BrowserUseRunbookAuthDelivery,
@@ -905,6 +932,16 @@ async function executeCommand(input: {
 				runIdExplicit: input.runIdExplicit,
 				diagnosticVerbose: input.diagnosticVerbose,
 				durationMs: input.durationMs,
+				resolveTargetIdentity: async (targetInput) =>
+					await resolveTargetIdentityForHandoff({
+						runtime,
+						handoff: targetInput.handoff,
+						expectedUrl: targetInput.expectedUrl,
+						allowedOrigins: targetInput.allowedOrigins,
+						...(targetInput.preferredTargetId === undefined
+							? {}
+							: { preferredTargetId: targetInput.preferredTargetId }),
+					}),
 			});
 	}
 
@@ -1606,6 +1643,104 @@ function startRunbookDispatchLeaseHeartbeat(
 						? renewed.message
 						: renewed.continuation.summary;
 				failure = platformStoreFailureOf(renewed.code, message);
+				break;
+			}
+			currentLease = renewed.lease;
+		}
+	})();
+	return {
+		failure: () => failure,
+		stop: async () => {
+			stopRequested = true;
+			wake?.();
+			await completed;
+			return currentLease;
+		},
+	};
+}
+
+function startTargetOperationLeaseHeartbeat(
+	deps: RunStoreDeps,
+	lease: TargetOperationLease,
+	ttlMs: number,
+): {
+	failure: () => PlatformStoreFailure | undefined;
+	stop: () => Promise<TargetOperationLease>;
+} {
+	let currentLease = lease;
+	let failure: PlatformStoreFailure | undefined;
+	let stopRequested = false;
+	let wake: (() => void) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const completed = (async () => {
+		while (!stopRequested) {
+			await new Promise<void>((resolve) => {
+				const finishWait = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					timer = undefined;
+					wake = undefined;
+					resolve();
+				};
+				wake = finishWait;
+				timer = setTimeout(finishWait, Math.floor(ttlMs / 3));
+			});
+			if (stopRequested) break;
+			const renewed = await heartbeatTargetOperationLease(
+				deps,
+				currentLease,
+				{ ttlMs },
+			);
+			if (!renewed.ok) {
+				failure = platformStoreFailureOf(renewed.code, renewed.message);
+				break;
+			}
+			currentLease = renewed.lease;
+		}
+	})();
+	return {
+		failure: () => failure,
+		stop: async () => {
+			stopRequested = true;
+			wake?.();
+			await completed;
+			return currentLease;
+		},
+	};
+}
+
+function startBrowserLaneLeaseHeartbeat(
+	deps: RunStoreDeps,
+	lease: BrowserLaneLease,
+	ttlMs: number,
+): {
+	failure: () => PlatformStoreFailure | undefined;
+	stop: () => Promise<BrowserLaneLease>;
+} {
+	let currentLease = lease;
+	let failure: PlatformStoreFailure | undefined;
+	let stopRequested = false;
+	let wake: (() => void) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const completed = (async () => {
+		while (!stopRequested) {
+			await new Promise<void>((resolve) => {
+				const finishWait = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					timer = undefined;
+					wake = undefined;
+					resolve();
+				};
+				wake = finishWait;
+				timer = setTimeout(finishWait, Math.floor(ttlMs / 3));
+			});
+			if (stopRequested) break;
+			const renewed = await heartbeatBrowserLaneLease(
+				deps,
+				currentLease,
+				{ ttlMs },
+			);
+			if (!renewed.ok) {
+				failure = platformStoreFailureOf(renewed.code, renewed.message);
 				break;
 			}
 			currentLease = renewed.lease;
@@ -2407,6 +2542,7 @@ function baselineChromeTask(input: {
 	runId: string;
 	pageId: number;
 	allowedOrigin: string;
+	expectedTargetUrl?: string;
 	intent: BrowserUseTaskIntent;
 	artifactDir?: string;
 }): ChromeTask {
@@ -2415,6 +2551,9 @@ function baselineChromeTask(input: {
 		run_id: input.runId,
 		target_page_id: input.pageId,
 		allowed_origins: [input.allowedOrigin],
+		...(input.expectedTargetUrl === undefined
+			? {}
+			: { expected_target_url: input.expectedTargetUrl }),
 		operations: compileChromeOperationSet(input.intent as ChromeTaskIntent),
 		...(input.artifactDir !== undefined
 			? { artifact_dir: input.artifactDir }
@@ -2432,6 +2571,7 @@ function baselinePlaywrightTask(input: {
 	runId: string;
 	tabIndex: number;
 	allowedOrigin: string;
+	expectedTargetUrl?: string;
 	intent: BrowserUseTaskIntent;
 	semanticClick?: TaskRunSemanticClick;
 }): PlaywrightTask {
@@ -2440,6 +2580,9 @@ function baselinePlaywrightTask(input: {
 		run_id: input.runId,
 		target_tab_index: input.tabIndex,
 		allowed_origins: [input.allowedOrigin],
+		...(input.expectedTargetUrl === undefined
+			? {}
+			: { expected_target_url: input.expectedTargetUrl }),
 		intent: input.intent as PlaywrightTaskIntent,
 		...(input.semanticClick !== undefined
 			? {
@@ -2793,6 +2936,60 @@ function mapAgentBrowserOutcome(
 	};
 }
 
+function targetCustodyRefusalMapping(
+	refusal: { code: BrowserCustodyRefusalCode; message: string },
+): AgentBrowserDispatchMapping {
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		mutationDispatched: false,
+		failure: {
+			code: refusal.code,
+			message: refusal.message,
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability:
+				refusal.code === "target_lease_held" ||
+				refusal.code === "browser_lane_held"
+					? "retry"
+					: "repair_state",
+			dataExtra: { custody_refusal: refusal.code },
+		},
+	};
+}
+
+function targetProofRefusalMapping(
+	cause: BrowserUseTargetProofRefusalCause,
+): AgentBrowserDispatchMapping {
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		mutationDispatched: false,
+		failure: {
+			code: cause,
+			message:
+				cause === "origin-mismatch"
+					? "The resolved CDP target is not on the task's allowed origin."
+					: "The task page could not be resolved to exactly one canonical CDP target.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "retry",
+		},
+	};
+}
+
+function targetOperationForAgentBrowserSteps(
+	steps: readonly AgentBrowserTask["steps"][number][],
+): "read" | "action" {
+	return steps.some(
+		(step) =>
+			step.kind !== "snapshot" &&
+			!(step.kind === "evaluate" && step.effect === "read"),
+	)
+		? "action"
+		: "read";
+}
+
 function runbookTargetRepairMapping(
 	result: Extract<AgentBrowserTargetResolutionResult, { ok: false }>,
 ): AgentBrowserDispatchMapping {
@@ -2913,6 +3110,74 @@ async function acquireVerifiedHandoff(input: {
 		rawHandoffData = undefined;
 	}
 	return { ok: true, handoff: parse.facts, rawHandoffData };
+}
+
+async function acquireTaskTargetCustody(input: {
+	runtime: BrowserUseRuntime;
+	deps: RunStoreDeps;
+	handoff: HandoffFacts;
+	runId: string;
+	adapterId: BrowserAdapterId;
+	allowedOrigin: string;
+	expectedUrl: string;
+	operation: "read" | "action";
+}): Promise<
+	| {
+			ok: true;
+			target: BrowserUseCdpTargetIdentity;
+			lease: TargetOperationLease;
+			heartbeat: ReturnType<typeof startTargetOperationLeaseHeartbeat>;
+	  }
+	| { ok: false; mapping: AgentBrowserDispatchMapping }
+> {
+	const identity = await resolveTargetIdentityForHandoff({
+		runtime: input.runtime,
+		handoff: input.handoff,
+		expectedUrl: input.expectedUrl,
+		allowedOrigins: [input.allowedOrigin],
+	});
+	if (!identity.ok) {
+		return { ok: false, mapping: targetProofRefusalMapping(identity.cause) };
+	}
+	const targetEnvelopeId = targetEnvelopeIdOf({
+		runId: input.runId,
+		mode: "handoff-bound",
+		adapter: input.adapterId,
+		handoffEvidenceId: input.handoff.handoffEvidenceId,
+	});
+	const acquired = await acquireTargetOperationLease(input.deps, {
+		authorityId: browserAuthorityIdOf(input.handoff),
+		runId: input.runId,
+		adapterId: input.adapterId,
+		rawTargetId: identity.target.target_id,
+		operation: input.operation,
+		ttlMs: 120_000,
+		ownershipEvidence: {
+			kind: "explicit-adoption",
+			adapter_id: input.adapterId,
+			run_id: input.runId,
+			raw_target_id: identity.target.target_id,
+			target_envelope_id: targetEnvelopeId,
+			target_candidate_id: candidateIdOf(targetEnvelopeId, [
+				"cdp_target_id",
+				identity.target.target_id,
+			]),
+			target_candidate_identity: { kind: "cdp-target-id" },
+		},
+	});
+	if (!acquired.ok) {
+		return { ok: false, mapping: targetCustodyRefusalMapping(acquired) };
+	}
+	return {
+		ok: true,
+		target: identity.target,
+		lease: acquired.lease,
+		heartbeat: startTargetOperationLeaseHeartbeat(
+			input.deps,
+			acquired.lease,
+			120_000,
+		),
+	};
 }
 
 async function runTaskRun(input: PlatformCommandInput): Promise<number> {
@@ -3165,69 +3430,131 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	// baselinePlaywrightTask.
 	if (route.lane_id === "agent-browser") {
 		const steps = baselineAgentBrowserSteps(semanticClick);
-		let targetTabId = requestedTabId;
-		let expectedTargetUrl: string | undefined;
-		if (targetTabId === undefined) {
-			const targetEnvelopeId = targetEnvelopeIdOf({
-				runId: run.run_id,
-				mode: "handoff-bound",
-				adapter: "agent-browser",
-				handoffEvidenceId: handoff.handoffEvidenceId,
-			});
-			const targetResolution = await resolveAgentBrowserTaskTarget(
-				{ runCommand: input.runtime.runCommand },
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId: run.run_id,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: handoff.handoffEvidenceId,
+		});
+		const targetResolution = await resolveAgentBrowserTaskTarget(
+			{ runCommand: input.runtime.runCommand },
+			{
+				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+				run_id: run.run_id,
+				allowed_origins: [allowedOrigin],
+				steps,
+				target:
+					requestedTabId === undefined
+						? { kind: "auto", target_envelope_id: targetEnvelopeId }
+						: {
+								kind: "exact",
+								tab_id: requestedTabId,
+								target_envelope_id: targetEnvelopeId,
+							},
+			},
+		);
+		if (!targetResolution.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				mapAgentBrowserOutcome(targetResolution),
 				{
-					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
-					run_id: run.run_id,
-					allowed_origins: [allowedOrigin],
-					steps,
-					target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
 				},
 			);
-			if (!targetResolution.ok) {
-				return await recordTaskRunOutcome(
-					input,
-					store.deps,
-					run,
-					route,
-					mapAgentBrowserOutcome(targetResolution),
-					{
-						...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
-					},
-				);
-			}
-			targetTabId = targetResolution.target_tab_id;
-			expectedTargetUrl = targetResolution.target_url;
 		}
-		let dispatchRun = run;
-		let mutationMarkerFailure: PlatformStoreFailure | undefined;
-		const result = await executeAgentBrowserTask(
-			{
-				runCommand: input.runtime.runCommand,
-				beforeMutationDispatch: async ({ run_id }) => {
-					if (run_id !== dispatchRun.run_id) return { ok: false };
-					const marked = await persistTaskRunMutationDispatch(
-						store.deps,
-						dispatchRun,
-					);
-					if (!marked.ok) {
-						mutationMarkerFailure = marked.failure;
-						return { ok: false };
-					}
-					dispatchRun = marked.run;
-					return { ok: true };
+		const targetLease = await acquireTargetOperationLease(store.deps, {
+			authorityId: browserAuthorityIdOf(handoff),
+			runId: run.run_id,
+			adapterId: "agent-browser",
+			rawTargetId: targetResolution.target_id,
+			operation: targetOperationForAgentBrowserSteps(steps),
+			ttlMs: 120_000,
+			ownershipEvidence: {
+				kind: "explicit-adoption",
+				adapter_id: "agent-browser",
+				run_id: run.run_id,
+				raw_target_id: targetResolution.target_id,
+				target_envelope_id: targetEnvelopeId,
+				target_candidate_id: targetResolution.binding.target_candidate_id,
+				target_candidate_identity: {
+					kind: "adapter-page-id",
+					raw_adapter_page_id: targetResolution.target_tab_id,
 				},
 			},
-			baselineAgentBrowserTask({
-				handoff,
-				rawHandoff: rawHandoffData,
-				runId: run.run_id,
-				targetTabId,
-				...(expectedTargetUrl !== undefined ? { expectedTargetUrl } : {}),
-				allowedOrigin,
-				steps,
-			}),
+		});
+		if (!targetLease.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				targetCustodyRefusalMapping(targetLease),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
+		const targetHeartbeat = startTargetOperationLeaseHeartbeat(
+			store.deps,
+			targetLease.lease,
+			120_000,
 		);
+		let dispatchRun = run;
+		let mutationMarkerFailure: PlatformStoreFailure | undefined;
+		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
+		let result: AgentBrowserExecutionResult;
+		try {
+			result = await executeAgentBrowserTask(
+				{
+					runCommand: input.runtime.runCommand,
+					beforeMutationDispatch: async ({ run_id }) => {
+						if (run_id !== dispatchRun.run_id) return { ok: false };
+						const marked = await persistTaskRunMutationDispatch(
+							store.deps,
+							dispatchRun,
+						);
+						if (!marked.ok) {
+							mutationMarkerFailure = marked.failure;
+							return { ok: false };
+						}
+						dispatchRun = marked.run;
+						return { ok: true };
+					},
+				},
+				baselineAgentBrowserTask({
+					handoff,
+					rawHandoff: rawHandoffData,
+					runId: run.run_id,
+					targetTabId: targetResolution.target_tab_id,
+					expectedTargetUrl: targetResolution.target_url,
+					allowedOrigin,
+					steps,
+				}),
+			);
+		} finally {
+			const currentTargetLease = await targetHeartbeat.stop();
+			targetHeartbeatFailure = targetHeartbeat.failure();
+			await releaseTargetOperationLease(store.deps, currentTargetLease);
+			await releaseRunTargetOwnership(store.deps, run.run_id);
+		}
+		if (targetHeartbeatFailure !== undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				dispatchRun,
+				route,
+				targetCustodyRefusalMapping({
+					code: "target_lease_lost",
+					message: targetHeartbeatFailure.message,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
 		if (mutationMarkerFailure !== undefined) {
 			return emitPlatformStoreFailure(input, mutationMarkerFailure);
 		}
@@ -3270,22 +3597,139 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		const producesArtifacts =
 			route.intent === "performance-profile" ||
 			route.intent === "lighthouse-audit";
+		const chromeTask = baselineChromeTask({
+			rawHandoff: rawHandoffData,
+			runId: run.run_id,
+			pageId,
+			allowedOrigin,
+			intent: route.intent,
+		});
+		const selectedPage = await resolveChromeTaskPageUrl(input.runtime, chromeTask);
+		if (!selectedPage.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				targetProofRefusalMapping("target-proof-invalid"),
+				{ ...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}) },
+			);
+		}
+		const custody = await acquireTaskTargetCustody({
+			runtime: input.runtime,
+			deps: store.deps,
+			handoff,
+			runId: run.run_id,
+			adapterId: "chrome-devtools-mcp",
+			allowedOrigin,
+			expectedUrl: selectedPage.url,
+			operation: producesArtifacts ? "action" : "read",
+		});
+		if (!custody.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				custody.mapping,
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
 		let artifactDir: string | undefined;
 		if (producesArtifacts) {
 			artifactDir = store.deps.paths.state.artifactDir(run.run_id);
 			await input.runtime.ensureDirectory(artifactDir);
 		}
-		const result = await executeChromeTask(
-			input.runtime,
-			baselineChromeTask({
-				rawHandoff: rawHandoffData,
+		let browserLaneHeartbeat:
+			| ReturnType<typeof startBrowserLaneLeaseHeartbeat>
+			| undefined;
+		if (producesArtifacts) {
+			const lane = await acquireBrowserLaneLease(store.deps, {
+				authorityId: browserAuthorityIdOf(handoff),
 				runId: run.run_id,
-				pageId,
-				allowedOrigin,
-				intent: route.intent,
-				...(artifactDir !== undefined ? { artifactDir } : {}),
-			}),
-		);
+				mutation: "capture",
+				ttlMs: 120_000,
+			});
+			if (!lane.ok) {
+				const currentTargetLease = await custody.heartbeat.stop();
+				await releaseTargetOperationLease(store.deps, currentTargetLease);
+				await releaseRunTargetOwnership(store.deps, run.run_id);
+				return await recordTaskRunOutcome(
+					input,
+					store.deps,
+					run,
+					route,
+					targetCustodyRefusalMapping(lane),
+					{
+						...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+					},
+				);
+			}
+			browserLaneHeartbeat = startBrowserLaneLeaseHeartbeat(
+				store.deps,
+				lane.lease,
+				120_000,
+			);
+		}
+		let result: ChromeTaskExecutionResult;
+		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
+		let laneHeartbeatFailure: PlatformStoreFailure | undefined;
+		try {
+			result = await executeChromeTask(
+				input.runtime,
+				baselineChromeTask({
+					rawHandoff: rawHandoffData,
+					runId: run.run_id,
+					pageId,
+					allowedOrigin,
+					expectedTargetUrl: custody.target.top_level_url,
+					intent: route.intent,
+					...(artifactDir !== undefined ? { artifactDir } : {}),
+				}),
+			);
+		} finally {
+			if (browserLaneHeartbeat !== undefined) {
+				const lane = await browserLaneHeartbeat.stop();
+				laneHeartbeatFailure = browserLaneHeartbeat.failure();
+				await releaseBrowserLaneLease(store.deps, lane);
+			}
+			const targetLease = await custody.heartbeat.stop();
+			targetHeartbeatFailure = custody.heartbeat.failure();
+			await releaseTargetOperationLease(store.deps, targetLease);
+			await releaseRunTargetOwnership(store.deps, run.run_id);
+		}
+		if (targetHeartbeatFailure !== undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				targetCustodyRefusalMapping({
+					code: "target_lease_lost",
+					message: targetHeartbeatFailure.message,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
+		if (laneHeartbeatFailure !== undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				targetCustodyRefusalMapping({
+					code: "browser_lane_lost",
+					message: laneHeartbeatFailure.message,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
@@ -3300,36 +3744,105 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	}
 
 	if (route.lane_id === "playwright-cdp") {
+		const playwrightTask = baselinePlaywrightTask({
+			rawHandoff: rawHandoffData,
+			runId: run.run_id,
+			tabIndex: numericTabIndex ?? 0,
+			allowedOrigin,
+			intent: route.intent,
+			...(semanticClick !== undefined ? { semanticClick } : {}),
+		});
+		const selectedPage = await resolvePlaywrightTaskPageUrl(
+			{ runCommand: input.runtime.runCommand },
+			playwrightTask,
+		);
+		if (!selectedPage.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				targetProofRefusalMapping("target-proof-invalid"),
+				{ ...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}) },
+			);
+		}
+		const custody = await acquireTaskTargetCustody({
+			runtime: input.runtime,
+			deps: store.deps,
+			handoff,
+			runId: run.run_id,
+			adapterId: "playwright-cdp",
+			allowedOrigin,
+			expectedUrl: selectedPage.url,
+			operation: semanticClick === undefined ? "read" : "action",
+		});
+		if (!custody.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				custody.mapping,
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
+		}
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;
-		const result = await executePlaywrightTask(
-			{
-				runCommand: input.runtime.runCommand,
-				beforeMutationDispatch: async ({ run_id }) => {
-					if (run_id !== dispatchRun.run_id) return { ok: false };
-					const marked = await persistTaskRunMutationDispatch(
-						store.deps,
-						dispatchRun,
-					);
-					if (!marked.ok) {
-						mutationMarkerFailure = marked.failure;
-						return { ok: false };
-					}
-					dispatchRun = marked.run;
-					return { ok: true };
+		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
+		let result: PlaywrightTaskResult;
+		try {
+			result = await executePlaywrightTask(
+				{
+					runCommand: input.runtime.runCommand,
+					beforeMutationDispatch: async ({ run_id }) => {
+						if (run_id !== dispatchRun.run_id) return { ok: false };
+						const marked = await persistTaskRunMutationDispatch(
+							store.deps,
+							dispatchRun,
+						);
+						if (!marked.ok) {
+							mutationMarkerFailure = marked.failure;
+							return { ok: false };
+						}
+						dispatchRun = marked.run;
+						return { ok: true };
+					},
 				},
-			},
-			baselinePlaywrightTask({
-				rawHandoff: rawHandoffData,
-				runId: run.run_id,
-				tabIndex: numericTabIndex ?? 0,
-				allowedOrigin,
-				intent: route.intent,
-				...(semanticClick !== undefined ? { semanticClick } : {}),
-			}),
-		);
+				baselinePlaywrightTask({
+					rawHandoff: rawHandoffData,
+					runId: run.run_id,
+					tabIndex: numericTabIndex ?? 0,
+					allowedOrigin,
+					expectedTargetUrl: custody.target.top_level_url,
+					intent: route.intent,
+					...(semanticClick !== undefined ? { semanticClick } : {}),
+				}),
+			);
+		} finally {
+			const targetLease = await custody.heartbeat.stop();
+			targetHeartbeatFailure = custody.heartbeat.failure();
+			await releaseTargetOperationLease(store.deps, targetLease);
+			await releaseRunTargetOwnership(store.deps, run.run_id);
+		}
 		if (mutationMarkerFailure !== undefined) {
 			return emitPlatformStoreFailure(input, mutationMarkerFailure);
+		}
+		if (targetHeartbeatFailure !== undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				dispatchRun,
+				route,
+				targetCustodyRefusalMapping({
+					code: "target_lease_lost",
+					message: targetHeartbeatFailure.message,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
 		}
 		return await recordTaskRunOutcome(
 			input,
@@ -3552,6 +4065,8 @@ async function enterSubmitApprovalGate(input: {
 	run: BrowserUseSharedRun;
 	handoff: HandoffFacts;
 	targetTabId: string;
+	targetId: string;
+	targetLease: TargetOperationLease;
 	targetUrl: string;
 	gateStepIndex: number;
 	heldClaim: LeaseWriteClaim;
@@ -3646,6 +4161,12 @@ async function enterSubmitApprovalGate(input: {
 				root: artifactRoot,
 				format: "png",
 				fullPage: true,
+			},
+			custody: {
+				deps: input.deps,
+				rawTargetId: input.targetId,
+				targetLease: input.targetLease,
+				ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
 			},
 		});
 		if (!captured.ok) {
@@ -4991,7 +5512,7 @@ function environmentLoginDeliveryHook(input: {
 }
 
 function createWebSocketTargetTransport(
-	handoff: AgentBrowserVerifiedHandoff,
+	handoff: { endpoint: { ws: string } },
 ): CloseableTargetTransport {
 	const socket = new WebSocket(handoff.endpoint.ws);
 	const pending = new Map<
@@ -5086,6 +5607,39 @@ function createWebSocketTargetTransport(
 			socket.close();
 		},
 	};
+}
+
+async function resolveTargetIdentityForHandoff(input: {
+	runtime: BrowserUseRuntime;
+	handoff: HandoffFacts;
+	expectedUrl: string;
+	allowedOrigins: readonly string[];
+	preferredTargetId?: string;
+}): Promise<
+	| { ok: true; target: BrowserUseCdpTargetIdentity }
+	| { ok: false; cause: BrowserUseTargetProofRefusalCause }
+> {
+	const request = {
+		expected_url: input.expectedUrl,
+		allowed_origins: input.allowedOrigins,
+		...(input.preferredTargetId === undefined
+			? {}
+			: { preferred_target_id: input.preferredTargetId }),
+	};
+	if (input.runtime.resolveTargetIdentity !== undefined) {
+		return await input.runtime.resolveTargetIdentity(request);
+	}
+	const transport = createWebSocketTargetTransport({
+		endpoint: { ws: input.handoff.endpointWs },
+	});
+	try {
+		return await resolveBrowserUseCdpTargetIdentity(
+			transport.transport,
+			request,
+		);
+	} finally {
+		transport.close();
+	}
 }
 
 async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<number> {
@@ -6220,6 +6774,12 @@ async function runRunbookRun(
 		store.deps,
 		dispatchLease.lease,
 	);
+	let targetOperationLease:
+		| Extract<TargetOperationLeaseResult, { ok: true }>["lease"]
+		| undefined;
+	let targetOperationHeartbeat:
+		| ReturnType<typeof startTargetOperationLeaseHeartbeat>
+		| undefined;
 	let runbookAccessLease:
 		| Extract<
 				Awaited<ReturnType<typeof acquireBrowserUseAuthAccess>>,
@@ -6227,7 +6787,51 @@ async function runRunbookRun(
 		  >["lease"]
 		| undefined;
 	try {
-	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
+		const targetLease = await acquireTargetOperationLease(store.deps, {
+			authorityId: browserAuthorityIdOf(handoff),
+			runId: run.run_id,
+			adapterId: "agent-browser",
+			rawTargetId: targetResolution.target_id,
+			operation:
+				plan.auth_context_ref !== undefined ||
+				targetOperationForAgentBrowserSteps(plan.steps) === "action"
+					? "action"
+					: "read",
+			ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+			ownershipEvidence: {
+				kind: "explicit-adoption",
+				adapter_id: "agent-browser",
+				run_id: run.run_id,
+				raw_target_id: targetResolution.target_id,
+				target_envelope_id: targetEnvelopeId,
+				target_candidate_id: targetResolution.binding.target_candidate_id,
+				target_candidate_identity: {
+					kind: "adapter-page-id",
+					raw_adapter_page_id: targetResolution.target_tab_id,
+				},
+			},
+		});
+		if (!targetLease.ok) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				{
+					lane_id: "agent-browser",
+					source: "intent-preferred",
+					intent: "runbook-execution",
+				},
+				targetCustodyRefusalMapping(targetLease),
+				{ runbookNextStep: resumeFromStep, heldClaim: dispatchClaim },
+			);
+		}
+		targetOperationLease = targetLease.lease;
+		targetOperationHeartbeat = startTargetOperationLeaseHeartbeat(
+			store.deps,
+			targetLease.lease,
+			RUNBOOK_DISPATCH_LEASE_TTL_MS,
+		);
+		// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
 	// non-sensitive until confidential delivery participates. A confidential
 	// runbook turns the run sensitive exactly once when the auth-delivery context
 	// engages (below); the guard is held for the command's lifetime.
@@ -6490,7 +7094,8 @@ async function runRunbookRun(
 			}
 			if (
 				postAuthTarget.binding.target_candidate_id !==
-				targetResolution.binding.target_candidate_id
+					targetResolution.binding.target_candidate_id ||
+				postAuthTarget.target_id !== targetResolution.target_id
 			) {
 				return emitPlatformStoreFailure(
 					input,
@@ -6512,6 +7117,8 @@ async function runRunbookRun(
 			run,
 			handoff,
 			targetTabId: targetResolution.target_tab_id,
+			targetId: targetResolution.target_id,
+			targetLease: targetLease.lease,
 			targetUrl: executionExpectedTargetUrl,
 			gateStepIndex: plan.approval_gate.runbook_step_index,
 			heldClaim: dispatchClaim,
@@ -6593,6 +7200,10 @@ async function runRunbookRun(
 	if (heartbeatFailure !== undefined) {
 		return emitPlatformStoreFailure(input, heartbeatFailure);
 	}
+	const targetHeartbeatFailure = targetOperationHeartbeat?.failure();
+	if (targetHeartbeatFailure !== undefined) {
+		return emitPlatformStoreFailure(input, targetHeartbeatFailure);
+	}
 
 	// Persist the executor's structural truth through the shared pipeline. If
 	// confidential delivery engaged (a confidential runbook routed through the
@@ -6621,6 +7232,8 @@ async function runRunbookRun(
 			run: dispatchRun,
 			handoff,
 			targetTabId: targetResolution.target_tab_id,
+			targetId: targetResolution.target_id,
+			targetLease: targetLease.lease,
 			targetUrl: executionExpectedTargetUrl,
 			gateStepIndex: outcome.plan.approval_gate.runbook_step_index,
 			heldClaim: dispatchClaim,
@@ -6657,8 +7270,14 @@ async function runRunbookRun(
 					}),
 		},
 	);
-		} finally {
-			await settleAuthCleanup("runbook-auth-access-lease", async () =>
+			} finally {
+				if (targetOperationHeartbeat !== undefined) {
+					targetOperationLease = await targetOperationHeartbeat.stop();
+				}
+				if (targetOperationLease !== undefined) {
+					await releaseTargetOperationLease(store.deps, targetOperationLease);
+				}
+				await settleAuthCleanup("runbook-auth-access-lease", async () =>
 				await runbookAccessLease?.release(),
 			);
 			await settleAuthCleanup("runbook-auth-dispatch-lease", async () => {
@@ -8486,6 +9105,7 @@ async function runAuthBinding(input: PlatformCommandInput): Promise<number> {
 		fs: input.runtime.platformFs,
 		root: join(opened.paths.resolution.roots.state, "binding-catalog"),
 		verifier,
+		selectionGrantVerifier: input.runtime.bindingSelectionGrantVerifier,
 	});
 
 	if (input.parsed.subcommand === "binding list") {
@@ -8652,9 +9272,157 @@ function retrievalBlockedEvaluation(
 	};
 }
 
+function selectionBlockedEvaluation(code: string): AuthReadinessEvaluation {
+	return {
+		status: "selection-blocked",
+		blocked_cause: "ambiguous-binding-selection",
+		detail: { refusal_code: code },
+		continuationId: "request-binding-selection-grant",
+	};
+}
+
+function selectionGrantMatchesLiveItem(
+	request: BrowserUseBindingSelectionRequest,
+	item: BrowserUseVaultItemEvidence,
+	grant: BrowserUseBindingSelectionGrant,
+): boolean {
+	return (
+		grant.resolution_key.binding_ref === request.resolution_key.binding_ref &&
+		grant.resolution_key.service_id === request.resolution_key.service_id &&
+		grant.resolution_key.auth_context === request.resolution_key.auth_context &&
+		grant.resolution_key.environment === request.resolution_key.environment &&
+		grant.resolution_key.profile === request.resolution_key.profile &&
+		grant.facts.run_id === request.facts.run_id &&
+		grant.facts.service_id === request.facts.service_id &&
+		grant.facts.origin === request.facts.origin &&
+		grant.facts.vault_id === request.facts.vault_id &&
+		grant.facts.candidate_set_digest === request.facts.candidate_set_digest &&
+		item.state === "active" &&
+		item.item_id === grant.binding.item_id &&
+		item.vault_id === grant.binding.vault_id &&
+		item.origins.includes(request.facts.origin) &&
+		JSON.stringify(item.login_paths) === JSON.stringify(grant.binding.allowed_login_paths) &&
+		JSON.stringify(item.supported_methods) === JSON.stringify(grant.binding.allowed_auth_methods)
+	);
+}
+
+async function evaluateBindingSelection(
+	input: PlatformCommandInput,
+	run: BrowserUseSharedRun | undefined,
+	port: BrowserUseTokenRetrievalPort,
+): Promise<AuthReadinessEvaluation> {
+	if (run === undefined) return selectionBlockedEvaluation("selection_run_required");
+	const fragmentValue = run.auth_fragment?.fragment;
+	if (
+		validateAuthFragmentShape(fragmentValue).length > 0 ||
+		run.state !== "awaiting-approval"
+	) {
+		return selectionBlockedEvaluation("selection_run_context_invalid");
+	}
+	const fragment = fragmentValue as BrowserUseAuthTransactionFragment;
+	if (
+		fragment.status !== "blocked" ||
+		(fragment.blocked_cause !== "ambiguous-binding-selection" &&
+			fragment.blocked_cause !== "binding-approval-required") ||
+		fragment.binding.run_id !== run.run_id ||
+		fragment.binding.service_id.length === 0 ||
+		fragment.binding.auth_context !== "interactive-login"
+	) {
+		return selectionBlockedEvaluation("selection_run_context_invalid");
+	}
+	const ceremony = input.runtime.bindingSelectionCeremony;
+	const verifier = input.runtime.bindingSelectionGrantVerifier;
+	if (ceremony === undefined || verifier === undefined) {
+		return {
+			status: "native-capability-absent",
+			blocked_cause: "ambiguous-binding-selection",
+			continuationId: "acquire-native-capability",
+		};
+	}
+	const opened = await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
+	if (!opened.ok) return selectionBlockedEvaluation(opened.refusal.code);
+	const catalogRoot = join(
+		opened.paths.resolution.roots.state,
+		"binding-catalog",
+	);
+	const catalog = createBindingCatalog({
+		fs: input.runtime.platformFs,
+		root: catalogRoot,
+		verifier: input.runtime.bindingApprovalReceiptVerifier,
+		selectionGrantVerifier: verifier,
+		now: input.runtime.now,
+	});
+	if ((await input.runtime.platformFs.lstat(catalogRoot)) !== undefined) {
+		const standing = await catalog.resolve({
+			binding_ref: fragment.binding.service_id,
+			service_id: fragment.binding.service_id,
+			auth_context: "interactive-login",
+			environment: fragment.binding.environment,
+			profile: fragment.binding.profile,
+		});
+		if (!standing.ok) return selectionBlockedEvaluation(standing.code);
+		if (standing.status !== "missing") {
+			return selectionBlockedEvaluation("selection_binding_already_recorded");
+		}
+	}
+	const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+	const before = await port.listLoginItems({ vault_id: vaultId });
+	if (!before.ok) return retrievalBlockedEvaluation(before.rejection);
+	if (before.items.length === 0) return selectionBlockedEvaluation("selection_candidates_absent");
+	const request: BrowserUseBindingSelectionRequest = {
+		resolution_key: {
+			binding_ref: fragment.binding.service_id,
+			service_id: fragment.binding.service_id,
+			auth_context: "interactive-login",
+			environment: fragment.binding.environment,
+			profile: fragment.binding.profile,
+		},
+		facts: {
+			run_id: run.run_id,
+			service_id: fragment.binding.service_id,
+			origin: fragment.binding.origin,
+			vault_id: vaultId,
+			candidate_set_digest: bindingSelectionCandidateDigestOf(before.items),
+		},
+		candidate_count: before.items.length,
+	};
+	const selected = await ceremony.requestBindingSelection(request);
+	if (!selected.ok) return selectionBlockedEvaluation(selected.rejection.code);
+	const consumed = await verifier.verifyAndReserve({
+		grant: selected.grant,
+		expected: request,
+		at_epoch_ms: input.runtime.now(),
+	});
+	if (!consumed.ok) return selectionBlockedEvaluation(consumed.code);
+	const after = await port.listLoginItems({ vault_id: vaultId });
+	if (!after.ok) return retrievalBlockedEvaluation(after.rejection);
+	if (bindingSelectionCandidateDigestOf(after.items) !== request.facts.candidate_set_digest) {
+		return selectionBlockedEvaluation("selection_candidates_drifted");
+	}
+	const live = await port.getLoginItem({
+		vault_id: vaultId,
+		item_id: consumed.grant.binding.item_id,
+	});
+	if (!live.ok) return selectionBlockedEvaluation("selection_item_unavailable");
+	if (!selectionGrantMatchesLiveItem(request, live.item, consumed.grant)) {
+		return selectionBlockedEvaluation("selection_item_drifted");
+	}
+	const committed = await catalog.commitSelectionGrant(consumed.grant);
+	if (!committed.ok) return selectionBlockedEvaluation(committed.code);
+	return {
+		status: "binding-active",
+		detail: {
+			binding_ref: request.resolution_key.binding_ref,
+			revision: consumed.grant.binding.binding_revision,
+		},
+		continuationId: "inspect-auth-readiness",
+	};
+}
+
 async function evaluateAuthReadiness(
 	subcommand: BrowserUseAuthRepairSubcommand,
 	input: PlatformCommandInput,
+	run?: BrowserUseSharedRun,
 ): Promise<AuthReadinessEvaluation> {
 	const port = input.runtime.authTokenRetrieval;
 	if (port === undefined) return NATIVE_CAPABILITY_ABSENT;
@@ -8726,25 +9494,7 @@ async function evaluateAuthReadiness(
 			};
 		}
 		case "request-binding-selection-grant": {
-			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
-			const items = await port.listLoginItems({ vault_id: vaultId });
-			if (!items.ok) return retrievalBlockedEvaluation(items.rejection);
-			// The selection set the signed one-use grant must bind (R20).
-			// Signing needs the native Approval Broker — absent until U3b — so
-			// the projection is honest about what remains.
-			return {
-				status: "selection-candidates-projected",
-				detail: {
-					vault_id: vaultId,
-					candidate_count: items.items.length,
-					candidates: items.items.map((item, index) => ({
-						ordinal: index + 1,
-						item_id: item.item_id,
-						item_state: item.state,
-					})),
-				},
-				continuationId: "acquire-native-capability",
-			};
+			return await evaluateBindingSelection(input, run, port);
 		}
 	}
 }
@@ -8811,6 +9561,7 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
 		| undefined;
+	let selectedRun: BrowserUseSharedRun | undefined;
 	if (runFlag !== undefined) {
 		const store = await openPlatformStore(input);
 		if (!store.ok) return store.exitCode;
@@ -8838,8 +9589,9 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 			state: loaded.run.state,
 			continuation_id: persisted,
 		};
+		selectedRun = loaded.run;
 	}
-	const evaluation = await evaluateAuthReadiness(subcommand, input);
+	const evaluation = await evaluateAuthReadiness(subcommand, input, selectedRun);
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller, [

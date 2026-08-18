@@ -48,12 +48,47 @@ const SPAWN_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = SPAWN_TIMEOUT_MS + 10_000;
 
 const xdg = makeTempXdgEnv();
+const playwrightXdg = makeTempXdgEnv();
 // The neutral CWD: an empty directory unrelated to the repo or the store.
 const neutralCwd = mkdtempSync(join(tmpdir(), "browser-use-neutral-"));
 mkdirSync(neutralCwd, { recursive: true });
 
+const targetProofServer = Bun.serve({
+	hostname: "127.0.0.1",
+	port: 0,
+	fetch(request, server) {
+		return server.upgrade(request)
+			? undefined
+			: new Response("upgrade required", { status: 426 });
+	},
+	websocket: {
+		message(socket, rawMessage) {
+			const text =
+				typeof rawMessage === "string"
+					? rawMessage
+					: new TextDecoder().decode(rawMessage);
+			const request = JSON.parse(text) as { id: number; method: string };
+			const result =
+				request.method === "Target.getTargets"
+					? {
+						targetInfos: [
+							{
+								targetId: "cdp-target-playwright-process",
+								type: "page",
+								url: "https://example.test/account",
+							},
+						],
+					}
+					: {};
+			socket.send(JSON.stringify({ id: request.id, result }));
+		},
+	},
+});
+
 afterAll(() => {
+	targetProofServer.stop(true);
 	xdg.dispose();
+	playwrightXdg.dispose();
 	rmSync(neutralCwd, { recursive: true, force: true });
 });
 
@@ -125,17 +160,18 @@ const seeded = seedStore();
 
 async function spawnBrowserUse(
 	args: readonly string[],
+	env = xdg.env,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	await seeded;
 	const child = Bun.spawn([process.execPath, BROWSER_USE_CLI, ...args], {
 		cwd: neutralCwd,
 		// ONLY the temp XDG roots + HOME: the neutral process inherits nothing.
 		env: {
-			HOME: xdg.env.HOME,
-			XDG_CONFIG_HOME: xdg.env.XDG_CONFIG_HOME,
-			XDG_DATA_HOME: xdg.env.XDG_DATA_HOME,
-			XDG_STATE_HOME: xdg.env.XDG_STATE_HOME,
-			XDG_CACHE_HOME: xdg.env.XDG_CACHE_HOME,
+			HOME: env.HOME,
+			XDG_CONFIG_HOME: env.XDG_CONFIG_HOME,
+			XDG_DATA_HOME: env.XDG_DATA_HOME,
+			XDG_STATE_HOME: env.XDG_STATE_HOME,
+			XDG_CACHE_HOME: env.XDG_CACHE_HOME,
 		},
 		stdout: "pipe",
 		stderr: "pipe",
@@ -152,6 +188,11 @@ async function spawnBrowserUse(
 
 function parse(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+function agentSemanticArgs(args: string[]): string[] {
+	const pinIndex = args.indexOf("--pin-tab");
+	return pinIndex >= 0 ? args.slice(pinIndex + 1) : args.slice(4);
 }
 
 describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE15)", () => {
@@ -405,7 +446,9 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 					"const args = process.argv.slice(2);",
 					'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
 					'let data = {};',
-					'if (args.includes("tab") && args.includes("list")) data = { tabs: [{ tabId: "t1", type: "page", active: true, url: existsSync(state) ? "https://example.test/" : "about:blank" }] };',
+					'if (args.includes("close")) data = { closed: true };',
+					'else if (args[0] === "session" && args[1] === "list") data = { sessions: [] };',
+					'else if (args.includes("tab") && args.includes("list")) data = { tabs: [{ tabId: "t1", targetId: "cdp-target-t1", type: "page", active: true, url: existsSync(state) ? "https://example.test/" : "about:blank" }] };',
 					'else if (args.includes("tab")) data = { selected: true };',
 					'else if (args.includes("open")) { writeFileSync(state, "opened"); data = { opened: true }; }',
 					'else if (args.includes("get") && args.includes("url")) data = { url: existsSync(state) ? "https://example.test/" : "about:blank" };',
@@ -419,7 +462,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				handoffPath,
 				JSON.stringify({
 					status: "ok",
-					run_id: "run-runbook-process",
+						run_id: "run-runbook-process",
 					data: {
 						outcome: "verified",
 						environment: { name: "agent-chrome", profile: "default" },
@@ -477,10 +520,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line) as string[]);
-			expect(calls.map((args) => args.slice(4))).toEqual([
+			expect(calls.map(agentSemanticArgs)).toEqual([
 				["tab", "list", "--json"],
+				[],
+				[],
 				["tab", "list", "--json"],
-				["tab", "t1", "--json"],
+				["tab", "cdp-target-t1", "--json"],
 				["get", "url", "--json"],
 				["open", "https://example.test/", "--json"],
 				["get", "url", "--json"],
@@ -488,6 +533,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				[],
 				[],
 			]);
+			expect(calls.filter((call) => call.includes("close"))).toHaveLength(2);
 			expect(calls.slice(-2)).toEqual([
 				[
 					"--session",
@@ -578,7 +624,9 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						`const log = ${JSON.stringify(callLog)};`,
 						"const args = process.argv.slice(2);",
 						'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
-						`const data = { tabs: ${JSON.stringify(scenario.tabs)} };`,
+						`let data = { tabs: ${JSON.stringify(scenario.tabs)} };`,
+						'if (args.includes("close")) data = { closed: true };',
+						'else if (args[0] === "session" && args[1] === "list") data = { sessions: [] };',
 						'process.stdout.write(JSON.stringify({ success: true, data, error: null }));',
 					].join("\n"),
 					"utf8",
@@ -639,7 +687,8 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						.trim()
 						.split("\n")
 						.map((line) => JSON.parse(line) as string[])
-						.map((args) => args.slice(4)),
+						.map(agentSemanticArgs)
+						.filter((args) => args.length > 0),
 				).toEqual([["tab", "list", "--json"]]);
 				expect((await loadSharedRun(deps, scenario.runId)).ok).toBe(false);
 			}
@@ -671,7 +720,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				handoffPath,
 				JSON.stringify({
 					status: "ok",
-					run_id: "run-playwright-process",
+						run_id: "run-playwright-process",
 					data: {
 						outcome: "verified",
 						environment: { name: "agent-chrome", profile: "default" },
@@ -683,7 +732,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						},
 						endpoint: {
 							http: "http://127.0.0.1:9222",
-							ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
+							ws: `ws://127.0.0.1:${targetProofServer.port}/devtools/browser/fixture`,
 						},
 						launch: { launched: false },
 						proof: {
@@ -719,7 +768,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"--expect-visible",
 				"[data-persisted='true']",
 				"--json",
-			]);
+			], playwrightXdg.env);
 
 			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
 			const envelope = parse(result.stdout);

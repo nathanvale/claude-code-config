@@ -816,7 +816,7 @@ function fakeAdapterRuntime(script: {
  */
 const PINNED = {
 	"chrome-devtools-mcp": "1.5.0",
-	"agent-browser": "0.31.2",
+	"agent-browser": "0.34.0",
 	"playwright-cdp": "0.1.17",
 } as const;
 
@@ -1157,7 +1157,7 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 		expect(data.attachment.probe_executable).toBe("/fake/bin/agent-browser");
 
 		const probe = calls.commands.find((command) =>
-			command.args.includes("snapshot"),
+			command.args.includes("cdp-url"),
 		);
 		const sessionFlag = probe?.args.indexOf("--session") ?? -1;
 		expect(sessionFlag).toBeGreaterThanOrEqual(0);
@@ -1173,7 +1173,8 @@ describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", 
 			expect.stringMatching(/^ws:\/\//),
 			"--session",
 			probeSessionName,
-			"snapshot",
+			"get",
+			"cdp-url",
 		]);
 
 		const release = calls.commands.find((command) =>
@@ -3126,7 +3127,7 @@ describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22
 			adapterId: "agent-browser",
 		});
 		expect(agent.run.stdout).toMatch(
-			/^repair_preview adapter=agent-browser state=absent posture=operator run_id=u5-repair duration_ms=\d+ package=agent-browser pin=0\.31\.2 scope=user lifecycle_scripts=required\n$/,
+			/^repair_preview adapter=agent-browser state=absent posture=operator run_id=u5-repair duration_ms=\d+ package=agent-browser pin=0\.34\.0 scope=user lifecycle_scripts=required\n$/,
 		);
 	});
 

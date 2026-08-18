@@ -8,6 +8,10 @@ description: "Measure Path-theme component parity against a canonical Storybook 
 Treat portal-ui as the reference. Change only Path theme owners or an earned
 runtime adapter seam.
 
+Treat a hard-coded resolved visual value as a parity failure. Route colour,
+typography, spacing, borders, radii, shadows, and component sizing through the
+project's shared semantic tokens; use inspector values only as evidence.
+
 ## Route
 
 - When working in another repository that contains a repo-local

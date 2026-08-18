@@ -723,7 +723,7 @@ export async function discoverPages(
 	// agent-browser is a CLI-subcommand adapter, not an mcporter tool-call
 	// adapter: its tab listing is `<probe> --cdp <ws> --session
 	// browser-use-<runId> tab list --json`, returning
-	// {success:true, data:{tabs:[{tabId, url, active, title?}]}}. Route it to
+	// {success:true, data:{tabs:[{tabId, targetId, url, active, title?}]}}. Route it to
 	// that spawn instead of the chrome-devtools-mcp list_pages call shape.
 	if (facts.adapter === "agent-browser") {
 		return discoverAgentBrowserPages(runtime, facts);
@@ -895,7 +895,7 @@ function agentBrowserEnvelopeSucceeded(value: unknown): boolean {
 }
 
 // Map the agent-browser tab-list envelope ({success:true, data:{tabs:[…]}})
-// onto RawPages: tabId -> id, url/title verbatim. The `active` flag is not part
+	// onto RawPages: tabId -> id, targetId -> cdp_target_id, url/title verbatim. The `active` flag is not part
 // of RawPage and is dropped. Field names differ from the chrome text parser
 // (tabId vs id), so this mapper stays separate to avoid coupling the two.
 function extractAgentBrowserPages(value: unknown): RawPage[] {
@@ -912,6 +912,9 @@ function extractAgentBrowserPages(value: unknown): RawPage[] {
 		return [
 			{
 				...(typeof tab.tabId === "string" ? { id: tab.tabId } : {}),
+				...(typeof tab.targetId === "string"
+					? { cdp_target_id: tab.targetId }
+					: {}),
 				...(typeof tab.title === "string" ? { title: tab.title } : {}),
 				...(typeof tab.url === "string" ? { url: tab.url } : {}),
 			},

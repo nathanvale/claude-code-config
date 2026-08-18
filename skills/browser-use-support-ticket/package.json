@@ -1,0 +1,14 @@
+{
+	"name": "browser-use-support-ticket-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"browser-use-support-ticket": "bun run src/support-ticket.ts",
+		"test": "bun test src/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

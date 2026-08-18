@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -274,7 +274,9 @@ describe("deterministic push_pending repair", () => {
 			transactionId: fixture.transactionId,
 		});
 		expect(diagnosis).toMatchObject({
-			finding: "publication_pending",
+			finding: "remote_contract_breach",
+			blocker: "host_contract_breach",
+			publicationEvidence: "contract_breach",
 			retrySafety: "operator_required",
 			nextAction: { id: "request_operator_review" },
 		});
@@ -344,7 +346,62 @@ describe("deterministic push_pending repair", () => {
 		});
 	});
 
-	test("reconcile-quarantine refuses a tampered owned path, then clears after baseline restoration", async () => {
+	test("refuses a takeover when the prior writer is not stopped", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		// A present token plus the matching generation pins the other guard
+		// clauses satisfied, so priorWriterStopped is the sole flipped variable.
+		expect(token.byteLength).toBeGreaterThan(0);
+		const result = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: false,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "doctor_token_invalid",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(await fixture.store.readQuarantine()).toBeNull();
+	});
+
+	test("refuses a takeover when priorWriterStopped is omitted", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		expect(token.byteLength).toBeGreaterThan(0);
+		const result = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "doctor_token_invalid",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(await fixture.store.readQuarantine()).toBeNull();
+	});
+
+	test("reconcile-quarantine refuses a tampered owned path and preserves unrelated worktree drift", async () => {
 		const fixture = await repairFixture("host-a", "stale");
 		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
 		const token = await fixture.store.readDoctorToken(
@@ -394,8 +451,12 @@ describe("deterministic push_pending repair", () => {
 		});
 
 		// Restoring the admitted-new owned path to its absent baseline makes the
-		// determinism gate provable again.
+		// determinism gate provable again. Unrelated unstaged state is not an
+		// authority input and reconciliation never mutates it.
 		rmSync(join(fixture.clone, "candidate.md"));
+		git(fixture.clone, "rm", "--cached", "--ignore-unmatch", "candidate.md");
+		const unrelatedDraft = join(fixture.clone, "unrelated-draft.md");
+		writeFileSync(unrelatedDraft, "preserve me\n");
 		const reconciled = await fixture.repair.run({
 			action: "reconcile-quarantine",
 			transactionId: fixture.transactionId,
@@ -413,7 +474,283 @@ describe("deterministic push_pending repair", () => {
 			status: "reconciled",
 			transactionId: fixture.transactionId,
 		});
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: {
+				phase: "closed",
+				transition: "quarantine_reconciled",
+			},
+		});
+		expect(readFileSync(unrelatedDraft, "utf8")).toBe("preserve me\n");
 	});
+
+	test("reconcile-quarantine refuses unrelated staged index drift", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const takeover = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
+
+		rmSync(join(fixture.clone, "candidate.md"));
+		git(fixture.clone, "rm", "--cached", "--ignore-unmatch", "candidate.md");
+		const unrelatedStaged = join(fixture.clone, "unrelated-staged.md");
+		writeFileSync(unrelatedStaged, "preserve staged bytes\n");
+		git(fixture.clone, "add", "unrelated-staged.md");
+
+		const result = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "none",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "quarantined",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(unrelatedStaged, "utf8")).toBe(
+			"preserve staged bytes\n",
+		);
+	});
+
+	test("resumes marker publication without duplicating the reconciled receipt revision", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		rmSync(join(fixture.clone, "candidate.md"));
+
+		let interruptTerminalMarker = true;
+		const interruptedStore = {
+			...fixture.store,
+			recordQuarantine: async (
+				record: Parameters<typeof fixture.store.recordQuarantine>[0],
+			) => {
+				if (record.status === "reconciled" && interruptTerminalMarker) {
+					interruptTerminalMarker = false;
+					throw new Error("injected terminal marker interruption");
+				}
+				return fixture.store.recordQuarantine(record);
+			},
+		};
+		const interruptedRepair = createVaultGitRepair({
+			...fixture.options,
+			store: interruptedStore,
+		});
+		const interrupted = await interruptedRepair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(interrupted).toMatchObject({
+			status: "refused",
+			blocker: "receipt_corrupt",
+			changedState: "partial",
+		});
+		const receiptAfterInterruption = await fixture.store.load();
+		expect(receiptAfterInterruption).toMatchObject({
+			status: "loaded",
+			receipt: { transition: "quarantine_reconciled" },
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "recovery_pending",
+		});
+
+		const resumed = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(resumed).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "local",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+		});
+		const receiptAfterResume = await fixture.store.load();
+		expect(receiptAfterResume).toEqual(receiptAfterInterruption);
+		expect(await fixture.doctor.diagnose({
+			transactionId: fixture.transactionId,
+		})).toMatchObject({
+			finding: "transaction_closed",
+			nextAction: { id: "none" },
+		});
+	});
+
+	test("resumes staged-only recovery after terminal quarantine publication is lost", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const takeover = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
+
+		rmSync(join(fixture.clone, "candidate.md"));
+		writeFileSync(join(fixture.clone, "later.md"), "later aligned work\n");
+		git(fixture.clone, "add", "--", "later.md");
+		git(
+			fixture.clone,
+			"commit",
+			"--only",
+			"-m",
+			"docs: advance without staged candidate",
+			"--",
+			"later.md",
+		);
+		git(fixture.clone, "push", "origin", "HEAD:refs/heads/main");
+
+		const interruptedRepository = {
+			...fixture.repository,
+			applyStagedRecovery: async (
+				plan: Parameters<
+					NonNullable<typeof fixture.repository.applyStagedRecovery>
+				>[0],
+			) => {
+				const result = await fixture.repository.applyStagedRecovery?.(plan);
+				return result?.status === "recovered"
+					? ({ status: "refused", reason: "mismatch" } as const)
+					: (result ?? ({ status: "refused", reason: "mismatch" } as const));
+			},
+		};
+		const interruptedRepair = createVaultGitRepair({
+			...fixture.options,
+			repository: interruptedRepository,
+		});
+		const interrupted = await interruptedRepair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(interrupted).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "partial",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "recovery_pending",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(join(fixture.clone, "candidate.md"), "utf8")).toBe(
+			"candidate\n",
+		);
+		expect(git(fixture.clone, "diff", "--cached", "--name-only", "--", "candidate.md")).toBe("");
+
+		const resumed = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(resumed).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			changedState: "local",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+			transactionId: fixture.transactionId,
+		});
+		expect(readFileSync(join(fixture.clone, "candidate.md"), "utf8")).toBe(
+			"candidate\n",
+		);
+	});
+
+	test.each([
+		["prepare", "none"],
+		["apply", "partial"],
+	] as const)(
+		"keeps a timed-out staged recovery %s retry-safe and quarantined",
+		async (stage, changedState) => {
+			const fixture = await repairFixture("host-a", "stale");
+			await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+			const token = await fixture.store.readDoctorToken(
+				fixture.transactionId,
+				fixture.ledgerHead,
+			);
+			await fixture.repair.run({
+				action: "stale-lease-takeover",
+				transactionId: fixture.transactionId,
+				remote: "origin",
+				expectedLedgerGeneration: fixture.ledgerHead,
+				doctorToken: token,
+				priorWriterStopped: true,
+			});
+			const repository = {
+				...fixture.repository,
+				...(stage === "prepare"
+					? {
+							prepareStagedRecovery: async () =>
+								({ status: "refused", reason: "timed_out" }) as const,
+						}
+					: {
+							applyStagedRecovery: async () =>
+								({ status: "refused", reason: "timed_out" }) as const,
+						}),
+			};
+			const repair = createVaultGitRepair({
+				...fixture.options,
+				repository,
+			});
+
+			const result = await repair.run({
+				action: "reconcile-quarantine",
+				transactionId: fixture.transactionId,
+				remote: "origin",
+				capability: fixture.ownerCapability,
+			});
+
+			expect(result).toMatchObject({
+				status: "refused",
+				state: "superseded",
+				blocker: "host_quarantined",
+				changedState,
+				retrySafety: "same_input_safe",
+				nextAction: { id: "reconcile_quarantine" },
+			});
+			expect(await fixture.store.readQuarantine()).toMatchObject({
+				status: stage === "prepare" ? "quarantined" : "recovery_pending",
+			});
+		},
+	);
 
 	test("refuses a stale doctor proof after owned content changes", async () => {
 		const fixture = await repairFixture("host-a", "stale");
@@ -569,6 +906,12 @@ async function repairFixture(
 		ledger: { git: remote, clock: runtime },
 		runtime,
 		repositoryIdentity: "canonical-vault",
+		activationAuthority: {
+			validate: async () => ({
+				status: "admitted" as const,
+				evidenceId: "fixture",
+			}),
+		},
 	};
 	return {
 		root,
@@ -579,6 +922,8 @@ async function repairFixture(
 		releaseCommit,
 		transactionId,
 		ownerCapability,
+		repository,
+		options,
 		store,
 		doctor: createVaultGitDoctor(options),
 		repair: createVaultGitRepair(options),

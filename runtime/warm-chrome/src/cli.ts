@@ -91,6 +91,8 @@ export type WarmChromeExecuteInvocation = {
 	profileInput?: string;
 	/** Run the repair writer against only the explicitly passed profile path. */
 	profileOnly: boolean;
+	/** Open or focus the proof-verified Agent Chrome after launch resolution. */
+	openBrowser: boolean;
 	chromeBin: string;
 };
 
@@ -358,9 +360,11 @@ function parseWarmChromeArgv(
 	let port = "";
 	let endpoint = "";
 	let profileOnly = false;
+	let openBrowser = false;
 	let profileFlagProvided = false;
 	// An explicitly-empty env value must not defeat the documented
-	// ~/.agent-warm-profile fallback downstream (`??` treats "" as supplied).
+	// The Agent Chrome Application Support fallback downstream (`??` treats
+	// "" as supplied).
 	let profileInput =
 		typeof runtime.env.WARM_CHROME_PROFILE_DIR === "string" &&
 		runtime.env.WARM_CHROME_PROFILE_DIR.trim() !== ""
@@ -397,6 +401,9 @@ function parseWarmChromeArgv(
 				chromeBin = requireNext(args, index, "--chrome");
 				index += 1;
 				break;
+			case "--open":
+				openBrowser = true;
+				break;
 			default:
 				if (arg.startsWith("--port=")) {
 					port = requireInlineValue(arg, "--port");
@@ -417,6 +424,9 @@ function parseWarmChromeArgv(
 
 	if (command !== "launch" && hasChromeFlag(args)) {
 		throw usageError("--chrome is only valid with launch");
+	}
+	if (command !== "launch" && openBrowser) {
+		throw usageError("--open is only valid with launch");
 	}
 	if (profileOnly && command !== "repair") {
 		throw usageError("--profile-only is only valid with repair");
@@ -449,6 +459,7 @@ function parseWarmChromeArgv(
 		...normalized,
 		...(profileInput === undefined ? {} : { profileInput }),
 		profileOnly,
+		openBrowser,
 		chromeBin: expandHome(chromeBin, runtime.env),
 	};
 }

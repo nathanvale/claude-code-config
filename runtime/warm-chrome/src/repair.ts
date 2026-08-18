@@ -39,6 +39,7 @@ import {
 	type JsonObject,
 	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
+	WARM_CHROME_PROFILE_NAME,
 	WARM_CHROME_SCHEMA_VERSION,
 	type WarmChromeRepairActionId,
 	type WarmChromeRepairReason,
@@ -668,6 +669,7 @@ async function repairProfilePolicyOnly(
 			"profile_policy_clean",
 			`command=${invocation.displayCommand}`,
 			`profile=${profileDir}`,
+			`profile.name=${WARM_CHROME_PROFILE_NAME}`,
 			"credentials_enable_service=false",
 			"profile.password_manager_enabled=false",
 			"autofill.profile_enabled=false",
@@ -951,6 +953,7 @@ function mergeProfilePolicyPreferences(preferences: JsonObject): JsonObject {
 		credentials_enable_service: false,
 		profile: {
 			...nestedObject(preferences.profile),
+			name: WARM_CHROME_PROFILE_NAME,
 			password_manager_enabled: false,
 		},
 		autofill: {
@@ -971,6 +974,7 @@ function profilePolicyFlagsAreClean(preferences: JsonObject): boolean {
 	const sync = nestedObject(preferences.sync);
 	return (
 		preferences.credentials_enable_service === false &&
+		profile.name === WARM_CHROME_PROFILE_NAME &&
 		profile.password_manager_enabled === false &&
 		autofill.profile_enabled === false &&
 		autofill.credit_card_enabled === false &&

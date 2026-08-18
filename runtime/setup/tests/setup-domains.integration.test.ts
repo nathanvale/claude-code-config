@@ -68,7 +68,9 @@ describe("setup domain composition", () => {
 		);
 
 		expect(result).toMatchObject({ state: "applied", station: "sync.applied", next_action: "setup_healthy" });
-		expect(await lstat(join(home, ".codex/AGENTS.md")).then((entry) => entry.isSymbolicLink())).toBe(true);
+		for (const path of [".codex/AGENTS.md", ".claude/CLAUDE.md", ".claude/AGENTS.md"]) {
+			expect(await lstat(join(home, path)).then(() => true, () => false)).toBe(false);
+		}
 		expect(result.findings.find((finding) => finding.id === "instruction_unhealthy")).toBeUndefined();
 		const browserUse = join(home, ".bun/bin/browser-use");
 		expect(await lstat(browserUse).then((entry) => entry.isSymbolicLink())).toBe(true);
@@ -353,7 +355,7 @@ describe("setup domain composition", () => {
 
 		expect(result).toMatchObject({ state: "partial", station: "sync.partial", next_action: "inspect_results" });
 		expect((await readHookProvenance(identity)).status).toBe("missing");
-		expect(await Bun.file(join(fixture.home, ".codex/AGENTS.md")).exists()).toBe(true);
+		expect(await lstat(join(fixture.home, ".claude/context")).then((entry) => entry.isSymbolicLink())).toBe(true);
 	});
 
 	test("reaches instruction failure without writes when startup is already healthy", async () => {
@@ -412,7 +414,7 @@ describe("setup domain composition", () => {
 		expect(await Bun.file(join(fixture.hooks, "pre-commit")).exists()).toBe(true);
 		const identity = await hookProvenanceIdentity({ stateRoot: fixture.state, hookDirectory: fixture.hooks, hookName: "pre-commit" });
 		expect((await readHookProvenance(identity)).status).toBe("valid");
-		expect(await lstat(join(fixture.home, ".codex/AGENTS.md")).then(() => true, () => false)).toBe(false);
+		expect(await lstat(join(fixture.home, ".claude/context")).then(() => true, () => false)).toBe(false);
 		expect(await lstat(join(fixture.home, ".config/context")).then(() => true, () => false)).toBe(false);
 	});
 
@@ -422,7 +424,7 @@ describe("setup domain composition", () => {
 			stateRoot: fixture.state, hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		});
-		const target = join(fixture.home, ".codex/AGENTS.md");
+		const target = join(fixture.home, ".config/context");
 		const result = await unlinkSetupDomains(fixture.input, {
 			stateRoot: fixture.state,
 			beforeRemove: async (path) => {
@@ -439,10 +441,10 @@ describe("setup domain composition", () => {
 	test("unlink preview keeps a projection blocker above removable startup evidence", async () => {
 		const fixture = await userFixture();
 		const outside = join(fixture.source, "outside-projection");
-		const startup = join(fixture.home, ".claude/AGENTS.md");
+		const startup = join(fixture.home, ".claude/context");
 		await mkdir(join(fixture.home, ".claude"), { recursive: true });
 		await mkdir(outside);
-		await symlink(join(fixture.source, "AGENTS.md"), startup);
+		await symlink(join(fixture.source, "context"), startup);
 		await symlink(outside, join(fixture.home, ".claude/skills"));
 
 		const result = await unlinkSetupDomains(fixture.input, { check: true, stateRoot: fixture.state });
@@ -460,23 +462,23 @@ describe("setup domain composition", () => {
 			stateRoot: fixture.state, hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		});
-		const escapedParent = join(fixture.home, ".codex");
+		const escapedParent = join(fixture.home, ".config");
 		const outside = join(fixture.source, "outside-home");
-		const escapedLink = join(outside, "AGENTS.md");
+		const escapedLink = join(outside, "context");
 		await rm(escapedParent, { recursive: true });
 		await mkdir(outside);
-		await symlink(join(fixture.source, "AGENTS.md"), escapedLink);
+		await symlink(join(fixture.source, "context"), escapedLink);
 		await symlink(outside, escapedParent);
 
 		const preview = await unlinkSetupDomains(fixture.input, { check: true, stateRoot: fixture.state });
 		expect(preview).toMatchObject({ state: "blocked", station: "unlink.check_blocked" });
 		expect(preview.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: escapedParent }));
-		expect(preview.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "AGENTS.md"));
+		expect(preview.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "context"));
 
 		const result = await unlinkSetupDomains(fixture.input, { stateRoot: fixture.state });
 		expect(result).toMatchObject({ state: "partial", station: "unlink.partial_failure" });
-		expect(result.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "AGENTS.md"));
-		expect(await readlink(escapedLink)).toBe(join(fixture.source, "AGENTS.md"));
+		expect(result.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "context"));
+		expect(await readlink(escapedLink)).toBe(join(fixture.source, "context"));
 	});
 
 	test("unlink rechecks startup parent containment immediately before removal", async () => {
@@ -485,17 +487,17 @@ describe("setup domain composition", () => {
 			stateRoot: fixture.state, hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		});
-		const escapedParent = join(fixture.home, ".codex");
-		const target = join(escapedParent, "AGENTS.md");
+		const escapedParent = join(fixture.home, ".config");
+		const target = join(escapedParent, "context");
 		const outside = join(fixture.source, "outside-race");
-		const escapedLink = join(outside, "AGENTS.md");
+		const escapedLink = join(outside, "context");
 		const result = await unlinkSetupDomains(fixture.input, {
 			stateRoot: fixture.state,
 			beforeRemove: async (path) => {
 				if (path !== target) return;
 				await rm(escapedParent, { recursive: true });
 				await mkdir(outside);
-				await symlink(join(fixture.source, "AGENTS.md"), escapedLink);
+				await symlink(join(fixture.source, "context"), escapedLink);
 				await symlink(outside, escapedParent);
 			},
 		});
@@ -503,7 +505,7 @@ describe("setup domain composition", () => {
 		expect(result).toMatchObject({ state: "partial", station: "unlink.concurrent_change" });
 		expect(result.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: escapedParent }));
 		expect(result.domains.find((domain) => domain.domain === "startup")?.failed).toContain(target);
-		expect(await readlink(escapedLink)).toBe(join(fixture.source, "AGENTS.md"));
+		expect(await readlink(escapedLink)).toBe(join(fixture.source, "context"));
 	});
 
 	test("cycles a clean user baseline through check, apply, health, and unlink", async () => {

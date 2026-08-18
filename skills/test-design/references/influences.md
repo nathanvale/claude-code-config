@@ -1,0 +1,10 @@
+# Influences and Primary Sources
+
+Checked 2026-08-13. These sources inform rule families; reputation is not proof.
+
+- Jarred Sumner: Bun execution, parallelism, runtime behaviour, mocks, and reporters. [Bun test runner](https://bun.sh/docs/test), [parallel execution](https://bun.sh/docs/test/parallel), [runtime behaviour](https://bun.sh/docs/test/runtime-behavior), [mocks](https://bun.sh/docs/test/mocks), [reporters](https://bun.sh/docs/test/reporters).
+- James M. Snell: minimal runner contracts, isolation, cancellation, and structured results. [Node test runner proposal](https://github.com/nodejs/node/issues/40954), [Node test runner](https://nodejs.org/api/test.html).
+- Matteo Collina: production-like service seams and measured performance topology. [Fastify testing](https://fastify.dev/docs/latest/Guides/Testing/), [Autocannon](https://github.com/mcollina/autocannon), [Pino](https://github.com/pinojs/pino).
+- Isaac Z. Schlueter: protocol-complete receipts, coverage limits, and selection completeness. [node-tap](https://tapjs.org/), [TAP format](https://tapjs.org/tap-format/), [coverage](https://tapjs.org/coverage/), [CLI selection](https://tapjs.org/cli/).
+- Anthony Fu: runner topology, watch/run separation, transforms, projects, shards, and agent-readable output. [Vitest guide](https://vitest.dev/guide/), [parallelism](https://vitest.dev/guide/parallelism), [reporters](https://main.vitest.dev/guide/reporters), [performance](https://main.vitest.dev/guide/improving-performance).
+- Kent C. Dodds: production-user workflows, implementation-detail avoidance, sensitivity, mocking trade-offs, and semantic UI interaction. [Testing Library principles](https://testing-library.com/docs/guiding-principles/), [query priority](https://testing-library.com/docs/queries/about/), [how to know what to test](https://kentcdodds.com/blog/how-to-know-what-to-test), [make your test fail](https://kentcdodds.com/blog/make-your-test-fail), [mocking trade-offs](https://kentcdodds.com/blog/the-merits-of-mocking).

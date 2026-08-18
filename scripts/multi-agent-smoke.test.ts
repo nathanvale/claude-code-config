@@ -1,18 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
 	buildSmokeCommand,
 	DEFAULT_TIMEOUT_MS,
 	DEFAULT_TIMEOUT_MS_BY_HARNESS,
 	DEFAULT_WARN_AFTER_MS_BY_HARNESS,
 	describeSmokeFailure,
+	createProfileQualificationChallenge,
 	evaluateOutput,
+	evaluateRuntimeTrace,
 	getDefaultTimeoutMs,
 	getDefaultWarnAfterMs,
 	getSmokeTest,
 	runSmokeTest,
 	SMOKE_TESTS,
 } from "./multi-agent-smoke-lib.ts";
+
+const repositoryRoot = resolve(import.meta.dir, "..");
 
 describe("multi-agent smoke library", () => {
 	test("includes the prompt-boundary and operator smoke matrix", () => {
@@ -33,15 +38,194 @@ describe("multi-agent smoke library", () => {
 			"contract-auditor-router-skill",
 			"smoke-runner-executes",
 			"heal-skill-reachable",
+			"test-design-mutation-route",
+			"test-design-runner-sensitive-route",
+			"test-design-simple-unit-route",
+			"test-design-run-only-negative",
+			"test-design-boundary-escalation",
+			"test-design-pairwise-frozen",
 		] as const;
 
-		expect(SMOKE_TESTS).toHaveLength(24);
+		expect(SMOKE_TESTS).toHaveLength(30);
 		for (const testId of taskSmokeIds) {
 			expect(SMOKE_TESTS.map((smokeTest) => smokeTest.id)).toContain(testId);
 			expect(getSmokeTest(testId).expectations.claude.whoAmI).toBe("claude");
 			expect(getSmokeTest(testId).expectations.codex.whoAmI).toBe("codex");
 		}
 	});
+
+	test("frozen pairwise probe rejects every independently corrupted decision", () => {
+		const definition = getSmokeTest("test-design-pairwise-frozen");
+		const expected = definition.expectations.codex;
+		for (const field of Object.keys(expected).filter((key) => key !== "whoAmI")) {
+			const assertions = evaluateOutput(definition, "codex", {
+				...expected,
+				[field]: `${expected[field]}-wrong`,
+			});
+			expect(assertions.filter((assertion) => !assertion.ok)).toHaveLength(1);
+			expect(assertions.find((assertion) => assertion.key === field)?.ok).toBe(
+				false,
+			);
+		}
+	});
+
+	test("frozen pairwise probe rejects a corrupted profile-segment decision", () => {
+		const definition = getSmokeTest("test-design-pairwise-frozen");
+		const expected = definition.expectations.claude;
+		const firstScenario = Object.keys(expected).find((key) => key.startsWith("s1"));
+		expect(firstScenario).toBeDefined();
+		if (!firstScenario) return;
+		const assertions = evaluateOutput(definition, "claude", {
+			...expected,
+			[firstScenario]: `${expected[firstScenario]}|all-profiles`,
+		});
+		expect(assertions.find((item) => item.key === firstScenario)?.ok).toBe(false);
+	});
+
+	test("test-design canaries distinguish mutation from run-only work", () => {
+		expect(
+			getSmokeTest("test-design-mutation-route").runtime?.challengeField,
+		).toBe("qualificationChallenge");
+		for (const harness of ["claude", "codex"] as const) {
+			expect(
+				evaluateOutput(getSmokeTest("test-design-mutation-route"), harness, {
+					whoAmI: harness,
+					route: "full",
+					exactFocusedCommand:
+						"bun test tests/horizontal-scroll.test.ts -t 'captures horizontal traversal'",
+					selectedProfiles: "browser-and-ui",
+					expectedSelectedTests: 1,
+					redEvidenceKind: "disposable-perturbation",
+					activeWorkflow: "implementation",
+				}),
+			).toSatisfy((assertions) => assertions.every((assertion) => assertion.ok));
+
+			expect(
+				evaluateOutput(getSmokeTest("test-design-run-only-negative"), harness, {
+					whoAmI: harness,
+					route: "no-new-brief",
+					invokesTestDesign: false,
+					briefEmitted: false,
+					activeWorkflow: "test-runner",
+				}),
+			).toSatisfy((assertions) => assertions.every((assertion) => assertion.ok));
+		}
+	});
+
+	test("keeps mutation prompts aligned with guarded fixtures", () => {
+		const definition = getSmokeTest("test-design-mutation-route");
+		const fixture = definition.runtime?.mutationProof?.fixtureRelativePath;
+		expect(fixture).toBeDefined();
+		if (!fixture) return;
+		expect(definition.prompt).toContain(fixture);
+	});
+
+	test("changed proof boundaries cannot use the lightweight route", () => {
+		for (const harness of ["claude", "codex"] as const) {
+			expect(
+				evaluateOutput(
+					getSmokeTest("test-design-boundary-escalation"),
+					harness,
+					{
+						whoAmI: harness,
+						route: "full",
+						exactFocusedCommand:
+							"bun test tests/select-height.test.ts -t 'matches Select overflow contract'",
+						selectedProfiles: "browser-and-ui",
+						expectedSelectedTests: 1,
+						redEvidenceKind: "disposable-perturbation",
+						activeWorkflow: "implementation",
+					},
+				),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
+		}
+	});
+
+	test("test-design canaries distinguish runner-sensitive from simple-unit work", () => {
+		for (const harness of ["claude", "codex"] as const) {
+			expect(
+				evaluateOutput(
+					getSmokeTest("test-design-runner-sensitive-route"),
+					harness,
+					{
+						whoAmI: harness,
+						route: "full",
+						exactFocusedCommand:
+							"bun test tests/runner.test.ts -t 'emits one-shot cleanup receipt'",
+						runnerProfileSelected: true,
+						runnerEnvelopeApplied: true,
+						expectedSelectedTests: 1,
+						redEvidenceKind: "disposable-perturbation",
+						activeWorkflow: "implementation",
+					},
+				),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
+			expect(
+				evaluateOutput(getSmokeTest("test-design-simple-unit-route"), harness, {
+					whoAmI: harness,
+					route: "lightweight",
+					exactFocusedCommand:
+						"bun test tests/select-height.test.ts -t 'keeps approved Select dimensions'",
+					selectedProfiles: "none",
+					runnerEnvelopeApplied: false,
+					expectedSelectedTests: 1,
+					redEvidenceKind: "observed-regression",
+					activeWorkflow: "implementation",
+				}),
+			).toSatisfy((assertions) =>
+				assertions.every((assertion) => assertion.ok),
+			);
+		}
+		const falseSelection = evaluateOutput(
+			getSmokeTest("test-design-runner-sensitive-route"),
+			"codex",
+			{
+				whoAmI: "codex",
+				runnerProfileSelected: false,
+				runnerEnvelopeApplied: true,
+				activeWorkflow: "implementation",
+			},
+		);
+		expect(
+			falseSelection.find(
+				(assertion) => assertion.key === "runnerProfileSelected",
+			)?.ok,
+		).toBe(false);
+
+		const runnerTrace = getSmokeTest("test-design-runner-sensitive-route")
+			.runtime?.traceProof;
+		const simpleUnitTrace = getSmokeTest("test-design-simple-unit-route").runtime
+			?.traceProof;
+		expect(runnerTrace?.profileRelativePath).toBe(
+			"references/runner-execution.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/process-and-cli.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/state-concurrency-recovery.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).not.toContain(
+			"references/runtime-ci-platform.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/browser-and-ui.md",
+		);
+		expect(runnerTrace?.forbiddenProfileRelativePaths).toContain(
+			"references/installation-host-hosted.md",
+		);
+			expect(simpleUnitTrace).toBeUndefined();
+			expect(getSmokeTest("test-design-simple-unit-route").prompt).toContain(
+				"tiny CSS dimension correction",
+			);
+			expect(getSmokeTest("test-design-run-only-negative").prompt).toContain(
+				"owns the existing regression proof",
+			);
+		});
 
 	test("boundary expectations stay harness-specific where intended", () => {
 		const testDef = getSmokeTest("boundary");
@@ -52,17 +236,17 @@ describe("multi-agent smoke library", () => {
 			autoAppliesClaudeOnlyRules: true,
 			sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 			assumesClaudeOnlyToolsLikeKitOrAtuin: true,
-			commitsDirectlyToMain: false,
+			commitsDirectlyToMain: true,
 		});
 		expect(claudeAssertions.every((assertion) => assertion.ok)).toBe(true);
 
 		const codexAssertions = evaluateOutput(testDef, "codex", {
 			whoAmI: "codex",
-			usesContext7ForLibraryDocs: true,
+			usesContext7ForLibraryDocs: false,
 			autoAppliesClaudeOnlyRules: false,
 			sharedBehaviorOnlyInRulesReachesBothHarnesses: false,
 			assumesClaudeOnlyToolsLikeKitOrAtuin: false,
-			commitsDirectlyToMain: false,
+			commitsDirectlyToMain: true,
 		});
 		expect(codexAssertions.every((assertion) => assertion.ok)).toBe(true);
 	});
@@ -129,7 +313,7 @@ describe("multi-agent smoke library", () => {
 	});
 
 	test("command builders encode the live CLI contract", () => {
-		const cwd = "/tmp/repo";
+		const cwd = repositoryRoot;
 
 		const { command: claudeCommand, cleanup: cleanupClaude } =
 			buildSmokeCommand({
@@ -145,6 +329,9 @@ describe("multi-agent smoke library", () => {
 		try {
 			expect(claudeCommand).toContain("--");
 			expect(claudeCommand[0]).toBe("claude");
+			const effortIndex = claudeCommand.indexOf("--effort");
+			expect(effortIndex).toBeGreaterThan(0);
+			expect(claudeCommand[effortIndex + 1]).toBe("high");
 
 			expect(codexCommand.slice(0, 4)).toEqual([
 				"codex",
@@ -161,18 +348,285 @@ describe("multi-agent smoke library", () => {
 			const schemaIndex = codexCommand.indexOf("--output-schema") + 1;
 			const cwdIndex = codexCommand.indexOf("-C") + 1;
 			expect(existsSync(codexCommand[schemaIndex])).toBe(true);
-			expect(existsSync(codexCommand[cwdIndex])).toBe(true);
+			expect(codexCommand[cwdIndex]).toBe(repositoryRoot);
 		} finally {
 			cleanupClaude();
 			cleanupCodex();
 		}
 	});
 
+	test("test-design mutation commands use projected skills and scoped models", () => {
+		const { command: claudeCommand, cleanup: cleanupClaude } = buildSmokeCommand({
+			testId: "test-design-mutation-route",
+			harness: "claude",
+			cwd: repositoryRoot,
+		});
+		const { command: codexCommand, cleanup: cleanupCodex } = buildSmokeCommand({
+			testId: "test-design-mutation-route",
+			harness: "codex",
+			cwd: repositoryRoot,
+		});
+		try {
+			expect(claudeCommand[claudeCommand.indexOf("--model") + 1]).toBe("opus");
+			expect(claudeCommand[claudeCommand.indexOf("--output-format") + 1]).toBe(
+				"stream-json",
+			);
+			expect(claudeCommand).toContain("--verbose");
+			expect(claudeCommand[claudeCommand.indexOf("--effort") + 1]).toBe("high");
+			expect(claudeCommand[claudeCommand.indexOf("--tools") + 1]).toBe(
+				"Skill,Read",
+			);
+			expect(
+				claudeCommand[claudeCommand.indexOf("--setting-sources") + 1],
+			).toBe("project");
+			expect(codexCommand[codexCommand.indexOf("--model") + 1]).toBe(
+				"gpt-5.6-sol",
+			);
+			expect(codexCommand).toContain("--json");
+			const project = codexCommand[codexCommand.indexOf("-C") + 1];
+			expect(existsSync(`${project}/.agents/skills/test-design/SKILL.md`)).toBe(
+				true,
+			);
+			expect(existsSync(`${project}/.claude/skills/test-design/SKILL.md`)).toBe(
+				true,
+			);
+			const traceProof = getSmokeTest("test-design-mutation-route").runtime
+				?.traceProof;
+			expect(traceProof).toBeDefined();
+			if (!traceProof) return;
+			const selectedProfile = readFileSync(
+				`${project}/.agents/skills/test-design/${traceProof.profileRelativePath}`,
+				"utf8",
+			);
+			expect(selectedProfile).toContain("Runtime profile qualification challenge:");
+			for (const relativePath of traceProof.forbiddenProfileRelativePaths) {
+				const forbiddenProfile = readFileSync(
+					`${project}/.agents/skills/test-design/${relativePath}`,
+					"utf8",
+				);
+				expect(forbiddenProfile).toContain("Runtime profile read sentinel:");
+				expect(forbiddenProfile).not.toContain(
+					"Runtime profile qualification challenge:",
+				);
+			}
+		} finally {
+			cleanupClaude();
+			cleanupCodex();
+		}
+	});
+
+	test("requires traced skill invocation and only the selected profile read", () => {
+		const traceProof = getSmokeTest("test-design-mutation-route").runtime
+			?.traceProof;
+		expect(traceProof).toBeDefined();
+		if (!traceProof) return;
+		const project = "/tmp/test-design-trace";
+		const challenge = "skill-challenge";
+		const selectedProfileChallenge = createProfileQualificationChallenge(
+			challenge,
+			traceProof.profileRelativePath,
+		);
+		const claudeTrace = [
+			{
+				type: "assistant",
+				message: {
+					content: [
+						{
+							type: "tool_use",
+							id: "skill-call",
+							name: "Skill",
+							input: { skill: "test-design" },
+						},
+					],
+				},
+			},
+			{
+				type: "assistant",
+				message: {
+					content: [
+						{
+							type: "tool_use",
+							id: "profile-read",
+							name: "Read",
+							input: {
+								file_path: `${project}/.claude/skills/test-design/${traceProof.profileRelativePath}`,
+							},
+						},
+					],
+				},
+			},
+			{
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "skill-call",
+							is_error: false,
+						},
+						{
+							type: "tool_result",
+							tool_use_id: "profile-read",
+							is_error: false,
+						},
+					],
+				},
+			},
+		]
+			.map((event) => JSON.stringify(event))
+			.join("\n");
+		expect(
+			evaluateRuntimeTrace({
+				harness: "claude",
+				stdout: claudeTrace,
+				challenge,
+				traceProof,
+			}).every((assertion) => assertion.ok),
+		).toBe(true);
+
+		const directReadOnly = claudeTrace.replace('"name":"Skill"', '"name":"Read"');
+		expect(
+			evaluateRuntimeTrace({
+				harness: "claude",
+				stdout: directReadOnly,
+				challenge,
+				traceProof,
+			}).find((assertion) => assertion.key === "trace:skill-invoked")?.ok,
+		).toBe(false);
+		const failedSkillResult = claudeTrace.replace(
+			'"tool_use_id":"skill-call","is_error":false',
+			'"tool_use_id":"skill-call","is_error":true',
+		);
+		expect(
+			evaluateRuntimeTrace({
+				harness: "claude",
+				stdout: failedSkillResult,
+				challenge,
+				traceProof,
+			}).find((assertion) => assertion.key === "trace:skill-invoked")?.ok,
+		).toBe(false);
+		const irrelevantRead = [
+			claudeTrace,
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					content: [
+						{
+							type: "tool_use",
+							id: "irrelevant-read",
+							name: "Read",
+							input: {
+								file_path: `${project}/.claude/skills/test-design/references/process-and-cli.md`,
+							},
+						},
+					],
+				},
+			}),
+			JSON.stringify({
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "irrelevant-read",
+							is_error: false,
+						},
+					],
+				},
+			}),
+		].join("\n");
+		expect(
+			evaluateRuntimeTrace({
+				harness: "claude",
+				stdout: irrelevantRead,
+				challenge,
+				traceProof,
+			}).find(
+				(assertion) => assertion.key === "trace:irrelevant-profile-not-read",
+			)?.ok,
+		).toBe(false);
+
+		const codexTrace = [challenge, selectedProfileChallenge].map((output, index) =>
+			JSON.stringify({
+				type: "item.completed",
+				item: {
+					id: `item_${index}`,
+					type: "command_execution",
+					command: "sed -n '1,220p' projected-file",
+					aggregated_output: output,
+					exit_code: 0,
+					status: "completed",
+				},
+			}),
+		).join("\n");
+		expect(
+			evaluateRuntimeTrace({
+				harness: "codex",
+				stdout: codexTrace,
+				challenge,
+				traceProof,
+			}).every((assertion) => assertion.ok),
+		).toBe(true);
+		const failedSelectedReadTrace = [
+			codexTrace.split("\n")[0],
+			JSON.stringify({
+				type: "item.completed",
+				item: {
+					id: "item_failed_selected_read",
+					type: "command_execution",
+					command: "sed selected-profile && rg missing-target",
+					aggregated_output: selectedProfileChallenge,
+					exit_code: 1,
+					status: "failed",
+				},
+			}),
+		].join("\n");
+		expect(
+			evaluateRuntimeTrace({
+				harness: "codex",
+				stdout: failedSelectedReadTrace,
+				challenge,
+				traceProof,
+			}).find((assertion) => assertion.key === "trace:selected-profile-read")?.ok,
+		).toBe(true);
+		const forbiddenProfileRelativePath =
+			traceProof.forbiddenProfileRelativePaths[0];
+		expect(forbiddenProfileRelativePath).toBeDefined();
+		if (!forbiddenProfileRelativePath) {
+			throw new Error("Expected at least one forbidden profile path");
+		}
+		const forbiddenChallenge = createProfileQualificationChallenge(
+			challenge,
+			forbiddenProfileRelativePath,
+		);
+		const codexWithIrrelevantRead = `${codexTrace}\n${JSON.stringify({
+			type: "item.completed",
+			item: {
+				id: "item_forbidden",
+				type: "command_execution",
+				command: "sed -n '1,220p' projected-file",
+				aggregated_output: forbiddenChallenge,
+				exit_code: 0,
+				status: "completed",
+			},
+		})}`;
+		expect(
+			evaluateRuntimeTrace({
+				harness: "codex",
+				stdout: codexWithIrrelevantRead,
+				challenge,
+				traceProof,
+			}).find(
+				(assertion) => assertion.key === "trace:irrelevant-profile-not-read",
+			)?.ok,
+		).toBe(false);
+	});
+
 	test("dry-run smoke results include bounded execution metadata", async () => {
 		const result = await runSmokeTest({
 			testId: "boundary",
 			harness: "codex",
-			cwd: "/tmp/repo",
+			cwd: repositoryRoot,
 			dryRun: true,
 			timeoutMs: 12_345,
 		});
@@ -183,6 +637,23 @@ describe("multi-agent smoke library", () => {
 		expect(result.warnAfterMs).toBe(12_345);
 		expect(result.timeoutMs).toBe(12_345);
 		expect(result.durationMs).toBe(0);
+		const schemaPath = result.command[result.command.indexOf("--output-schema") + 1];
+		const commandCwd = result.command[result.command.indexOf("-C") + 1];
+		expect(existsSync(schemaPath)).toBe(false);
+		expect(commandCwd).toBe(repositoryRoot);
+		expect(existsSync(commandCwd)).toBe(true);
+	});
+
+	test("missing-skill negative uses the bounded unavailable prompt", async () => {
+		const result = await runSmokeTest({
+			testId: "test-design-mutation-route",
+			harness: "codex",
+			cwd: process.cwd(),
+			dryRun: true,
+			omitProjectSkills: true,
+		});
+		expect(result.command.at(-1)).toContain("Missing-skill negative control");
+		expect(result.command.at(-1)).toContain("exactly once");
 	});
 
 	test("default timeout stays stable", () => {

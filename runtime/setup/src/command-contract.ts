@@ -19,6 +19,7 @@ import {
 	type SetupCommand,
 	type SetupScope,
 } from "./model.ts";
+import { VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS } from "./vault-git-host-enrollment.ts";
 
 export type SetupAudience = "operator" | "agent";
 export type SetupMutation = "check" | "write";
@@ -73,6 +74,45 @@ const checkFlag = {
 	"--check": { type: "boolean", description: "Preview from current evidence without writing." },
 } as const;
 
+/**
+ * Setup-owned private input contracts, projected through command discovery so a
+ * real consumer derives the action argv, contract id, and ordered field
+ * ids/channels without a hand-authored duplicate. The parser and the
+ * `--input-stdin` flag grammar derive their accepted contract ids from here.
+ */
+export const SETUP_INPUT_CONTRACTS = [
+	{
+		id: "setup.vault-git.host-enrollment",
+		action_id: "provide_host_enrollment_inputs",
+		action_argv: ["sync", "--domain", "vault-git"],
+		fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS.map((field) => ({
+			id: field.id,
+			input_channel: field.inputChannel,
+		})),
+	},
+] as const;
+
+type SetupInputContractId = (typeof SETUP_INPUT_CONTRACTS)[number]["id"];
+
+const setupInputContractIds = SETUP_INPUT_CONTRACTS.map((contract) => contract.id);
+
+const vaultGitDomainFlags = {
+	"--domain": {
+		type: "enum",
+		values: ["vault-git"],
+		description: "Select the host-enrollment domain.",
+	},
+	"--rollback": {
+		type: "boolean",
+		description: "Select the verified prior installed release.",
+	},
+	"--input-stdin": {
+		type: "enum",
+		values: setupInputContractIds,
+		description: "Read one named private-input contract from stdin.",
+	},
+} as const;
+
 const actionSummaries: Record<SetupActionId, string> = {
 	preview_sync: "Preview the deterministic Setup plan.",
 	run_sync: "Apply the current safe Setup plan.",
@@ -94,11 +134,21 @@ const actionSummaries: Record<SetupActionId, string> = {
 	inspect_catalog: "Inspect source visibility and destination occupancy.",
 	use_source: "Use the selected first-party source skill.",
 	discover_external: "Use the external acquisition owner for third-party skills.",
+	provide_host_enrollment_inputs: "Provide private host-enrollment paths through stdin.",
+	apply_host_enrollment: "Apply validated host enrollment with the same private stdin inputs.",
+	preview_host_enrollment_repair: "Preview the bounded host-enrollment repair.",
+	provision_repository_ssh: "Stop for the repository SSH owner to provision trust.",
+	wait_for_vault_git_idle: "Wait for active or uncertain vault work to settle.",
+	apply_vault_git_rollback: "Apply the verified prior installed release selection.",
 };
 
+// provide_host_enrollment_inputs is a write: its discovered argv applies Host
+// Enrollment through the private stdin lane, so it never belongs in this set.
 const readActions = new Set<SetupActionId>([
 	"preview_sync", "run_doctor", "change_input", "inspect_diagnostics", "inspect_lock",
 	"rerun_check", "inspect_results", "inspect_catalog", "use_source", "discover_external",
+	"preview_host_enrollment_repair",
+	"provision_repository_ssh", "wait_for_vault_git_idle",
 ]);
 
 export const setupActions = SETUP_ACTION_IDS.map((id) => ({
@@ -136,7 +186,7 @@ export const setupContracts = defineCommandFacadeContract(
 			json: true, audience: "operator", mutation: "write",
 			sideEffects: ["read", "check", "write"], executionModes: ["check", "normal"],
 			outputModes: ["plain", "json"], interactivity: "none",
-			resultContract, actionAffordances, flags: { ...checkFlag, ...commonFlags }, exitCodes: setupExitCodes,
+			resultContract, actionAffordances, flags: { ...checkFlag, ...vaultGitDomainFlags, ...commonFlags }, exitCodes: setupExitCodes,
 		},
 		unlink: {
 			script: SETUP_CLI_NAME,
@@ -173,7 +223,15 @@ export const setupContractEntries = SETUP_COMMANDS.map(
 
 export function projectSetupCommandDiscoveryTree() {
 	return projectCommandDiscoveryTree(setupContractEntries, {
-		augment: () => ({ global_diagnostic_flags: SETUP_GLOBAL_DIAGNOSTIC_FLAGS }),
+		augment: (
+			command,
+		): {
+			global_diagnostic_flags: typeof SETUP_GLOBAL_DIAGNOSTIC_FLAGS;
+			input_contracts?: typeof SETUP_INPUT_CONTRACTS;
+		} => ({
+			global_diagnostic_flags: SETUP_GLOBAL_DIAGNOSTIC_FLAGS,
+			...(command === "sync" ? { input_contracts: SETUP_INPUT_CONTRACTS } : {}),
+		}),
 	});
 }
 
@@ -186,6 +244,9 @@ export interface ParsedSetupInvocation {
 	verbose: boolean;
 	noColor: boolean;
 	check: boolean;
+	domain?: "vault-git";
+	inputStdin?: SetupInputContractId;
+	rollback: boolean;
 	alias?: "no_args";
 }
 
@@ -207,6 +268,9 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 	let verbose = false;
 	let noColor = false;
 	let check = false;
+	let domain: "vault-git" | undefined;
+	let inputStdin: SetupInputContractId | undefined;
+	let rollback = false;
 
 	for (let index = noArgs || flagOnlyAlias ? 0 : 1; index < argv.length; index += 1) {
 		const arg = argv[index] ?? "";
@@ -214,7 +278,29 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 		if (flag.startsWith("-") && !allowed.has(flag)) {
 			throw usageError(`Unsupported flag for ${typedCommand}: ${flag}`);
 		}
-		switch (flag) {
+			switch (flag) {
+			case "--domain": {
+				const value = inlineValue ?? requireValue(argv, index, flag);
+				domain = parseEnumFlag(flag, value, ["vault-git"] as const);
+				if (inlineValue === undefined) index += 1;
+				break;
+			}
+			case "--input-stdin": {
+				const value = inlineValue ?? requireValue(argv, index, flag);
+				const contract = SETUP_INPUT_CONTRACTS.find(
+					(candidate) => candidate.id === value,
+				);
+				if (!contract) {
+					throw usageError("Unsupported --input-stdin contract");
+				}
+				inputStdin = contract.id;
+				if (inlineValue === undefined) index += 1;
+				break;
+			}
+			case "--rollback":
+				rejectBooleanInlineValue(flag, inlineValue);
+				rollback = true;
+				break;
 			case "--scope": {
 				const value = inlineValue ?? requireValue(argv, index, flag);
 				scope = parseEnumFlag(flag, value, SETUP_SCOPES);
@@ -258,10 +344,23 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 		throw usageError("catalog accepts at most one skill id");
 	}
 	if (typedCommand === "commands" && !json) throw usageError("commands requires --json");
+	if ((rollback || inputStdin) && domain !== "vault-git") {
+		throw usageError(`${rollback ? "--rollback" : "--input-stdin"} requires --domain vault-git`);
+	}
+	if (domain === "vault-git" && scope !== "user") {
+		throw usageError("--domain vault-git supports only --scope user");
+	}
+	if (rollback && inputStdin) {
+		throw usageError("--rollback does not accept --input-stdin");
+	}
 
 	return {
 		command: typedCommand, scope, ...(repo ? { repo } : {}), positionals,
-		json, verbose, noColor, check, ...(noArgs || flagOnlyAlias ? { alias: "no_args" as const } : {}),
+		json, verbose, noColor, check,
+		...(domain ? { domain } : {}),
+		...(inputStdin ? { inputStdin } : {}),
+		rollback,
+		...(noArgs || flagOnlyAlias ? { alias: "no_args" as const } : {}),
 	};
 }
 

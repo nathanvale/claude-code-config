@@ -1,12 +1,13 @@
 import type { VaultGitDoctorResult } from "./doctor.ts";
 import type { VaultGitEngineResult } from "./engine.ts";
 import type {
+	VaultGitActivationRestriction,
 	VaultGitBlockerId,
 	VaultGitCheckerAdmissionRecord,
 	VaultGitDoctorFinding,
 	VaultGitHygieneVaultPosture,
 	VaultGitHygieneWorkerTrigger,
-	VaultGitNextAction,
+	VaultGitNextActionCompat,
 	VaultGitPrivateHygieneResult,
 } from "./model.ts";
 import type {
@@ -26,6 +27,7 @@ export type VaultGitJanitorPreflight =
 			readonly status: "refused";
 			readonly blocker: VaultGitBlockerId;
 			readonly doctor: VaultGitDoctorResult;
+			readonly activationRestriction?: VaultGitActivationRestriction;
 	  };
 
 /** One engine-owned hygiene transaction request. */
@@ -40,6 +42,8 @@ export interface VaultGitHygieneTransactionRequest {
 	readonly summary: string;
 	/** Observer invoked once the fresh hygiene lease is held. */
 	readonly onLeaseAcquired?: () => void;
+	/** Observer invoked only after an ordinary refusal releases that lease. */
+	readonly onLeaseReleased?: () => void;
 	/** Checker mutation invoked only after the new lease is held. */
 	readonly apply: () => Promise<boolean>;
 }
@@ -129,12 +133,14 @@ export interface VaultGitJanitorReport {
 	readonly blocker?: VaultGitBlockerId;
 	/** Mutation extent reported by the hygiene transaction engine, when one ran. */
 	readonly changedState?: VaultGitEngineResult["changedState"];
+	/** Cause-specific public activation refusal, when activation stopped writes. */
+	readonly activationRestriction?: VaultGitActivationRestriction;
 	/** Cooperative posture; read_only while a hygiene lease stays held. */
 	readonly vaultPosture: VaultGitHygieneVaultPosture;
 	/** Foreground work outside the vault remains eligible. */
 	readonly foregroundNonVaultWorkAllowed: true;
 	/** Exactly one safe continuation. */
-	readonly nextAction: VaultGitNextAction;
+	readonly nextAction: VaultGitNextActionCompat;
 }
 
 /** Bounded Janitor runner; never spawns an agent task. */
@@ -235,7 +241,20 @@ export function createVaultGitJanitor(
 					trigger: policy.trigger,
 					...anomalies,
 					blocker: preflight.blocker,
-					nextAction: actionForBlocker(preflight.blocker),
+					...(preflight.activationRestriction
+						? {
+								activationRestriction: preflight.activationRestriction,
+								nextAction: actionForBlocker(
+									preflight.blocker,
+									preflight.activationRestriction,
+								),
+							}
+						: {
+								nextAction: actionForBlocker(
+									preflight.blocker,
+									preflight.activationRestriction,
+								),
+							}),
 				}));
 			}
 
@@ -327,6 +346,9 @@ export function createVaultGitJanitor(
 					summary: "chore(vault): apply deterministic hygiene",
 					onLeaseAcquired() {
 						leaseHeld = true;
+					},
+					onLeaseReleased() {
+						leaseHeld = false;
 					},
 					async apply() {
 						// Fresh-lease staleness gate: the admitted fingerprint and the
@@ -639,22 +661,25 @@ function baseReport(
 		...(input.changedState !== undefined
 			? { changedState: input.changedState }
 			: {}),
+		...(input.activationRestriction
+			? { activationRestriction: input.activationRestriction }
+			: {}),
 		vaultPosture: input.vaultPosture ?? "normal",
 		foregroundNonVaultWorkAllowed: true,
 		nextAction: input.nextAction,
 	};
 }
 
-function operatorAction(summary: string): VaultGitNextAction {
+function operatorAction(summary: string): VaultGitNextActionCompat {
 	return { id: "request_operator_review", summary };
 }
 
-function actionForBlocker(blocker: VaultGitBlockerId): VaultGitNextAction {
-	if (blocker === "activation_blocked") {
-		return {
-			id: "request_operator_admission",
-			summary: "Ask an operator to admit runtime activation before Janitor writes.",
-		};
+function actionForBlocker(
+	blocker: VaultGitBlockerId,
+	activationRestriction?: VaultGitActivationRestriction,
+): VaultGitNextActionCompat {
+	if (blocker === "activation_blocked" && activationRestriction) {
+		return activationRestriction.nextAction;
 	}
 	if (blocker === "remote_unavailable") {
 		return { id: "retry_remote", summary: "Restore remote access, then retry Janitor." };

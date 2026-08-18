@@ -44,6 +44,10 @@ keeps the map complete in both directions.
 - `package.json`: exports (`.` and `./cli`), `test` and `typecheck` scripts.
   No `bin` and no `sideQuest.sourceLinkedBin` yet — a later unit mints the CLI
   front door via `cli-author`.
+- `scripts/install-binding-selection-capability.ts`: operator-gated local
+  assembly and recoverable install for the Release Approval Broker plus its
+  nested, separately signed environment-auth supervisor. It reuses the current
+  admitted provisioning profile and retains the prior app before cutover.
 - `src/model.ts`: the three target ids, the branded `BundleId` type with its
   `PLACEHOLDER` sentinel and admission guard (`isMintedBundleId`), per-target
   placeholder bundle ids, the admission-manifest schema types with per-target
@@ -58,6 +62,10 @@ keeps the map complete in both directions.
   verification (`admitTarget`), and the minted-manifest builder
   (`buildAdmittedManifest`). Any drift — replaced, resigned, removed,
   entitlement-widened, or version-skewed target — fails closed with a typed code.
+- `src/binding-selection-capability.ts`: fixed-install admission for the
+  descriptor-private binding-selection capability. It verifies the signed
+  Approval Broker app, its nested signed environment-auth supervisor, and the
+  owner-only pinned public verifier before returning executable handles.
 - `src/runtime.ts`: the injectable admission-runtime seam (`AdmissionRuntime`).
   `createNativeAbsentRuntime` is the prod placeholder returning the typed
   `native-capability-absent` verdict until the signed product exists;
@@ -68,12 +76,16 @@ keeps the map complete in both directions.
   (`verify` command + bare posture), plus the fail-closed
   `native-capability-absent` scalar posture (`cliPlaceholderVerdict`). A later
   unit replaces the surface with the facade-backed command CLI.
-- `src/index.ts`: re-exports the package seam (`src/admission.ts`, `src/cli.ts`,
-  `src/model.ts`, `src/runtime.ts`).
+- `src/index.ts`: re-exports the package seam (`src/admission.ts`,
+  `src/binding-selection-capability.ts`, `src/cli.ts`, `src/model.ts`,
+  `src/runtime.ts`).
 - `tests/docs-drift.test.ts`: proves `src` modules and this Module Map agree in
   both directions and the maintainer doc set is complete.
 - `tests/admission.test.ts`: proves manifest drift (replace/resign/remove/widen/
   version-skew/stale/placeholder) invalidates admission with the right code.
+- `tests/binding-selection-capability.test.ts`: proves the fixed local picker
+  capability admits only a safe signed layout, exact entitlements and version,
+  nested supervisor identity, and matching owner-only verifier pin.
 - `tests/runtime.test.ts`: proves the prod and in-memory adapters share the
   `native-capability-absent` output shape byte-for-byte and drive `main`.
 
