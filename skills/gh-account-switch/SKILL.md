@@ -8,8 +8,8 @@ argument-hint: "<account>"
 
 ## Route
 
-1. `ghh check` the target login first; never infer it from ambient state.
-2. `ghh exec` that login for GitHub API work.
+1. `ghh check --account <login>` first; never infer the login from ambient state.
+2. `ghh exec --account <login> -- <gh arguments...>` for GitHub API work.
 3. Before clone, fetch, push, or remote change: `ssh -T -o BatchMode=yes git@<host>`
    → require `Hi <login>!`. Exit `1` is success; GitHub provides no shell.
 
