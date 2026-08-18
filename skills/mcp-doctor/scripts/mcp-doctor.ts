@@ -26,10 +26,10 @@ type Report = {
 const FIX_HINTS: Record<Health, (name: string) => string | null> = {
 	healthy: () => null,
 	offline: (name) =>
-		`Server unreachable. If it needs an API key, wire it via op run (see SKILL.md). Check the op session before the config: 'op read <ref>'. Last resort: confirm '${name}' command/url still valid.`,
+		`Server unreachable. If it needs an API key, wire it via 'with-one-password-token inject' (see SKILL.md). Check custody before the config: 'with-one-password-token check'. Last resort: confirm '${name}' command/url still valid.`,
 	"auth-required": (name) => `Run 'mcporter auth ${name}' to complete OAuth.`,
 	"token-missing": (name) =>
-		`A required var is unset. Stdio server: convert '${name}' to the op run pattern (see SKILL.md). HTTP server with a header var: op run cannot wrap it (no process to launch) — export the var from the shell that starts the MCP host, or use a stdio bridge.`,
+		`A required var is unset. Stdio server: convert '${name}' to the inject pattern (see SKILL.md). HTTP server with a header var: inject cannot wrap it (no process to launch) — give it a headersHelper that prints its headers as JSON.`,
 	"http-error": (name) => `Endpoint returned a non-200 status. Verify the '${name}' URL and any auth header.`,
 	error: () => "See the raw mcporter detail; the server failed to initialize.",
 };
