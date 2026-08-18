@@ -79,7 +79,7 @@ attachment.
 - Connection, Verified Handoff Envelope, repair paths: `runtime/browser-connect`
   (`src/command-contract.ts`, `REPAIR.md`).
 - Target Lease, Browser Lane, and custody admission:
-  `skills/browser-use/src/browser-use-runtime.ts`.
+  `skills/browser-use/src/browser-use-browser-custody.ts`.
 
 ## Next Safe Action
 
