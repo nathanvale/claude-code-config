@@ -8,6 +8,17 @@
 // snapshot bounding. Orchestrates every layer below it — imports down into
 // core, runtime, transport, discovery, and selection. Single public entry:
 // runOperate.
+//
+// Adapter-addressable identity (schema 3): the success envelope publishes the
+// canonical CDP target id proven for this call, plus the verified http
+// endpoint. Without them a caller holding a proven selection could not tell the
+// adapter which tab it won — candidate_id is a one-way hash and cannot address
+// a tab. This does NOT relax R32/KTD6 at discovery: `targets list` still
+// projects redacted candidates only, so a canonical id is published for the one
+// target actually operated on, never for every listed tab. Do not publish the
+// ws debugger URL here, and do not publish the derived Adapter Session Lease
+// name — that session is released before this envelope is emitted, so naming it
+// would hand the caller a dead pointer.
 // ---------------------------------------------------------------------------
 
 import { tmpdir } from "node:os";
@@ -524,6 +535,7 @@ export async function runOperate(input: {
 		adapter: binding.context.handoff.adapter,
 		handoff: binding.context.handoff,
 		target: target.target.candidate,
+		canonicalTargetId: targetIdentity.target.target_id,
 		targetSource: target.target.source,
 		outputMode: parsed.outputMode,
 		stdout: input.stdout,
@@ -1589,6 +1601,10 @@ function emitOperationSuccess(input: {
 	adapter: BrowserAdapterId;
 	handoff: HandoffFacts;
 	target: BrowserTargetCandidate;
+	// Canonical CDP target id, proven under the Target Lease this call held.
+	// Published so the caller can hand the exact tab to the adapter's native
+	// surface; the hashed candidate_id cannot address a tab.
+	canonicalTargetId: string;
 	targetSource: "hints" | "selected_state" | "single_candidate";
 	outputMode: OutputMode;
 	stdout: CliWriter;
@@ -1636,6 +1652,10 @@ function emitOperationSuccess(input: {
 				target: {
 					candidate_ordinal: input.target.candidate_ordinal,
 					candidate_id: input.target.candidate_id,
+					// Adapter-addressable identity (schema 3). Only the http endpoint
+					// form is published; the ws debugger URL stays unemitted (R32).
+					target_id: input.canonicalTargetId,
+					cdp_endpoint: input.handoff.endpointHttp,
 					origin: input.target.origin,
 					...(input.target.path_shape
 						? { path_shape: input.target.path_shape }
